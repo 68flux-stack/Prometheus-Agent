@@ -1,0 +1,44 @@
+{
+	"name": "@prometheus/desktop",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Desktop client for Prometheus",
+	"main": "electron/main.cjs",
+	"scripts": {
+		"prepare-runtime": "node electron/prepare-runtime.cjs",
+		"predev": "npm run prepare-runtime",
+		"dev": "electron .",
+		"prestart": "npm run prepare-runtime",
+		"start": "electron .",
+		"package:win": "npm run prepare-runtime && electron-builder --win --config electron-builder.yml",
+		"test": "node electron/subagent-registry.test.mjs && node electron/session-messages.test.mjs"
+	},
+	"devDependencies": {
+		"electron": "^37.2.6",
+		"electron-builder": "^26.15.3"
+	},
+	"build": {
+		"appId": "com.primeintellect.prometheus",
+		"productName": "Prometheus",
+		"executableName": "Prometheus",
+		"icon": "../../PrometheusLogo.ico",
+		"asar": true,
+		"files": [
+			"electron/**/*",
+			"renderer/**/*",
+			"package.json"
+		],
+		"win": {
+			"target": [
+				"nsis",
+				"portable"
+			]
+		},
+		"nsis": {
+			"artifactName": "Prometheus-${version}-Setup.${ext}"
+		},
+		"portable": {
+			"artifactName": "Prometheus-${version}-Portable.${ext}"
+		}
+	}
+}

@@ -1,0 +1,18 @@
+appId: com.primeintellect.prometheus
+productName: Prometheus
+executableName: Prometheus
+icon: ../../PrometheusLogo.ico
+asar: true
+files:
+  - electron/**/*
+  - "!electron/*.test.mjs"
+  - renderer/**/*
+  - package.json
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  artifactName: Prometheus-${version}-Setup.${ext}
+portable:
+  artifactName: Prometheus-${version}-Portable.${ext}
