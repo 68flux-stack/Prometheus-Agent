@@ -40,32 +40,46 @@
 				</div>
 				<div class="sidebar-footer"><span class="connection-dot" id="connection-dot"></span><span id="connection-label">Connecting…</span></div>
 			</aside>
+			<div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
 			<main class="main-panel">
 				<header class="topbar">
 					<div class="topbar-title">
-						<div class="topbar-context"><span class="context-dot"></span><span id="header-project">Prometheus</span><span class="context-separator">/</span><h1 id="header-title">Untitled session</h1></div>
+						<div class="topbar-context">
+							<span class="context-dot"></span>
+							<span id="header-project">Prometheus</span>
+							<span class="context-separator">/</span>
+							<h1 id="header-title">Untitled session</h1>
+							<span class="context-separator subagent-context" id="subagent-separator" hidden>/</span>
+							<span class="subagent-context-name" id="header-subagent" hidden>Sub-agent</span>
+						</div>
 					</div>
 					<div class="topbar-controls">
-						<button class="connect-provider-button" id="connect-provider-button" type="button" title="Connect an API-key provider">
-							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" /></svg><span>Connect provider</span>
+						<button class="subagent-back-button" id="subagent-back-button" type="button" hidden>
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3.5-4.5 4.5L10 12.5" /></svg>
+							<span>Back to main chat</span>
 						</button>
-						<label class="select-control">
-							<span>Model</span>
-							<select id="model-select" disabled><option>Loading models…</option></select>
-						</label>
-						<label class="select-control compact-control">
-							<span>Thinking</span>
-							<select id="thinking-select" disabled>
-								<option value="off">Off</option>
-								<option value="minimal">Minimal</option>
-								<option value="low">Low</option>
-								<option value="medium">Medium</option>
-								<option value="high">High</option>
-								<option value="xhigh">X-high</option>
-								<option value="max">Max</option>
-							</select>
-						</label>
+						<div class="main-session-controls">
+							<button class="connect-provider-button" id="connect-provider-button" type="button" title="Connect an API-key provider">
+								<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" /></svg><span>Connect provider</span>
+							</button>
+							<label class="select-control">
+								<span>Model</span>
+								<select id="model-select" disabled><option>Loading models…</option></select>
+							</label>
+							<label class="select-control compact-control">
+								<span>Thinking</span>
+								<select id="thinking-select" disabled>
+									<option value="off">Off</option>
+									<option value="minimal">Minimal</option>
+									<option value="low">Low</option>
+									<option value="medium">Medium</option>
+									<option value="high">High</option>
+									<option value="xhigh">X-high</option>
+									<option value="max">Max</option>
+								</select>
+							</label>
+						</div>
 					</div>
 				</header>
 

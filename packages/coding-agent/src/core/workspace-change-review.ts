@@ -87,6 +87,14 @@ export class WorkspaceChangeReview {
 	private readonly objectsDir: string;
 	private manifest: Manifest;
 
+	// artifactDir is always "<agentDataDir>/session-artifacts/<sessionId>" (session-manager.ts,
+	// daemon-mode.ts, daemon-supervisor.ts, cron-jobs.ts all build it this way), so two levels up
+	// is the agent's whole data directory — sessions, logs, other sessions' own artifact stores.
+	// A workspace whose cwd contains that directory (e.g. the user's home folder) must never have
+	// it baselined: copying one session's blob store into the next session's blob store compounds
+	// without bound.
+	private readonly agentDataRoot: string;
+
 	private constructor(
 		private readonly cwd: string,
 		private readonly artifactDir: string,
@@ -95,6 +103,7 @@ export class WorkspaceChangeReview {
 		this.manifest = manifest;
 		this.manifestPath = join(artifactDir, "change-review.json");
 		this.objectsDir = join(artifactDir, "change-review-objects");
+		this.agentDataRoot = resolve(dirname(dirname(artifactDir)));
 	}
 
 	static openOrCreate(cwd: string, artifactDir: string): WorkspaceChangeReview {
@@ -139,7 +148,7 @@ export class WorkspaceChangeReview {
 			}
 			for (const name of names) {
 				const path = join(absolute, name);
-				if (resolve(path) === resolve(this.artifactDir)) continue;
+				if (isInside(this.agentDataRoot, resolve(path))) continue;
 				const key = relative(this.cwd, path).split(sep).join("/");
 				try {
 					const stat = lstatSync(path);

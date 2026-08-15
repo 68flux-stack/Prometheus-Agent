@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Changed subagents to relay their final response to the parent automatically while keeping explicit agent messages available for progress updates.
 - Fixed kernel runtime upgrades deleting and recreating the whole kernel venv: stale packages are now reinstalled in place, so an upgrade no longer fails on Windows when another session's kernel holds `Scripts/python.exe` (which previously left the venv half-deleted).
 
 - Added a preloaded ripgrep-backed `search()` to the kernel namespace, and pointed the system prompt and ipython tool description at it, so content search no longer wedges the kernel on hand-rolled `rglob` scans.

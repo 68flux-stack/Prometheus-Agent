@@ -81,6 +81,12 @@ export interface RlmChildFailureDetails {
 
 export type RlmChildTerminalNoticeDetails =
 	| {
+			kind: "completed";
+			childId: string;
+			sessionName: string;
+			response: string;
+	  }
+	| {
 			kind: "cancelled";
 			childId: string;
 			sessionName: string;
@@ -112,9 +118,11 @@ export function createRlmChildTerminalNoticeMessage(
 	timestamp = Date.now(),
 ): CustomMessage<RlmChildTerminalNoticeDetails> {
 	const content =
-		details.kind === "cancelled"
-			? `RLM child ${details.sessionName} (${details.childId}) was cancelled${details.reason ? `: ${details.reason}` : ""}`
-			: `RLM child ${details.sessionName} (${details.childId}) completed without sending a reply${details.lastAssistantTextPreview ? `. Last assistant text: ${details.lastAssistantTextPreview}` : ""}`;
+		details.kind === "completed"
+			? details.response
+			: details.kind === "cancelled"
+				? `RLM child ${details.sessionName} (${details.childId}) was cancelled${details.reason ? `: ${details.reason}` : ""}`
+				: `RLM child ${details.sessionName} (${details.childId}) completed without sending a reply${details.lastAssistantTextPreview ? `. Last assistant text: ${details.lastAssistantTextPreview}` : ""}`;
 	return {
 		role: "custom",
 		customType: RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE,

@@ -32,11 +32,18 @@ const state = {
 	busySessions: new Set(),
 	subagents: new Map(),
 	approval: undefined,
+	subagentView: undefined,
 };
 
 const $ = (id) => document.getElementById(id);
 const conversation = $("conversation");
+const mainPanel = document.querySelector(".main-panel");
+const subagentBackButton = $("subagent-back-button");
+const headerSubagent = $("header-subagent");
+const subagentSeparator = $("subagent-separator");
 const workspaceList = $("workspace-list");
+const sidebar = document.querySelector(".sidebar");
+const sidebarResizer = $("sidebar-resizer");
 const input = $("prompt-input");
 const sendButton = $("send-button");
 const modelSelect = $("model-select");
@@ -67,6 +74,10 @@ const jobBannerToggle = $("job-banner-toggle");
 const jobBannerList = $("job-banner-list");
 const jobBannerLabel = $("job-banner-label");
 let handshakeTimer;
+// The cwd the engine was silently started in when no workspace was saved yet;
+// applyState uses this to avoid turning that fast-start default into a real
+// workspace card the moment the engine reports its own cwd.
+let pendingDefaultCwd;
 let toastTimer;
 const SCROLLBAR_SELECTOR = ".workspace-list, .conversation, .message-content pre, .tool-card pre, .diff-lines, .diff-card-body, .command-menu, .composer textarea, .runtime-scroll, .runtime-output";
 const scrollbarTimers = new WeakMap();
@@ -203,10 +214,17 @@ async function restoreSubagents(sessionPath) {
 	}
 	if (sessionPathKey(sessionPath) !== sessionPathKey(state.activeSessionPath)) return;
 	for (const subagent of subagents || []) {
-		if (!subagent?.id || state.subagents.has(subagent.id)) continue;
-		// No status: the registry's "running" outlives the process that wrote it,
-		// so isSubagentWorking asks the busy poll instead of trusting it.
-		state.subagents.set(subagent.id, { ...subagent, status: subagent.completed ? "done" : undefined });
+		if (!subagent?.id) continue;
+		const previous = state.subagents.get(subagent.id);
+		// No live status: the registry's "running" outlives the process that wrote it,
+		// so isSubagentWorking asks the busy poll instead of trusting it. A live
+		// snapshot wins for status while the registry supplies its session file.
+		state.subagents.set(subagent.id, {
+			...subagent,
+			...previous,
+			sessionFile: subagent.sessionFile || previous?.sessionFile,
+			status: previous?.status ?? (subagent.completed ? "done" : undefined),
+		});
 	}
 	renderMessages();
 }
@@ -360,8 +378,14 @@ async function connectSelectedProvider() {
 		state.models = [];
 		updateModelOptions();
 		showToast(`Connected ${provider.name}. Refreshing models…`);
-		const workspace = state.workspace || (await window.desktopAgent.getDefaultWorkspace());
-		await startWorkspace(workspace);
+		if (state.workspace) {
+			await startWorkspace(state.workspace);
+		} else {
+			// No workspace chosen yet: restart the engine (to pick up the new
+			// credentials) in the same silent idle default, not as a workspace card.
+			pendingDefaultCwd = pendingDefaultCwd || (await window.desktopAgent.getDefaultWorkspace());
+			await startWorkspace(pendingDefaultCwd, { silent: true });
+		}
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
 	} finally {
@@ -390,8 +414,14 @@ async function startSubscriptionLogin() {
 		state.models = [];
 		updateModelOptions();
 		showToast(`Connected ${provider.name}. Refreshing models…`);
-		const workspace = state.workspace || (await window.desktopAgent.getDefaultWorkspace());
-		await startWorkspace(workspace);
+		if (state.workspace) {
+			await startWorkspace(state.workspace);
+		} else {
+			// No workspace chosen yet: restart the engine (to pick up the new
+			// credentials) in the same silent idle default, not as a workspace card.
+			pendingDefaultCwd = pendingDefaultCwd || (await window.desktopAgent.getDefaultWorkspace());
+			await startWorkspace(pendingDefaultCwd, { silent: true });
+		}
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
 	} finally {
@@ -561,7 +591,7 @@ function isEngineConnecting() {
 }
 
 function syncComposer() {
-	const canPrompt = (state.ready && hasConfiguredModel()) || isEngineConnecting();
+	const canPrompt = !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
 	input.disabled = !canPrompt;
 	sendButton.disabled = !canPrompt || !input.value.trim();
 	$("attach-button").disabled = !canPrompt;
@@ -666,8 +696,11 @@ function applyState(data) {
 		if (state.openedWorkspace && workspaceKey(state.openedWorkspace) !== workspaceKey(data.cwd)) {
 			showToast(`This conversation opened in ${workspaceName(data.cwd)}, not ${workspaceName(state.openedWorkspace)}. Restart Prometheus to pick up the fix.`);
 		}
-		displayWorkspace(known || data.cwd);
-		rememberWorkspace(known || data.cwd);
+		const isPendingDefault = !state.workspace && !known && workspaceKey(data.cwd) === workspaceKey(pendingDefaultCwd);
+		if (!isPendingDefault) {
+			displayWorkspace(known || data.cwd);
+			rememberWorkspace(known || data.cwd);
+		}
 	}
 	state.openedWorkspace = undefined;
 	thinkingSelect.value = state.thinkingLevel;
@@ -952,6 +985,7 @@ function createMsgActionButton(action, label) {
 }
 
 function renderMessageRow(row, message) {
+	const readOnly = Boolean(state.subagentView);
 	const thinking = contentThinking(message);
 	const text = contentText(message);
 	const images = contentImages(message).filter((image) => image.data);
@@ -969,7 +1003,7 @@ function renderMessageRow(row, message) {
 			: formatRelativeTime(message._finishedAt ?? message.timestamp);
 	// Streaming emits one message_update per token and every update re-rendered every
 	// row, re-parsing markdown from scratch. Skip rows whose visible content is identical.
-	const signature = `${message.role} ${images.length} ${isThinking} ${visibleThinking} ${text} ${actionsLabel}`;
+	const signature = `${message.role} ${readOnly} ${images.length} ${isThinking} ${visibleThinking} ${text} ${actionsLabel}`;
 	if (row._signature === signature) return;
 	row._signature = signature;
 
@@ -1010,7 +1044,9 @@ function renderMessageRow(row, message) {
 	time.className = "message-actions-time";
 	time.textContent = actionsLabel;
 	actions.appendChild(time);
-	if (message.role === "user") {
+	if (readOnly) {
+		actions.append(createMsgActionButton("copy", "Copy"));
+	} else if (message.role === "user") {
 		actions.append(
 			createMsgActionButton("edit", "Edit and resend"),
 			createMsgActionButton("fork", "Fork from here"),
@@ -1085,6 +1121,13 @@ function ipythonSummary(tool) {
 	if (updatedFile) return `Edited ${updatedFile[1].trim()}`;
 	const createdFile = /(?:Path\(\s*["']([^"']+)["']\s*\)\.(?:mkdir|touch)|(?:mkdir|touch)\(\s*["']([^"']+)["'])/.exec(code);
 	if (createdFile) return `Created ${createdFile[1] || createdFile[2]}`;
+	const pathVars = extractPathVars(code);
+	for (const [variable, path] of pathVars) {
+		const writesFile = new RegExp(`\\b${variable}\\.(?:write_text|write_bytes)\\(`).test(code);
+		if (!writesFile) continue;
+		const readsFile = new RegExp(`\\b${variable}\\.(?:read_text|read_bytes)\\(`).test(code);
+		return `${readsFile ? "Edited" : "Created"} ${path}`;
+	}
 	const writtenFile = /(?:Path\(\s*["']([^"']+)["']\s*\)\.(?:write_text|write_bytes)|(?:write_text|write_bytes)\(\s*["']([^"']+)["'])/.exec(code);
 	if (writtenFile) return `Created ${writtenFile[1] || writtenFile[2]}`;
 	const replacedFile = /replace_text\(\s*["']([^"']+)["']/.exec(code);
@@ -1523,20 +1566,22 @@ function renderPendingRow(row) {
 // One ordered transcript: message rows in message order, and each tool card in the position
 // of the toolCall block that produced it. Tool results are never rendered as their own row.
 function buildTranscriptRows() {
+	const messages = state.subagentView?.messages || state.messages;
+	const tools = state.subagentView ? [] : state.tools;
 	const resultsByCallId = new Map();
-	for (const message of state.messages) {
+	for (const message of messages) {
 		if (message?.role === "toolResult" && message.toolCallId) resultsByCallId.set(message.toolCallId, message);
 	}
 	const runtimeByCallId = new Map();
-	for (const tool of state.tools) {
+	for (const tool of tools) {
 		if (tool?.toolCallId) runtimeByCallId.set(tool.toolCallId, tool);
 	}
 
-	resolveRestoredSubagentAnchors();
+	if (!state.subagentView) resolveRestoredSubagentAnchors();
 	// A subagent belongs under the tool call that spawned it, not at the end of
 	// the transcript. Anything whose anchor is gone falls to the bottom.
 	const subagentsByAnchor = new Map();
-	for (const subagent of state.subagents.values()) {
+	for (const subagent of state.subagentView ? [] : state.subagents.values()) {
 		const anchor = subagent.anchorToolCallId || "";
 		if (!subagentsByAnchor.has(anchor)) subagentsByAnchor.set(anchor, []);
 		subagentsByAnchor.get(anchor).push(subagent);
@@ -1550,7 +1595,7 @@ function buildTranscriptRows() {
 
 	const rows = [];
 	const renderedCalls = new Set();
-	for (const [index, message] of state.messages.entries()) {
+	for (const [index, message] of messages.entries()) {
 		if (!message || !["user", "assistant", "custom", "notification"].includes(message.role)) continue;
 		// An agent message carries a routing envelope the model needs and the reader
 		// does not; it gets its own row showing just what was said.
@@ -1585,11 +1630,14 @@ function buildTranscriptRows() {
 	// The turn is accepted in ~200ms but the first token is the provider's to give,
 	// and until then nothing above has a body to render. Without a row for the turn
 	// in flight the transcript sits dead for seconds after the user hits send.
-	if (isTurnPending()) {
+	if (!state.subagentView && isTurnPending()) {
 		rows.push({ key: "pending", render: (row) => renderPendingRow(row) });
 	}
+	if (state.subagentView && messages.length === 0) {
+		rows.push({ key: "subagent-empty", render: (row) => renderSubagentEmptyRow(row) });
+	}
 	// An approval belongs under the output that provoked it, not in a modal on top of it.
-	if (state.approval) {
+	if (!state.subagentView && state.approval) {
 		rows.push({ key: `approval:${state.approval.id}`, render: (row) => renderApprovalCard(row, state.approval) });
 	}
 	return rows;
@@ -1628,8 +1676,8 @@ function renderAgentMessageRow(row, details) {
 	sender.className = "agent-message-sender";
 	sender.textContent = agentMessageSender(details);
 	const body = document.createElement("div");
-	body.className = "agent-message-body";
-	body.textContent = details.message;
+	body.className = "agent-message-body message-content";
+	renderMarkdown(body, details.message);
 	card.append(sender, body);
 	row.append(card);
 }
@@ -1734,12 +1782,116 @@ function resolveRestoredSubagentAnchors() {
 	}
 }
 
+function subagentDisplayName(subagent) {
+	return (subagent.sessionName || subagent.id || "Sub-agent").trim() || "Sub-agent";
+}
+
+function syncSubagentView() {
+	const view = state.subagentView;
+	mainPanel.classList.toggle("subagent-view", Boolean(view));
+	headerSubagent.hidden = !view;
+	subagentSeparator.hidden = !view;
+	if (view) headerSubagent.textContent = view.name;
+	subagentBackButton.hidden = !view;
+	syncComposer();
+}
+
+async function resolveSubagentSessionFile(view) {
+	if (view.sessionFile) return view.sessionFile;
+	try {
+		const { subagents } = await window.desktopAgent.listSessionSubagents({ sessionPath: state.activeSessionPath });
+		if (state.subagentView !== view) return undefined;
+		const restored = (subagents || []).find((subagent) => subagent.id === view.id);
+		if (!restored) return undefined;
+		const current = state.subagents.get(view.id);
+		state.subagents.set(view.id, { ...restored, ...current, sessionFile: restored.sessionFile || current?.sessionFile });
+		view.sessionFile = restored.sessionFile;
+		return view.sessionFile;
+	} catch {
+		return undefined;
+	}
+}
+
+async function refreshViewedSubagent() {
+	const view = state.subagentView;
+	if (!view || view.reading) return;
+	view.reading = true;
+	try {
+		const sessionFile = await resolveSubagentSessionFile(view);
+		if (state.subagentView !== view) return;
+		if (!sessionFile) {
+			view.unavailable = !isSubagentWorking(state.subagents.get(view.id) || view);
+			view.loading = !view.unavailable;
+			renderMessages();
+			return;
+		}
+		const { messages } = await window.desktopAgent.readSessionMessages({ sessionPath: sessionFile });
+		if (state.subagentView !== view) return;
+		view.messages = (messages || []).map(normalizeMessage);
+		view.loading = false;
+		view.unavailable = false;
+		renderMessages();
+	} catch {
+		if (state.subagentView !== view) return;
+		view.loading = false;
+		view.unavailable = true;
+		renderMessages();
+	} finally {
+		view.reading = false;
+	}
+}
+
+function openSubagentConversation(subagent) {
+	if (!subagent?.id) return;
+	state.subagentView = {
+		id: subagent.id,
+		name: subagentDisplayName(subagent),
+		sessionFile: subagent.sessionFile,
+		messages: [],
+		loading: true,
+	};
+	syncSubagentView();
+	conversation.scrollTop = 0;
+	renderMessages();
+	void refreshViewedSubagent();
+}
+
+function closeSubagentConversation() {
+	if (!state.subagentView) return;
+	state.subagentView = undefined;
+	syncSubagentView();
+	conversation.scrollTop = conversation.scrollHeight;
+	renderMessages();
+}
+
+function renderSubagentEmptyRow(row) {
+	const view = state.subagentView;
+	row.className = "message-row subagent-empty-row";
+	row.replaceChildren();
+	const status = document.createElement("div");
+	status.className = "subagent-empty";
+	if (view?.loading) {
+		status.append(createWorkingIndicator());
+		const text = document.createElement("span");
+		text.textContent = "Loading sub-agent conversation…";
+		status.append(text);
+	} else {
+		status.textContent = view?.unavailable
+			? "This sub-agent conversation is not available yet."
+			: "This sub-agent has not written any messages yet.";
+	}
+	row.append(status);
+}
+
 function renderSubagentRow(row, subagent) {
 	row.className = "message-row subagent-row";
 	row.replaceChildren();
-	const card = document.createElement("div");
+	const card = document.createElement("button");
 	const working = isSubagentWorking(subagent);
-	card.className = `subagent-card${working ? " working" : ""}${subagent.status === "error" ? " failed" : ""}`;
+	card.type = "button";
+	card.className = `subagent-card subagent-card-button${working ? " working" : ""}${subagent.status === "error" ? " failed" : ""}`;
+	card.setAttribute("aria-label", `Open sub-agent conversation: ${subagentDisplayName(subagent)}`);
+	card.addEventListener("click", () => openSubagentConversation(subagent));
 	if (working) card.append(createWorkingIndicator());
 	const label = document.createElement("span");
 	label.className = "subagent-label";
@@ -1756,6 +1908,12 @@ function renderSubagentRow(row, subagent) {
 		status.textContent = "failed";
 		card.append(status);
 	}
+	const arrow = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	arrow.classList.add("subagent-open-icon");
+	arrow.setAttribute("viewBox", "0 0 16 16");
+	arrow.setAttribute("aria-hidden", "true");
+	arrow.innerHTML = '<path d="m6 3.5 4.5 4.5L6 12.5"/>';
+	card.append(arrow);
 	row.append(card);
 }
 
@@ -1792,7 +1950,9 @@ function renderApprovalCard(row, approval) {
 function renderMessagesNow() {
 	const distanceFromBottom = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight;
 	const followLatest = distanceFromBottom < 120;
-	$("welcome-card").style.display = state.messages.length || state.tools.length ? "none" : "block";
+	const displayedMessages = state.subagentView?.messages || state.messages;
+	const displayedTools = state.subagentView ? [] : state.tools;
+	$("welcome-card").style.display = state.subagentView || displayedMessages.length || displayedTools.length ? "none" : "block";
 
 	const rows = buildTranscriptRows();
 
@@ -2271,16 +2431,26 @@ function handleAgentEvent(event) {
 	}
 	if (event.type === "message_update" || event.type === "message_end") {
 		const message = { ...normalizeMessage(event.message), _streaming: event.type !== "message_end" };
-		const streaming = state.messages[state.streamIndex];
-		const index =
+		const streaming = state.streamIndex >= 0 ? state.messages[state.streamIndex] : undefined;
+		let index =
 			streaming && streaming.role === message.role
 				? state.streamIndex
 				: state.messages.findIndex((item) => item._key === message._key);
+		// get_messages resets streamIndex while an attached conversation continues
+		// streaming. Resume its latest assistant row instead of appending every update.
+		if (index < 0 && message.role === "assistant") {
+			index = state.messages.findLastIndex((item) => item.role === "assistant");
+		}
 		if (index >= 0) state.messages[index] = { ...state.messages[index], ...message };
-		else state.messages.push(message);
+		else {
+			state.messages.push(message);
+			index = state.messages.length - 1;
+		}
 		if (event.type === "message_end") {
 			state.streamIndex = -1;
-			if (index >= 0 && message.role === "assistant") state.messages[index]._finishedAt = Date.now();
+			if (message.role === "assistant") state.messages[index]._finishedAt = Date.now();
+		} else {
+			state.streamIndex = index;
 		}
 		renderMessages();
 		return;
@@ -2342,7 +2512,7 @@ function bootstrap() {
 
 // Only the initial launch starts an agent; switching workspaces opens a session
 // in the running one.
-async function startWorkspace(workspace) {
+async function startWorkspace(workspace, { silent = false } = {}) {
 	clearTimeout(handshakeTimer);
 	setReady(false);
 	state.runtimeAvailable = true;
@@ -2351,9 +2521,11 @@ async function startWorkspace(workspace) {
 	state.waitingJobs.clear();
 	state.subagents.clear();
 	setBusy(false, "Starting Prometheus…");
-	displayWorkspace(workspace);
-	rememberWorkspace(workspace);
-	void refreshWorkspaceChats(workspace);
+	if (!silent) {
+		displayWorkspace(workspace);
+		rememberWorkspace(workspace);
+		void refreshWorkspaceChats(workspace);
+	}
 	try {
 		await window.desktopAgent.start({ cwd: workspace });
 		// Give the child process a turn to attach its RPC reader before the
@@ -2558,7 +2730,8 @@ conversation.addEventListener("click", (event) => {
 	const button = event.target instanceof Element ? event.target.closest("[data-msg-action]") : undefined;
 	if (!button) return;
 	const rowMatch = /^m:(\d+)$/.exec(button.closest("[data-key]")?.dataset.key || "");
-	const message = rowMatch ? state.messages[Number(rowMatch[1])] : undefined;
+	const messages = state.subagentView?.messages || state.messages;
+	const message = rowMatch ? messages[Number(rowMatch[1])] : undefined;
 	if (!message) return;
 	const action = button.dataset.msgAction;
 	if (action === "copy") void copyMessageText(message);
@@ -2918,6 +3091,7 @@ async function confirmDiscard(title, message, confirmLabel) {
 // disk is the same message list, so the chat paints now and the engine's copy
 // reconciles when open_session lands.
 function showSessionLocally(sessionPath, sessionName) {
+	closeSubagentConversation();
 	const token = ++state.switchToken;
 	state.activeSessionPath = sessionPath;
 	// A prompt still held for this chat keeps its row. Every caller that navigates
@@ -2967,6 +3141,7 @@ function requestSessionSwitch(sessionPath, options = {}) {
 
 async function openConversation(workspace, sessionPath) {
 	if (!workspace || !sessionPath) return;
+	if (state.subagentView) closeSubagentConversation();
 	if (workspace === state.workspace && sessionPath === state.activeSessionPath) return;
 	// Leaving for another chat abandons anything typed for this one, queued included.
 	state.queuedPrompt = undefined;
@@ -3058,6 +3233,76 @@ document.addEventListener("scroll", (event) => revealScrollbar(event.target), tr
 document.addEventListener("pointermove", (event) => revealScrollbar(event.target), { passive: true });
 document.addEventListener("focusin", (event) => revealScrollbar(event.target));
 
+const SIDEBAR_WIDTH_STORAGE_KEY = "prometheus:sidebar-width";
+const SIDEBAR_CONTENT_MIN_WIDTH = 420;
+
+function sidebarBounds() {
+	const styles = getComputedStyle(document.documentElement);
+	const min = Number.parseFloat(styles.getPropertyValue("--sidebar-min-width")) || 248;
+	const configuredMax = Number.parseFloat(styles.getPropertyValue("--sidebar-max-width")) || 520;
+	const viewportMax = window.innerWidth - SIDEBAR_CONTENT_MIN_WIDTH;
+	return { min, max: Math.max(min, Math.min(configuredMax, viewportMax)) };
+}
+
+function setSidebarWidth(width, persist = false) {
+	const { min, max } = sidebarBounds();
+	const clamped = Math.round(Math.max(min, Math.min(max, width)));
+	document.documentElement.style.setProperty("--sidebar-width", `${clamped}px`);
+	if (persist) {
+		try {
+			localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clamped));
+		} catch {
+			// Ignore storage failures, such as private browsing restrictions.
+		}
+	}
+}
+
+function setupSidebarResize() {
+	if (!sidebar || !sidebarResizer) return;
+	try {
+		const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+		if (Number.isFinite(saved)) setSidebarWidth(saved);
+	} catch {
+		// Use the default width when storage is unavailable.
+	}
+
+	let startX = 0;
+	let startWidth = 0;
+	const stopResize = () => {
+		document.body.classList.remove("sidebar-resizing");
+		if (sidebarResizer.hasPointerCapture?.(activePointerId)) sidebarResizer.releasePointerCapture(activePointerId);
+		setSidebarWidth(sidebar.getBoundingClientRect().width, true);
+	};
+	let activePointerId = -1;
+	sidebarResizer.addEventListener("pointerdown", (event) => {
+		event.preventDefault();
+		activePointerId = event.pointerId;
+		startX = event.clientX;
+		startWidth = sidebar.getBoundingClientRect().width;
+		document.body.classList.add("sidebar-resizing");
+		sidebarResizer.setPointerCapture?.(activePointerId);
+	});
+	sidebarResizer.addEventListener("pointermove", (event) => {
+		if (!document.body.classList.contains("sidebar-resizing")) return;
+		setSidebarWidth(startWidth + event.clientX - startX);
+	});
+	sidebarResizer.addEventListener("pointerup", stopResize);
+	sidebarResizer.addEventListener("pointercancel", stopResize);
+	sidebarResizer.addEventListener("keydown", (event) => {
+		const step = event.shiftKey ? 50 : 10;
+		const current = sidebar.getBoundingClientRect().width;
+		if (event.key === "ArrowRight") setSidebarWidth(current + step, true);
+		else if (event.key === "ArrowLeft") setSidebarWidth(current - step, true);
+		else if (event.key === "Home") setSidebarWidth(sidebarBounds().min, true);
+		else if (event.key === "End") setSidebarWidth(sidebarBounds().max, true);
+		else return;
+		event.preventDefault();
+	});
+	window.addEventListener("resize", () => setSidebarWidth(sidebar.getBoundingClientRect().width));
+}
+
+setupSidebarResize();
+
 modelSelect.addEventListener("change", () => {
 	const [provider, ...idParts] = modelSelect.value.split(":");
 	if (provider && idParts.length) sendCommand("set_model", { provider, modelId: idParts.join(":") });
@@ -3075,6 +3320,7 @@ $("runtime-button").addEventListener("click", () => {
 	else closeRuntimeDrawer();
 });
 $("runtime-close").addEventListener("click", closeRuntimeDrawer);
+subagentBackButton.addEventListener("click", closeSubagentConversation);
 jobBannerToggle.addEventListener("click", () => {
 	state.jobBannerExpanded = !state.jobBannerExpanded;
 	renderJobBanner(state.runtimeFeatures?.jobs || []);
@@ -3185,6 +3431,10 @@ stopButton.addEventListener("click", () => {
 	});
 });
 document.addEventListener("keydown", (event) => {
+	if (event.key === "Escape" && state.subagentView && runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open) {
+		closeSubagentConversation();
+		return;
+	}
 	if (event.key === "Escape" && !runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open) {
 		closeRuntimeDrawer();
 		return;
@@ -3198,7 +3448,10 @@ document.addEventListener("keydown", (event) => {
 
 // Chats we are not attached to send no events, so their working state has to be
 // polled. The attached chat drives its own indicator from state.busy.
-setInterval(refreshBusySessions, 2000);
+setInterval(() => {
+	refreshBusySessions();
+	void refreshViewedSubagent();
+}, 2000);
 document.addEventListener("visibilitychange", () => refreshBusySessions());
 
 window.desktopAgent.onEvent(handleAgentEvent);
@@ -3217,8 +3470,13 @@ window.desktopAgent.onExit((payload) => {
 
 (async () => {
 	state.workspaces = await loadStoredWorkspaces();
-	const defaultWorkspace = await window.desktopAgent.getDefaultWorkspace();
-	const workspace = state.workspaces[0] || defaultWorkspace;
 	void Promise.all(state.workspaces.map((storedWorkspace) => refreshWorkspaceChats(storedWorkspace)));
-	await startWorkspace(workspace);
+	if (state.workspaces[0]) {
+		await startWorkspace(state.workspaces[0]);
+	} else {
+		// Nothing saved yet: keep the workspace list empty and start the engine in
+		// the user's profile folder so it's already warm once one is picked.
+		pendingDefaultCwd = await window.desktopAgent.getDefaultWorkspace();
+		await startWorkspace(pendingDefaultCwd, { silent: true });
+	}
 })();

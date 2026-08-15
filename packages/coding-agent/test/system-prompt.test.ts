@@ -51,6 +51,7 @@ describe("buildRlmPrompt", () => {
 				"You are a general purpose agent that uses code to solve tasks.",
 				"You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
 				"When you are done, stop calling tools and state your final answer.",
+				"Write files you create in the normal readable, multi-line format for their language — one rule/statement per line with standard indentation. Do not minify or collapse output onto a single line (e.g. CSS, JS, JSON, HTML), even for short files.",
 				"",
 				"Working directory: /repo",
 				"Conversation log: /repo/.pi/sessions/session.jsonl",
@@ -80,9 +81,11 @@ describe("buildRlmPrompt", () => {
 				"",
 				"Continual harness state is available as `rlm.harness` and `rlm.get_harness_state()`. CRUD calls are local to this Prometheus session by default: `rlm.harness.create_memory(...)`, `rlm.harness.update_memory(...)`, `rlm.harness.delete_memory(...)`, `rlm.harness.create_skill(...)`, `rlm.harness.update_skill(...)`, `rlm.harness.delete_skill(...)`, `rlm.harness.create_subagent(...)`, `rlm.harness.update_subagent(...)`, `rlm.harness.delete_subagent(...)`, `rlm.harness.create_prompt_note(...)`, `rlm.harness.update_prompt_note(...)`, `rlm.harness.delete_prompt_note(...)`, plus `rlm.harness.record_refinement(...)` and `rlm.harness.overview()`. Use `global_=True` only for stable cross-session lessons; Python reserves `global`, so literal `global=True` is invalid syntax.",
 				"",
+				"A command expected to run longer than a cell should block for, or one that must keep running after the cell returns, is a background job, not a `subprocess.Popen`/`threading` call: `job = await rlm.jobs.start(command)` runs it as a session-owned job without blocking the kernel. Poll or block on it with `await job.tail()` and `await job.wait()`, send stdin with `await job.write(text)`, stop it with `await job.cancel()`, and recover handles after a kernel reload or compaction with `await rlm.jobs.list()`. Commands started outside `rlm.jobs` are invisible to that list, to the session's Background jobs panel, and are not tracked across client detach or kernel restart.",
+				"",
 				"Terminology: continual harness names the persisted prompt, memory, skill, and subagent layer; RLM names the runtime, IPython kernel, and native call interface exposed to the model.",
 				"",
-				"RLM-native call contract: installed Python skills are pre-imported modules. Read the matching SKILL.md and call its documented function, such as `await <skill_import>.<function>(...)`; when a CLI exists, use `<skill_import> ...` from shell. Continual harness skill entries are Python REPL skills with an explicit Python `reference` and `arguments` contract. Spawn a reusable delegation spec with `await rlm('sub-task')`; admission returns a child handle immediately. Results arrive only through an available messaging capability or files, never as an `rlm()` return value. Do not invent non-native wrappers such as `call_skill(...)` or `run_subagent(...)`.",
+				"RLM-native call contract: installed Python skills are pre-imported modules. Read the matching SKILL.md and call its documented function, such as `await <skill_import>.<function>(...)`; when a CLI exists, use `<skill_import> ...` from shell. Continual harness skill entries are Python REPL skills with an explicit Python `reference` and `arguments` contract. Spawn a reusable delegation spec with `await rlm('sub-task')`; admission returns a child handle immediately, never the child's answer. A child's final response is relayed automatically, while intermediate updates use available messaging capabilities or files. Do not invent non-native wrappers such as `call_skill(...)` or `run_subagent(...)`.",
 				"",
 				"Treat continual harness refinement as a small, evidence-backed update after observing a repeated failure or reusable tactic: diagnose the issue, update the smallest relevant continual harness component, validate on the next action, then record the outcome. Use `await refine.run()` to turn repeated delegation patterns into reusable subagent specs, repeated procedures into skills, durable facts/preferences into memories, and narrow behavioral policies into prompt addendums. It returns immediately and runs when the current turn ends, so continue working normally after calling it. Do not rewrite the whole continual harness when a focused memory, skill, prompt note, or subagent spec is enough.",
 			].join("\n"),
@@ -173,6 +176,8 @@ describe("buildRlmPrompt", () => {
 			depth: 1,
 		});
 		expect(withCapabilities).toContain("agent_message.send");
+		expect(withCapabilities).toContain("final response is relayed automatically");
+		expect(withCapabilities).toContain("progress updates or intermediate findings");
 		expect(withCapabilities).toContain("agent_message.list_agents");
 		expect(withCapabilities).toContain("agent_observe");
 		expect(withCapabilities).toContain("restricted to your parent, siblings, and direct children");
@@ -460,7 +465,7 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("Conversation log: /repo/.pi/sessions/session.jsonl");
 		expect(prompt).toContain("await rlm('sub-task')");
 		expect(prompt).toContain("returns at admission, not completion");
-		expect(prompt).toContain("Results arrive only through an available messaging capability or files");
+		expect(prompt).toContain("A child's final response is relayed automatically");
 		expect(prompt).toContain("recover direct child handles");
 		expect(prompt).toContain("kernel restart or compaction");
 		expect(prompt).toContain("rlm.list_subagents");

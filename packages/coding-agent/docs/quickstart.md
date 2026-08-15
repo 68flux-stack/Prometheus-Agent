@@ -77,7 +77,7 @@ Prometheus runs in your current working directory and can modify files there. Us
 
 ## Recursive Subagents
 
-Recursive subagents are a built-in Prometheus capability. The model spawns independent work from IPython with `await rlm("subtask")`; each call returns at admission with a child handle and never returns the answer. Children send requested results as explicit `agent_message` replies to the parent or write them to files. Child agents use the same TypeScript agent runtime, providers, tools, skills, and session machinery as the parent.
+Recursive subagents are a built-in Prometheus capability. The model spawns independent work from IPython with `await rlm("subtask")`; each call returns at admission with a child handle and never returns the answer. A child's final response is relayed to the parent automatically; explicit `agent_message` calls remain available for progress updates and intermediate findings. Child agents use the same TypeScript agent runtime, providers, tools, skills, and session machinery as the parent.
 
 You can prompt the model to use that capability directly:
 

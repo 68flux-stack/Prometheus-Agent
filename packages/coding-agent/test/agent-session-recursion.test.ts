@@ -1221,22 +1221,20 @@ describe("AgentSession rlm recursion", () => {
 		});
 	});
 
-	it("injects exactly one notice with a preview when a child completes without replying", async () => {
+	it("injects the child's complete final response exactly once", async () => {
 		const root = createSession();
 
-		const spawned = await root.runRlmChild("silent child", { name: "silent-worker" });
+		await root.runRlmChild("silent child", { name: "silent-worker" });
 		await vi.waitFor(() => {
-			const notices = root.messages.filter(
+			const responses = root.messages.filter(
 				(message) => message.role === "custom" && message.customType === "rlm_child_terminal_notice",
 			);
-			expect(notices).toHaveLength(1);
-			expect(notices[0]).toMatchObject({
-				content: expect.stringContaining(
-					`RLM child silent-worker (${spawned.rlm_child_id}) completed without sending a reply`,
-				),
+			expect(responses).toHaveLength(1);
+			expect(responses[0]).toMatchObject({
+				content: "child answer: silent child",
 				details: {
-					kind: "completed_without_reply",
-					lastAssistantTextPreview: "child answer: silent child",
+					kind: "completed",
+					response: "child answer: silent child",
 				},
 			});
 		});

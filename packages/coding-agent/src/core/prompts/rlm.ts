@@ -34,7 +34,7 @@ const IPYTHON_CONTROL_PROMPT = [
 	"",
 	"Terminology: continual harness names the persisted prompt, memory, skill, and subagent layer; RLM names the runtime, IPython kernel, and native call interface exposed to the model.",
 	"",
-	"RLM-native call contract: installed Python skills are pre-imported modules. Read the matching SKILL.md and call its documented function, such as `await <skill_import>.<function>(...)`; when a CLI exists, use `<skill_import> ...` from shell. Continual harness skill entries are Python REPL skills with an explicit Python `reference` and `arguments` contract. Spawn a reusable delegation spec with `await rlm('sub-task')`; admission returns a child handle immediately. Results arrive only through an available messaging capability or files, never as an `rlm()` return value. Do not invent non-native wrappers such as `call_skill(...)` or `run_subagent(...)`.",
+	"RLM-native call contract: installed Python skills are pre-imported modules. Read the matching SKILL.md and call its documented function, such as `await <skill_import>.<function>(...)`; when a CLI exists, use `<skill_import> ...` from shell. Continual harness skill entries are Python REPL skills with an explicit Python `reference` and `arguments` contract. Spawn a reusable delegation spec with `await rlm('sub-task')`; admission returns a child handle immediately, never the child's answer. A child's final response is relayed automatically, while intermediate updates use available messaging capabilities or files. Do not invent non-native wrappers such as `call_skill(...)` or `run_subagent(...)`.",
 ].join("\n");
 
 export interface ChildAgentDoctrineOptions {
@@ -55,7 +55,7 @@ export function buildChildAgentDoctrine(options: ChildAgentDoctrineOptions): str
 	];
 	if (hasAgentMessage && hasIpython) {
 		lines.push(
-			'When a task calls for an answer, reply explicitly with `await agent_message.send(message, receiver_role="parent")`. Not every message or task needs a reply; continue cleanup after sending and go idle normally.',
+			'Your final response is relayed to your parent automatically. Use `await agent_message.send(message, receiver_role="parent")` only for useful progress updates or intermediate findings; do not send your final response through the command.',
 		);
 	}
 	return lines.join("\n");
@@ -137,7 +137,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		);
 		if (hasAgentMessage) {
 			parts.push(
-				"Children reply explicitly with `await agent_message.send(message, receiver_role='parent')` when an answer is needed. Replies and follow-ups arrive as ordinary agent messages; not every task requires a reply.",
+				"A child's final response is relayed automatically as an ordinary agent message. Children use `agent_message.send(..., receiver_role='parent')` only for progress updates or intermediate findings.",
 				"Use `await agent_message.list_agents()` to discover family and `await rlm.list_subagents()` to recover direct child handles. Use `agent_message.send(..., receiver_role='child', receiver_name=child.name)` for follow-ups.",
 			);
 		} else {
@@ -186,7 +186,7 @@ export function buildSubagentGuidance(
 	];
 	if (options.hasAgentMessage) {
 		lines.push(
-			"Ask for an explicit reply when needed. A child replies with `await agent_message.send(message, receiver_role='parent')`; parent follow-ups use `receiver_role='child'` plus the child's name or id. Not every message needs a reply.",
+			"A child's final response is relayed automatically. Use `agent_message.send` for intermediate child updates and for parent follow-ups with `receiver_role='child'` plus the child's name or id.",
 		);
 	}
 	lines.push("Use `await rlm.list_subagents()` after kernel restart or compaction.");

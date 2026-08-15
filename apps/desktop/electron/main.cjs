@@ -86,6 +86,17 @@ function getSessionsDir() {
 		: path.join(getAgentDataDir(), "sessions");
 }
 
+// Where the engine starts before any workspace is chosen. Must stay small and
+// outside the agent data dir: the engine baselines every file under its cwd on
+// first open (see WorkspaceChangeReview), and the agent data dir itself lives
+// under the home folder, so pointing cwd at the home folder made every session
+// snapshot the whole home tree — including prior sessions' own snapshots.
+function getIdleWorkspaceDir() {
+	const dir = path.join(app.getPath("userData"), "idle-workspace");
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
 function getWorkspacesPath() {
 	return path.join(app.getPath("userData"), "workspaces.json");
 }
@@ -785,7 +796,9 @@ app.whenReady().then(() => {
 		cliPath,
 		daemonSocket: desktopDaemonSocketPath,
 	}));
-	ipcMain.handle("workspace:default", () => repoRoot);
+	// No workspace chosen yet: start the engine in a small dedicated scratch
+	// folder instead of the repo root, so it's warm by the time one is picked.
+	ipcMain.handle("workspace:default", () => getIdleWorkspaceDir());
 	ipcMain.handle("workspace:list", () => getSavedWorkspaces());
 	ipcMain.handle("workspace:save", (_event, payload) => saveWorkspaces(payload));
 	ipcMain.handle("workspace:create-session", (_event, payload) => createWorkspaceSession(payload));

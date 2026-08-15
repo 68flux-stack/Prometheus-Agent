@@ -27,7 +27,7 @@ handle = await rlm("inspect the API", name="api-reviewer")
 print(handle.rlm_child_id, handle.name, handle.session_dir, handle.model)
 ```
 
-the call travels through a Jupyter comm target named `host.request`. `KernelManager` dispatches request type `rlm.run` to the parent `AgentSession`, which starts a child through the same TypeScript agent machinery as the parent. The call returns over the comm immediately after task admission with a child handle; it never waits for or returns the child's answer. Results arrive only through explicit `agent_message` replies or files.
+the call travels through a Jupyter comm target named `host.request`. `KernelManager` dispatches request type `rlm.run` to the parent `AgentSession`, which starts a child through the same TypeScript agent machinery as the parent. The call returns over the comm immediately after task admission with a child handle; it never waits for or returns the child's answer. The child's final response is relayed to the parent automatically, while explicit `agent_message` calls carry progress updates and intermediate findings.
 
 The same bridge supports other typed host requests. Bundled Python skills such as `goal` call `rlm.host_request("goal.get", ...)`; state and policy remain in the TypeScript host.
 
@@ -54,7 +54,7 @@ sequenceDiagram
         C->>P: stream model request
         P-->>C: response or tool call
     end
-    C-->>H: explicit agent_message reply
+    C-->>H: automatic final response or intermediate agent_message
     H-->>M: ordinary agent message
     H->>H: update registry and attribute usage
 ```
@@ -120,7 +120,7 @@ handle = await rlm("subtask")
 
 IPython processes shell messages serially. Sending the admission response on the shell channel would deadlock: the active `execute_request` cannot finish until the response arrives, while the kernel will not process that shell response until the request finishes.
 
-The Python shim therefore registers comm handlers on the control channel, and the host sends admission responses there. Future completion is scheduled with `loop.call_soon_threadsafe()` because the control handler may run on another thread. Child answers do not use this response path; they arrive later through explicit `agent_message` replies or files.
+The Python shim therefore registers comm handlers on the control channel, and the host sends admission responses there. Future completion is scheduled with `loop.call_soon_threadsafe()` because the control handler may run on another thread. Child answers do not use this response path; final responses are relayed later as ordinary agent messages, with explicit `agent_message` calls reserved for intermediate updates.
 
 ## Python API
 

@@ -19,7 +19,7 @@ flowchart LR
     kernel <-->|"inspect · search · transform"| data
     kernel <-->|"call functions"| skills
     kernel -->|"spawn focused work"| children
-    children -->|"agent messages · files"| parent
+    children -->|"automatic final response · agent messages · files"| parent
     kernel -->|"admission handle"| parent
     parent --> answer
 ```
@@ -69,10 +69,10 @@ test_review = await rlm("Review the test coverage", name="test-reviewer")
 integration_audit = await rlm("Run the slow integration audit", name="integration-audit")
 ```
 
-Results arrive only through explicit `agent_message` replies or files, never as an `rlm()` return value. Children reply when an answer is needed:
+A child's final response is relayed automatically to its parent as an ordinary attributed agent message; it is never returned from `rlm()`. Children can still send useful progress updates or intermediate findings before their final response:
 
 ```python
-await agent_message.send(message, receiver_role="parent")
+await agent_message.send(progress_update, receiver_role="parent")
 ```
 
 The parent can follow up with a retained child:

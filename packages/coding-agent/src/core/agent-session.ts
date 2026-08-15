@@ -1311,6 +1311,7 @@ export class AgentSession {
 	private _rlmParentAgent?: string;
 	private _repliedToParentSinceTask: boolean | undefined;
 	private _parentReplyCount = 0;
+	private _recentParentReplies: Array<{ sequence: number; message: string }> = [];
 	private _subagentRuntimeHost?: SubagentRuntimeHost;
 	private _activeRlmChildRuns = new Map<string, RlmChildRun>();
 	private _pendingRlmSubagentSessionNames = new Set<string>();
@@ -9166,6 +9167,11 @@ export class AgentSession {
 							if (addressedParent) {
 								this._repliedToParentSinceTask = true;
 								this._parentReplyCount += 1;
+								this._recentParentReplies.push({
+									sequence: this._parentReplyCount,
+									message: input.message,
+								});
+								if (this._recentParentReplies.length > 64) this._recentParentReplies.shift();
 							}
 						}
 						return receipt;
@@ -10285,16 +10291,32 @@ export class AgentSession {
 				durationMs = Date.now() - startedAt;
 				activity = undefined;
 				emitChildUpdate();
-				if (!run.detachedDeletion && child._parentReplyCount === parentReplyCountBeforeRun) {
-					const lastAssistantText = child.getLastAssistantText();
-					await deliverTerminalMessageToParent(
-						createRlmChildTerminalNoticeMessage({
-							kind: "completed_without_reply",
-							childId: run.id,
-							sessionName,
-							lastAssistantTextPreview: lastAssistantText ? compactRlmText(lastAssistantText) : undefined,
-						}),
-					);
+				if (!run.detachedDeletion) {
+					const lastAssistantText = child.getLastAssistantText()?.trim();
+					const alreadySentFinalResponse =
+						Boolean(lastAssistantText) &&
+						child._recentParentReplies.some(
+							(reply) =>
+								reply.sequence > parentReplyCountBeforeRun && reply.message.trim() === lastAssistantText,
+						);
+					if (lastAssistantText && !alreadySentFinalResponse) {
+						await deliverTerminalMessageToParent(
+							createRlmChildTerminalNoticeMessage({
+								kind: "completed",
+								childId: run.id,
+								sessionName,
+								response: lastAssistantText,
+							}),
+						);
+					} else if (!lastAssistantText && child._parentReplyCount === parentReplyCountBeforeRun) {
+						await deliverTerminalMessageToParent(
+							createRlmChildTerminalNoticeMessage({
+								kind: "completed_without_reply",
+								childId: run.id,
+								sessionName,
+							}),
+						);
+					}
 				}
 				if (!this.registerRlmChildSession(run.id, child)) {
 					if (childRuntime && this._subagentRuntimeHost?.releaseRlmSubagentRuntime) {
