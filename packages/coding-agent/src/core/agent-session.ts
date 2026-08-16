@@ -286,7 +286,7 @@ import { IpythonKernelProvisioner } from "./tools/ipython.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import { addAssistantUsage, emptyUsage } from "./usage.js";
 import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR, WEBSEARCH_SKILL_NAME } from "./websearch-credential.js";
-import { WorkspaceChangeReview } from "./workspace-change-review.js";
+import { WorkspaceChangeReview, type WorkspaceMutationDiff } from "./workspace-change-review.js";
 
 export type { GoalState, GoalStatus } from "./goals.js";
 export type { SessionStats } from "./session-stats.js";
@@ -3765,10 +3765,12 @@ export class AgentSession {
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
+			this.changeReview.beginTurn();
 			this._turnIndex = 0;
 			this.sessionManager.recordGitStateIfChanged();
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
+			this.changeReview.finalizeTurn();
 			// Also capture at end of turn so commits made during the run (e.g. via a bash tool) land.
 			this.sessionManager.recordGitStateIfChanged();
 			await this._extensionRunner.emit({
@@ -3817,6 +3819,10 @@ export class AgentSession {
 				this._replaceMessageInPlace(event.message, replacement);
 			}
 		} else if (event.type === "tool_execution_start") {
+			this.changeReview.beginMutationScope();
+			if (event.toolName === "ipython" && typeof event.args?.code === "string") {
+				this.changeReview.recordCommandMutationCandidates(event.args.code);
+			}
 			const extensionEvent: ToolExecutionStartEvent = {
 				type: "tool_execution_start",
 				toolCallId: event.toolCallId,
@@ -3834,6 +3840,25 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_end") {
+			const details = event.result?.details;
+			let workspaceDiffs: WorkspaceMutationDiff[];
+			if (details && typeof details === "object") {
+				const paths: string[] = [];
+				if (Array.isArray(details.mutatedPaths)) {
+					for (const path of details.mutatedPaths) if (typeof path === "string") paths.push(path);
+				}
+				if (Array.isArray(details.diffs)) {
+					for (const diff of details.diffs) {
+						if (diff && typeof diff === "object" && typeof diff.path === "string") paths.push(diff.path);
+					}
+				}
+				workspaceDiffs = this.changeReview.finalizeMutationScope(paths);
+			} else {
+				workspaceDiffs = this.changeReview.finalizeMutationScope([]);
+			}
+			if (workspaceDiffs.length > 0 && event.result) {
+				event.result.details = { ...(details && typeof details === "object" ? details : {}), workspaceDiffs };
+			}
 			const extensionEvent: ToolExecutionEndEvent = {
 				type: "tool_execution_end",
 				toolCallId: event.toolCallId,

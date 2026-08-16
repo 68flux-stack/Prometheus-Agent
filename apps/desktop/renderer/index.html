@@ -109,8 +109,23 @@
 						</button>
 						<div class="job-banner-list" id="job-banner-list" hidden></div>
 					</div>
+					<section class="change-review" id="change-review" aria-labelledby="change-review-label" hidden>
+						<div class="change-review-files" id="change-review-files"></div>
+						<div class="change-review-toolbar">
+							<button class="change-review-toggle" id="change-review-toggle" type="button" aria-expanded="true" aria-controls="change-review-files">
+								<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg>
+								<span class="change-review-document" aria-hidden="true"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3" /></svg></span>
+								<span id="change-review-label">0 Files With Changes</span>
+							</button>
+							<div class="change-review-actions">
+								<button id="reject-all-changes" type="button">Reject all</button>
+								<button class="change-review-accept" id="accept-all-changes" type="button">Accept all</button>
+							</div>
+						</div>
+					</section>
 					<div class="composer-box">
 						<div class="command-menu" id="command-menu" role="listbox" aria-label="Slash commands" hidden></div>
+						<div class="attachment-list" id="attachment-list" role="list" aria-label="Attachments" hidden></div>
 						<textarea id="prompt-input" rows="1" aria-label="Message Prometheus" placeholder="Message Prometheus…" disabled></textarea>
 						<div class="composer-footer">
 							<div class="composer-left">
@@ -202,6 +217,7 @@
 			</form>
 		</dialog>
 		<div class="toast" id="toast" role="status"></div>
+		<script src="./tool-summary.js"></script>
 		<script src="./app.js"></script>
 	</body>
 </html>

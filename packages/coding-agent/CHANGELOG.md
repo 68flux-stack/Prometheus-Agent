@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Changed desktop thinking summaries to use a lighter, non-italic style.
 - Changed subagents to relay their final response to the parent automatically while keeping explicit agent messages available for progress updates.
 - Fixed kernel runtime upgrades deleting and recreating the whole kernel venv: stale packages are now reinstalled in place, so an upgrade no longer fails on Windows when another session's kernel holds `Scripts/python.exe` (which previously left the venv half-deleted).
 
@@ -14,6 +15,9 @@
 - Added enforced `plan`, `workspace`, and `unrestricted` execution modes with ordered permission rules, `/permissions`, and a configurable mode-cycle keybinding.
 - Added desktop runtime controls for execution modes, background command jobs, and applying or discarding isolated subagent patches.
 - Added `/changes` to review, accept, or reject workspace edits from a durable root-session baseline.
+- Fixed change review to keep empty conversations empty and stay scoped to each conversation's mutations, including subprocess writes, across concurrent runs and restarts while preserving compatible later edits and ignoring incidental line-ending normalization.
+- Fixed desktop command summaries and diff statistics to combine file reads, creations, and edits using complete per-command before/after data.
+- Fixed explicit sequential file-operation requests being collapsed into a single final-state write.
 - Added a configurable copy action to login dialogs so raw sign-in URLs can be copied without selecting wrapped text ([#643](https://github.com/PrimeIntellect-ai/prometheus/issues/643)).
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prometheus)).
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
