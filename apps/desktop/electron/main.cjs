@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const { Worker } = require("node:worker_threads");
 const { createHash } = require("node:crypto");
 const {
 	chmodSync,
@@ -38,11 +39,13 @@ const cliPath = process.env.PROMETHEUS_CLI_PATH || path.join(repoRoot, "packages
 const distDir = path.join(repoRoot, "packages", "coding-agent", "dist");
 const { AuthStorage } = require(path.join(distDir, "core", "auth-storage.js"));
 const { SessionManager } = require(path.join(distDir, "core", "session-manager.js"));
+const { WorkspaceChangeReview } = require(path.join(distDir, "core", "workspace-change-review.js"));
 // The RPC contract is strict LF-only JSONL. Node's readline splits on U+2028/U+2029,
 // which are legal inside JSON strings, so it silently destroys frames.
 const { attachJsonlLineReader } = require(path.join(distDir, "modes", "rpc", "jsonl.js"));
 const OAUTH_PROVIDER_IDS = new Set(["anthropic", "openai-codex", "github-copilot"]);
 const MAX_RPC_LINE_LENGTH = 128 * 1024 * 1024;
+const MAX_ATTACHMENT_PREVIEW_BYTES = 50 * 1024 * 1024;
 
 function isWritableDirectory(directory) {
 	try {
@@ -152,22 +155,32 @@ function saveWorkspaces(payload = {}) {
 	return { workspaces };
 }
 
+function runSessionWorker(workerData) {
+	return new Promise((resolve, reject) => {
+		const worker = new Worker(path.join(__dirname, "session-creator.cjs"), { workerData });
+		worker.once("message", ({ error, ...result }) => {
+			if (error) reject(new Error(error));
+			else resolve(result);
+		});
+		worker.once("error", reject);
+		worker.once("exit", (code) => {
+			if (code !== 0) reject(new Error(`Session worker stopped with code ${code}.`));
+		});
+	});
+}
+
 function createWorkspaceSession(payload = {}) {
 	const workspace = typeof payload?.workspace === "string" && payload.workspace.trim() ? path.resolve(payload.workspace) : undefined;
 	if (!workspace || !existsSync(workspace) || !statSync(workspace).isDirectory()) {
 		throw new Error("Choose an existing workspace folder.");
 	}
-	const session = SessionManager.create(workspace, getSessionsDir());
-	// Write the header now. An unflushed session file does not exist on disk, so
-	// the agent's switch_session opens it, finds no header, and falls back to the
-	// child's process.cwd() — i.e. the previously started workspace.
-	session.flushNow();
-	const sessionPath = session.getSessionFile();
-	if (!sessionPath) throw new Error("Could not create a conversation for this workspace.");
-	const workspaceStore = getWorkspaceStore();
-	workspaceStore.sessionWorkspaces[sessionWorkspaceKey(sessionPath)] = workspace;
-	writeFileSync(getWorkspacesPath(), `${JSON.stringify(workspaceStore)}\n`, "utf8");
-	return { sessionPath };
+	return runSessionWorker({ action: "create", workspace, sessionsDir: getSessionsDir(), distDir }).then(({ sessionPath }) => {
+		if (!sessionPath) throw new Error("Could not create a conversation for this workspace.");
+		const workspaceStore = getWorkspaceStore();
+		workspaceStore.sessionWorkspaces[sessionWorkspaceKey(sessionPath)] = workspace;
+		writeFileSync(getWorkspacesPath(), `${JSON.stringify(workspaceStore)}\n`, "utf8");
+		return { sessionPath };
+	});
 }
 
 // Share the normal daemon so the desktop can reattach to conversations already
@@ -332,6 +345,94 @@ function listSessions(payload = {}) {
 			b.modifiedAt - a.modifiedAt,
 	);
 	return { sessions: sessions.slice(0, limit), sessionsDir };
+}
+
+function resolveManagedSessionPath(sessionPath) {
+	if (typeof sessionPath !== "string" || !sessionPath.trim()) throw new Error("Choose a conversation.");
+	const resolved = path.resolve(sessionPath);
+	const relative = path.relative(path.resolve(getSessionsDir()), resolved);
+	if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || path.extname(resolved) !== ".jsonl") {
+		throw new Error("That conversation is outside Prometheus's session directory.");
+	}
+	if (!existsSync(resolved) || !statSync(resolved).isFile()) throw new Error("That conversation no longer exists.");
+	return resolved;
+}
+
+function renameSession(payload = {}) {
+	const sessionPath = resolveManagedSessionPath(payload?.sessionPath);
+	const name = typeof payload?.name === "string" ? payload.name.trim() : "";
+	if (!name) throw new Error("Conversation name cannot be empty.");
+	if (name.length > 200 || /[\r\n]/.test(name)) throw new Error("Keep the conversation name to one line and under 200 characters.");
+	SessionManager.open(sessionPath).appendSessionInfo(name);
+	return { sessionPath, name };
+}
+
+async function trashSession(payload = {}) {
+	const sessionPath = resolveManagedSessionPath(payload?.sessionPath);
+	await shell.trashItem(sessionPath);
+	if (existsSync(sessionPath)) throw new Error("Could not move the conversation to the system trash.");
+	const workspaceStore = getWorkspaceStore();
+	delete workspaceStore.sessionWorkspaces[sessionWorkspaceKey(sessionPath)];
+	writeFileSync(getWorkspacesPath(), `${JSON.stringify(workspaceStore)}\n`, "utf8");
+	return { sessionPath };
+}
+
+function getWorkspaceChangeReview(payload = {}) {
+	const sessionPath = resolveManagedSessionPath(payload?.sessionPath);
+	const session = SessionManager.open(sessionPath);
+	const artifactDir = session.getSessionArtifactDir();
+	if (!artifactDir) throw new Error("This conversation does not have a change-review snapshot.");
+	return {
+		review: WorkspaceChangeReview.openOrCreate(session.getCwd(), artifactDir),
+		session,
+		artifactDir,
+	};
+}
+
+function listWorkspaceChanges(payload = {}) {
+	const sessionPath = resolveManagedSessionPath(payload?.sessionPath);
+	return runSessionWorker({ action: "list-workspace-changes", sessionPath, distDir });
+}
+
+function applyWorkspaceChanges(payload = {}) {
+	const { review } = getWorkspaceChangeReview(payload);
+	if (payload.operation === "accept-all") review.acceptAll();
+	else if (payload.operation === "reject-all") review.rejectAll();
+	else throw new Error("Unknown workspace change operation.");
+	return listWorkspaceChanges(payload);
+}
+
+const CONTEXT_MENU_ROLES = new Set(["undo", "redo", "cut", "copy", "paste", "selectAll"]);
+
+function showContextMenu(event, payload = {}) {
+	const items = Array.isArray(payload?.items) ? payload.items.slice(0, 40) : [];
+	return new Promise((resolve) => {
+		let selected;
+		const template = items.flatMap((item) => {
+			if (item?.type === "separator") return [{ type: "separator" }];
+			if (CONTEXT_MENU_ROLES.has(item?.role)) return [{ role: item.role }];
+			if (typeof item?.id !== "string" || typeof item?.label !== "string") return [];
+			return [{
+				id: item.id.slice(0, 100),
+				label: item.label.slice(0, 200),
+				enabled: item.enabled !== false,
+				type: item.type === "checkbox" ? "checkbox" : "normal",
+				checked: item.type === "checkbox" && item.checked === true,
+				click: () => {
+					selected = item.id;
+				},
+			}];
+		});
+		if (!template.length) {
+			resolve(undefined);
+			return;
+		}
+		const window = BrowserWindow.fromWebContents(event.sender);
+		Menu.buildFromTemplate(template).popup({
+			window,
+			callback: () => resolve(selected),
+		});
+	});
 }
 
 // Attaching the engine to a conversation it has not opened yet costs a worker
@@ -757,6 +858,26 @@ function savePastedImage({ data, extension } = {}) {
 	return target;
 }
 
+async function createImagePreview({ filePath } = {}) {
+	if (typeof filePath !== "string" || !filePath.trim()) return undefined;
+	const resolved = path.resolve(filePath);
+	let stats;
+	try {
+		stats = statSync(resolved);
+	} catch {
+		return undefined;
+	}
+	if (!stats.isFile() || stats.size > MAX_ATTACHMENT_PREVIEW_BYTES) return undefined;
+
+	let preview;
+	try {
+		preview = await nativeImage.createThumbnailFromPath(resolved, { width: 104, height: 104 });
+	} catch {
+		preview = nativeImage.createFromPath(resolved);
+	}
+	return preview?.isEmpty() ? undefined : preview.toDataURL();
+}
+
 // Windows dictation is a system toggle on Win+H; there is no API for it, so
 // synthesize the chord against the focused window.
 function startWindowsDictation() {
@@ -786,6 +907,11 @@ app.whenReady().then(() => {
 	ipcMain.handle("sessions:list", (_event, payload) => listSessions(payload));
 	ipcMain.handle("sessions:read", (_event, payload) => readSessionMessages(payload));
 	ipcMain.handle("sessions:subagents", (_event, payload) => listSessionSubagents(payload));
+	ipcMain.handle("sessions:rename", (_event, payload) => renameSession(payload));
+	ipcMain.handle("sessions:trash", (_event, payload) => trashSession(payload));
+	ipcMain.handle("workspace-changes:list", (_event, payload) => listWorkspaceChanges(payload));
+	ipcMain.handle("workspace-changes:apply", (_event, payload) => applyWorkspaceChanges(payload));
+	ipcMain.handle("context-menu:show", (event, payload) => showContextMenu(event, payload));
 	ipcMain.handle("theme:get", () => getTheme());
 	ipcMain.handle("agent:paths", () => ({
 		agentDataDir: getAgentDataDir(),
@@ -817,8 +943,10 @@ app.whenReady().then(() => {
 		return result.canceled ? [] : result.filePaths;
 	});
 	ipcMain.handle("files:save-pasted-image", (_event, payload) => savePastedImage(payload));
+	ipcMain.handle("files:image-preview", (_event, payload) => createImagePreview(payload));
 	ipcMain.handle("dictation:start", () => startWindowsDictation());
 	ipcMain.handle("shell:open-path", (_event, target) => shell.openPath(target));
+	ipcMain.handle("shell:show-item", (_event, target) => shell.showItemInFolder(target));
 	ipcMain.handle("shell:open-external", (_event, target) => shell.openExternal(target));
 	createWindow();
 

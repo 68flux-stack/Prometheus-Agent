@@ -33,6 +33,11 @@ const state = {
 	subagents: new Map(),
 	approval: undefined,
 	subagentView: undefined,
+	attachments: [],
+	workspaceChanges: [],
+	changeReviewExpanded: true,
+	changeReviewPending: false,
+	changeReviewRequest: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +50,7 @@ const workspaceList = $("workspace-list");
 const sidebar = document.querySelector(".sidebar");
 const sidebarResizer = $("sidebar-resizer");
 const input = $("prompt-input");
+const attachmentList = $("attachment-list");
 const sendButton = $("send-button");
 const modelSelect = $("model-select");
 const thinkingSelect = $("thinking-select");
@@ -73,13 +79,18 @@ const jobBanner = $("job-banner");
 const jobBannerToggle = $("job-banner-toggle");
 const jobBannerList = $("job-banner-list");
 const jobBannerLabel = $("job-banner-label");
+const changeReview = $("change-review");
+const changeReviewFiles = $("change-review-files");
+const changeReviewToggle = $("change-review-toggle");
+const acceptAllChanges = $("accept-all-changes");
+const rejectAllChanges = $("reject-all-changes");
 let handshakeTimer;
 // The cwd the engine was silently started in when no workspace was saved yet;
 // applyState uses this to avoid turning that fast-start default into a real
 // workspace card the moment the engine reports its own cwd.
 let pendingDefaultCwd;
 let toastTimer;
-const SCROLLBAR_SELECTOR = ".workspace-list, .conversation, .message-content pre, .tool-card pre, .diff-lines, .diff-card-body, .command-menu, .composer textarea, .runtime-scroll, .runtime-output";
+const SCROLLBAR_SELECTOR = ".workspace-list, .conversation, .message-content pre, .tool-card pre, .diff-lines, .diff-card-body, .change-review-files, .command-menu, .composer textarea, .runtime-scroll, .runtime-output";
 const scrollbarTimers = new WeakMap();
 let activeInteraction;
 let providerLoginInteraction = false;
@@ -133,8 +144,10 @@ function renderWorkspaceList() {
 		card.dataset.workspace = workspace;
 		const header = document.createElement("div");
 		header.className = "workspace-card-header";
-		const selectButton = document.createElement("div");
+		const selectButton = document.createElement("button");
 		selectButton.className = "workspace-card-select";
+		selectButton.type = "button";
+		selectButton.dataset.selectWorkspace = workspace;
 		selectButton.title = workspace;
 		selectButton.innerHTML = '<svg class="workspace-card-folder" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.5h4l1.3 1.45h7.2v6.3a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1V4.5Z"/></svg>';
 		const name = document.createElement("span");
@@ -593,13 +606,15 @@ function isEngineConnecting() {
 function syncComposer() {
 	const canPrompt = !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
 	input.disabled = !canPrompt;
-	sendButton.disabled = !canPrompt || !input.value.trim();
+	sendButton.disabled = !canPrompt || (!input.value.trim() && state.attachments.length === 0);
 	$("attach-button").disabled = !canPrompt;
 	$("dictate-button").disabled = !canPrompt;
 	stopButton.hidden = !state.busy;
 	$("send-label").textContent = state.busy ? "Steer" : "Send";
 	modelSelect.disabled = !state.ready || state.models.length === 0;
 	thinkingSelect.disabled = !state.ready || !hasConfiguredModel();
+	acceptAllChanges.disabled = state.busy || state.changeReviewPending;
+	rejectAllChanges.disabled = state.busy || state.changeReviewPending;
 	updateOnboarding();
 }
 
@@ -707,6 +722,7 @@ function applyState(data) {
 	$("header-title").textContent = data.sessionName || "Untitled session";
 	renderWorkspaceList();
 	setBusy(Boolean(data.isStreaming), data.isStreaming ? "Working · send a message to steer" : "Ready");
+	void refreshWorkspaceChanges();
 }
 
 function contentText(message) {
@@ -715,6 +731,50 @@ function contentText(message) {
 	if (!Array.isArray(message.content)) return "";
 	return message.content
 		.filter((block) => block && block.type === "text")
+		.map((block) => block.text || "")
+		.join("");
+}
+
+function textBlockPhase(block) {
+	if (block?.type !== "text" || typeof block.textSignature !== "string") return undefined;
+	try {
+		const signature = JSON.parse(block.textSignature);
+		return signature?.v === 1 && ["commentary", "final_answer"].includes(signature.phase)
+			? signature.phase
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function hasTextPhase(message, phase) {
+	return Array.isArray(message?.content) && message.content.some((block) => textBlockPhase(block) === phase);
+}
+
+function phasedText(message, phase) {
+	if (!Array.isArray(message?.content)) return "";
+	return message.content
+		.filter((block) => block?.type === "text" && textBlockPhase(block) === phase)
+		.map((block) => block.text || "")
+		.join("");
+}
+
+function assistantHasFinalAnswer(message) {
+	if (message?.role !== "assistant") return false;
+	if (hasTextPhase(message, "final_answer")) return true;
+	if (hasTextPhase(message, "commentary") || message._streaming) return false;
+	const hasToolCalls = Array.isArray(message.content) && message.content.some((block) => block?.type === "toolCall");
+	return Boolean(contentText(message)) && !hasToolCalls && Boolean(message.stopReason) && message.stopReason !== "toolUse";
+}
+
+function finalAnswerText(message) {
+	return hasTextPhase(message, "final_answer") ? phasedText(message, "final_answer") : contentText(message);
+}
+
+function workText(message) {
+	if (!hasTextPhase(message, "final_answer")) return contentText(message);
+	return message.content
+		.filter((block) => block?.type === "text" && textBlockPhase(block) !== "final_answer")
 		.map((block) => block.text || "")
 		.join("");
 }
@@ -984,18 +1044,22 @@ function createMsgActionButton(action, label) {
 	return button;
 }
 
-function renderMessageRow(row, message) {
+function renderMessageRow(row, message, display = {}) {
 	const readOnly = Boolean(state.subagentView);
-	const thinking = contentThinking(message);
-	const text = contentText(message);
-	const images = contentImages(message).filter((image) => image.data);
-	const isThinking = message.role === "assistant" && message._streaming && state.thinkingLevel !== "off" && Boolean(thinking) && !text;
+	const thinking = display.thinking ?? contentThinking(message);
+	const text = display.text ?? contentText(message);
+	const images = (display.images ?? contentImages(message)).filter((image) => image.data);
+	const streaming = display.streaming ?? message._streaming;
+	const isThinking = message.role === "assistant" && streaming && state.thinkingLevel !== "off" && Boolean(thinking) && !text;
 	const visibleThinking = isThinking ? "Thinking..." : formatThinkingSummary(thinking);
 	// A message still in flight has no finished state to act on yet, and an optimistic
 	// user row has no server-side entry id for edit/fork to target. Notifications and
 	// other custom rows aren't part of the fork-able user/assistant turn sequence.
 	const showActions =
-		(message.role === "user" || message.role === "assistant") && !message._streaming && !message._optimistic;
+		(display.showActions ?? true) &&
+		(message.role === "user" || message.role === "assistant") &&
+		!message._streaming &&
+		!message._optimistic;
 	const actionsLabel = !showActions
 		? ""
 		: message.role === "user"
@@ -1101,56 +1165,13 @@ function toolDetails(tool) {
 	return tool.output || formatToolDetails(tool.args);
 }
 
-function ipythonFileActivity(code, pattern, action) {
-	const files = [...code.matchAll(pattern)]
-		.map((match) => match[1]?.trim())
-		.filter(Boolean);
-	if (files.length === 0) return null;
-	if (files.length === 1) return `${action} ${files[0]}`;
-	return `${action} files`;
+function ipythonActivities(tool) {
+	const code = typeof tool.args?.code === "string" ? tool.args.code : "";
+	return window.PrometheusToolSummary.analyzeIpythonActivities({ code, details: tool.details, workspace: state.workspace });
 }
 
 function ipythonSummary(tool) {
-	// tool.details.diffs is handled entirely by resolveToolDiffs/renderDiffToolCard before this
-	// runs — reached only for the plain fallback (no diff data at all: mkdir/touch, a create
-	// whose content wasn't recoverable, or a plain read/shell command).
-	const code = typeof tool.args?.code === "string" ? tool.args.code : "";
-	const addedFile = /\*\*\* Add File:\s*([^\r\n]+)/.exec(code);
-	if (addedFile) return `Created ${addedFile[1].trim()}`;
-	const updatedFile = /\*\*\* Update File:\s*([^\r\n]+)/.exec(code);
-	if (updatedFile) return `Edited ${updatedFile[1].trim()}`;
-	const createdFile = /(?:Path\(\s*["']([^"']+)["']\s*\)\.(?:mkdir|touch)|(?:mkdir|touch)\(\s*["']([^"']+)["'])/.exec(code);
-	if (createdFile) return `Created ${createdFile[1] || createdFile[2]}`;
-	const pathVars = extractPathVars(code);
-	for (const [variable, path] of pathVars) {
-		const writesFile = new RegExp(`\\b${variable}\\.(?:write_text|write_bytes)\\(`).test(code);
-		if (!writesFile) continue;
-		const readsFile = new RegExp(`\\b${variable}\\.(?:read_text|read_bytes)\\(`).test(code);
-		return `${readsFile ? "Edited" : "Created"} ${path}`;
-	}
-	const writtenFile = /(?:Path\(\s*["']([^"']+)["']\s*\)\.(?:write_text|write_bytes)|(?:write_text|write_bytes)\(\s*["']([^"']+)["'])/.exec(code);
-	if (writtenFile) return `Created ${writtenFile[1] || writtenFile[2]}`;
-	const replacedFile = /replace_text\(\s*["']([^"']+)["']/.exec(code);
-	if (replacedFile) return `Edited ${replacedFile[1]}`;
-	const openedForWriting = /open\(\s*["']([^"']+)["']\s*,\s*["'][wax+]+["']/.exec(code);
-	if (openedForWriting) return `Created ${openedForWriting[1]}`;
-	const editSkill = /\bedit\(\s*path\s*=\s*["']([^"']+)["']/.exec(code);
-	if (editSkill) return `Editing ${editSkill[1]}`;
-	const pathReadFile = ipythonFileActivity(
-		code,
-		/Path\(\s*["']([^"']+)["']\s*\)\.(?:read_text|read_bytes|iterdir|glob|rglob)\(/g,
-		"Read",
-	);
-	if (pathReadFile) return pathReadFile;
-	const readFile = ipythonFileActivity(
-		code,
-		/(?:read_text|read_bytes|open)\(\s*["']([^"']+)["'](?:\s*,\s*["']r["'])?/g,
-		"Read",
-	);
-	if (readFile) return readFile;
-	const sleepMatch = /(?:time\.sleep|asyncio\.sleep)\(\s*([\d.]+)|(?:^|[\s;&|])sleep\s+([\d.]+)/m.exec(code);
-	if (sleepMatch) return `Slept ${sleepMatch[1] || sleepMatch[2]}s`;
-	return "Ran a command";
+	return ipythonActivities(tool).summary;
 }
 
 function toolSummary(tool) {
@@ -1161,11 +1182,14 @@ function toolSummary(tool) {
 // ponytail: O(oldLines * newLines) LCS diff, fine for edit-sized snippets; swap for a real
 // diff lib if a single edit routinely spans thousands of lines.
 function diffLineParts(oldStr, newStr) {
-	// "".split("\n") is [""] (one blank line), not zero lines — left as-is, a create's phantom
-	// blank "old" line can LCS-match a genuinely blank line anywhere in the new content and get
-	// rendered as unchanged context instead of an add.
-	const oldLines = oldStr === "" ? [] : oldStr.split("\n");
-	const newLines = newStr === "" ? [] : newStr.split("\n");
+	const splitLines = (value) => {
+		if (value === "") return [];
+		const lines = value.replace(/\r\n?/g, "\n").split("\n");
+		if (lines.at(-1) === "") lines.pop();
+		return lines;
+	};
+	const oldLines = splitLines(oldStr);
+	const newLines = splitLines(newStr);
 	const n = oldLines.length;
 	const m = newLines.length;
 	const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
@@ -1348,14 +1372,19 @@ function extractCreateDiffs(code) {
 }
 
 function resolveToolDiffs(tool) {
-	const kernelDiffs = Array.isArray(tool.details?.diffs)
-		? tool.details.diffs.map((diff) => ({ ...diff, kind: "edit" }))
+	const commandDiffs = Array.isArray(tool.details?.workspaceDiffs) ? tool.details.workspaceDiffs : tool.details?.diffs;
+	const reportedDiffs = Array.isArray(commandDiffs)
+		? commandDiffs.map((diff) => ({ ...diff, kind: "edit" }))
 		: [];
+	const code = typeof tool.args?.code === "string" ? tool.args.code : "";
+	const kernelDiffs = window.PrometheusToolSummary.composeIpythonDiffs(
+		{ code, details: tool.details, workspace: state.workspace },
+		reportedDiffs,
+	);
 	// Extracting content from source is only meaningful once the cell (and its `code` arg)
 	// has fully streamed in; a partial code string mid-stream would parse as garbage.
 	let created = [];
 	if (tool.done && !tool.isError) {
-		const code = typeof tool.args?.code === "string" ? tool.args.code : "";
 		if (code) created = extractCreateDiffs(code);
 	}
 	const editedPaths = new Set(kernelDiffs.map((diff) => diff.path));
@@ -1466,10 +1495,22 @@ function renderDiffToolCard(row, tool, diffs) {
 	summary.replaceChildren();
 	// A single cell can both create and edit files, so the title is one chip per kind
 	// present ("Created a.js · Edited b.js, c.js"), not one blanket verb.
-	const groups = [
-		{ verb: "Created", files: [...new Set(diffs.filter((d) => d.kind === "create").map((d) => fileBaseName(d.path)))] },
-		{ verb: "Edited", files: [...new Set(diffs.filter((d) => d.kind !== "create").map((d) => fileBaseName(d.path)))] },
-	].filter((group) => group.files.length > 0);
+	const activityGroups = ipythonActivities(tool).groups.map((group) => ({
+		verb: group.verb,
+		files: [...new Set(group.files.map(fileBaseName))],
+	}));
+	const groups = activityGroups.length
+		? activityGroups
+		: [
+				{
+					verb: "Created",
+					files: [...new Set(diffs.filter((d) => ["create", "create-edit"].includes(d.kind)).map((d) => fileBaseName(d.path)))],
+				},
+				{
+					verb: "Edited",
+					files: [...new Set(diffs.filter((d) => d.kind !== "create").map((d) => fileBaseName(d.path)))],
+				},
+			].filter((group) => group.files.length > 0);
 	groups.forEach((group, index) => {
 		if (index > 0) {
 			const sep = document.createElement("span");
@@ -1563,6 +1604,50 @@ function renderPendingRow(row) {
 	row.append(label);
 }
 
+function reconcileGroupedRows(container, rows) {
+	let cursor = container.firstElementChild;
+	for (const descriptor of rows) {
+		if (cursor?.dataset.key === descriptor.key) {
+			descriptor.render(cursor);
+			cursor = cursor.nextElementSibling;
+			continue;
+		}
+		const node = document.createElement("article");
+		node.dataset.key = descriptor.key;
+		descriptor.render(node);
+		container.insertBefore(node, cursor);
+	}
+	while (cursor) {
+		const next = cursor.nextElementSibling;
+		cursor.remove();
+		cursor = next;
+	}
+}
+
+function formatWorkDuration(startedAt, finishedAt) {
+	if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return "Worked";
+	return `Worked for ${formatElapsed(Math.max(0, finishedAt - startedAt))}`;
+}
+
+function renderWorkGroup(row, workRows, startedAt, finishedAt) {
+	row.className = "message-row work-group-row";
+	const group = ensureChild(row, "work-group", "details");
+	const summary = ensureChild(group, "work-group-summary", "summary", true);
+	const label = ensureChild(summary, "work-group-label", "span");
+	setText(label, formatWorkDuration(startedAt, finishedAt));
+	let chevron = summary.querySelector(":scope > .work-group-chevron");
+	if (!chevron) {
+		chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		chevron.classList.add("work-group-chevron");
+		chevron.setAttribute("viewBox", "0 0 16 16");
+		chevron.setAttribute("aria-hidden", "true");
+		chevron.innerHTML = '<path d="m6 3.5 4.5 4.5L6 12.5"/>';
+		summary.appendChild(chevron);
+	}
+	const content = ensureChild(group, "work-group-content");
+	reconcileGroupedRows(content, workRows);
+}
+
 // One ordered transcript: message rows in message order, and each tool card in the position
 // of the toolCall block that produced it. Tool results are never rendered as their own row.
 function buildTranscriptRows() {
@@ -1594,45 +1679,107 @@ function buildTranscriptRows() {
 	};
 
 	const rows = [];
+	let turnStartedAt;
+	let turnStartIndex = -1;
+	let turnWorkRows = [];
+	const flushVisibleWork = () => {
+		rows.push(...turnWorkRows);
+		turnWorkRows = [];
+	};
+	const pushWorkRow = (row) => {
+		if (turnStartIndex >= 0) turnWorkRows.push(row);
+		else rows.push(row);
+	};
+	const collapseWork = (finalIndex, finalMessage) => {
+		if (!turnWorkRows.length) return;
+		const workRows = turnWorkRows;
+		turnWorkRows = [];
+		const startedAt = turnStartedAt;
+		const finishedAt = finalMessage._finalStartedAt ?? finalMessage.timestamp ?? finalMessage._finishedAt;
+		rows.push({
+			key: `w:${turnStartIndex}:${finalIndex}`,
+			render: (row) => renderWorkGroup(row, workRows, startedAt, finishedAt),
+		});
+	};
 	const renderedCalls = new Set();
 	for (const [index, message] of messages.entries()) {
 		if (!message || !["user", "assistant", "custom", "notification"].includes(message.role)) continue;
+		if (message.role === "user") {
+			flushVisibleWork();
+			rows.push({ key: `m:${index}`, render: (row) => renderMessageRow(row, message) });
+			turnStartedAt = message.timestamp;
+			turnStartIndex = index;
+			continue;
+		}
 		// An agent message carries a routing envelope the model needs and the reader
 		// does not; it gets its own row showing just what was said.
 		const agentMessage = agentMessageDetails(message);
 		if (agentMessage) {
-			rows.push({ key: `a:${index}`, render: (row) => renderAgentMessageRow(row, agentMessage) });
+			pushWorkRow({ key: `a:${index}`, render: (row) => renderAgentMessageRow(row, agentMessage) });
 			continue;
 		}
 		// A background-job-finished message carries a raw envelope for the model; the
 		// reader gets the sub-agent-style summary pill instead.
 		const jobFinished = backgroundJobFinishedDetails(message);
 		if (jobFinished) {
-			rows.push({ key: `bg:${index}`, render: (row) => renderBackgroundJobFinishedRow(row, jobFinished, message) });
+			pushWorkRow({ key: `bg:${index}`, render: (row) => renderBackgroundJobFinishedRow(row, jobFinished, message) });
 			continue;
 		}
 		const calls = Array.isArray(message.content) ? message.content.filter((block) => block?.type === "toolCall") : [];
-		// An assistant message that only carries toolCall blocks has no row of its own; its
-		// tool cards are the row.
-		const hasBody = Boolean(contentText(message) || contentThinking(message) || contentImages(message).length);
+		const finalAnswer = assistantHasFinalAnswer(message);
+		const messageWorkText = finalAnswer ? workText(message) : contentText(message);
+		const messageThinking = contentThinking(message);
+		const images = contentImages(message);
+		const hasWorkBody = Boolean(messageWorkText || messageThinking || (!finalAnswer && images.length));
 		// Position, not messageKey(): a streamed message's timestamp/id can arrive late, and a
 		// changing key would swap the node out mid-stream and re-run its entry animation.
-		if (hasBody) rows.push({ key: `m:${index}`, render: (row) => renderMessageRow(row, message) });
+		if (hasWorkBody) {
+			pushWorkRow({
+				key: finalAnswer ? `mw:${index}` : `m:${index}`,
+				render: (row) =>
+					renderMessageRow(row, message, {
+						text: messageWorkText,
+						thinking: messageThinking,
+						images: finalAnswer ? [] : images,
+						streaming: finalAnswer ? false : message._streaming,
+						showActions: false,
+					}),
+			});
+		}
 		for (const call of calls) {
 			if (!call.id || renderedCalls.has(call.id)) continue;
 			renderedCalls.add(call.id);
 			const tool = mergeTool(call, resultsByCallId.get(call.id), runtimeByCallId.get(call.id));
-			rows.push({ key: `t:${call.id}`, render: (row) => renderToolCard(row, tool) });
-			pushSubagentRows(rows, call.id);
+			pushWorkRow({ key: `t:${call.id}`, render: (row) => renderToolCard(row, tool) });
+			const subagentRows = [];
+			pushSubagentRows(subagentRows, call.id);
+			for (const subagentRow of subagentRows) pushWorkRow(subagentRow);
+		}
+		if (finalAnswer) {
+			collapseWork(index, message);
+			const text = finalAnswerText(message);
+			if (text || images.length) {
+				rows.push({
+					key: `m:${index}`,
+					render: (row) => renderMessageRow(row, message, { text, thinking: "", images }),
+				});
+			}
+			turnStartedAt = undefined;
+			turnStartIndex = -1;
 		}
 	}
-	for (const anchor of [...subagentsByAnchor.keys()]) pushSubagentRows(rows, anchor);
+	for (const anchor of [...subagentsByAnchor.keys()]) {
+		const subagentRows = [];
+		pushSubagentRows(subagentRows, anchor);
+		for (const subagentRow of subagentRows) pushWorkRow(subagentRow);
+	}
 	// The turn is accepted in ~200ms but the first token is the provider's to give,
 	// and until then nothing above has a body to render. Without a row for the turn
 	// in flight the transcript sits dead for seconds after the user hits send.
 	if (!state.subagentView && isTurnPending()) {
-		rows.push({ key: "pending", render: (row) => renderPendingRow(row) });
+		pushWorkRow({ key: "pending", render: (row) => renderPendingRow(row) });
 	}
+	flushVisibleWork();
 	if (state.subagentView && messages.length === 0) {
 		rows.push({ key: "subagent-empty", render: (row) => renderSubagentEmptyRow(row) });
 	}
@@ -1862,6 +2009,7 @@ function closeSubagentConversation() {
 	syncSubagentView();
 	conversation.scrollTop = conversation.scrollHeight;
 	renderMessages();
+	void refreshWorkspaceChanges();
 }
 
 function renderSubagentEmptyRow(row) {
@@ -2199,6 +2347,94 @@ function renderJobBanner(jobs) {
 	}
 }
 
+function workspaceChangeName(filePath) {
+	return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
+}
+
+function workspaceChangeParent(filePath) {
+	const parts = filePath.split(/[\\/]/).filter(Boolean);
+	return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+}
+
+function renderWorkspaceChanges() {
+	const changes = state.workspaceChanges;
+	changeReview.hidden = changes.length === 0;
+	changeReview.dataset.expanded = String(state.changeReviewExpanded);
+	changeReviewToggle.setAttribute("aria-expanded", String(state.changeReviewExpanded));
+	changeReviewFiles.hidden = !state.changeReviewExpanded;
+	$("change-review-label").textContent = `${changes.length} ${changes.length === 1 ? "File" : "Files"} With Changes`;
+	changeReviewFiles.replaceChildren();
+	for (const change of changes) {
+		const row = document.createElement("div");
+		row.className = "change-review-file";
+		row.dataset.status = change.status;
+		row.title = change.previousPath ? `${change.path} (from ${change.previousPath})` : change.path;
+
+		const icon = document.createElement("span");
+		icon.className = "change-review-file-icon";
+		icon.setAttribute("aria-hidden", "true");
+		icon.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><circle cx="8" cy="8" r="1.25"/></svg>';
+		const name = document.createElement("span");
+		name.className = "change-review-file-name";
+		name.textContent = workspaceChangeName(change.path);
+		const parent = document.createElement("span");
+		parent.className = "change-review-file-path";
+		parent.textContent = workspaceChangeParent(change.path);
+		const status = document.createElement("span");
+		status.className = "change-review-file-status";
+		status.textContent = change.status.replace("-", " ");
+		row.append(icon, name, parent);
+
+		if (Number.isFinite(change.added) && Number.isFinite(change.removed)) {
+			const stats = document.createElement("span");
+			stats.className = "change-review-file-stats";
+			stats.innerHTML = `<span class="change-review-add">+${change.added}</span><span class="change-review-remove">-${change.removed}</span>`;
+			row.appendChild(stats);
+		} else row.appendChild(status);
+		changeReviewFiles.appendChild(row);
+	}
+	acceptAllChanges.textContent = state.changeReviewPending ? "Applying…" : "Accept all";
+	syncComposer();
+}
+
+async function refreshWorkspaceChanges() {
+	const sessionPath = state.activeSessionPath;
+	const request = ++state.changeReviewRequest;
+	if (!sessionPath || state.subagentView) {
+		state.workspaceChanges = [];
+		renderWorkspaceChanges();
+		return;
+	}
+	try {
+		const result = await window.desktopAgent.listWorkspaceChanges({ sessionPath });
+		if (request !== state.changeReviewRequest || sessionPath !== state.activeSessionPath) return;
+		state.workspaceChanges = Array.isArray(result?.changes) ? result.changes : [];
+	} catch {
+		if (request !== state.changeReviewRequest) return;
+		state.workspaceChanges = [];
+	}
+	renderWorkspaceChanges();
+}
+
+async function applyWorkspaceChangeReview(operation) {
+	if (state.busy || state.changeReviewPending || !state.workspaceChanges.length) return;
+	const sessionPath = state.activeSessionPath;
+	if (!sessionPath) return;
+	state.changeReviewPending = true;
+	renderWorkspaceChanges();
+	try {
+		const result = await window.desktopAgent.applyWorkspaceChanges({ sessionPath, operation });
+		if (sessionPath === state.activeSessionPath) {
+			state.workspaceChanges = Array.isArray(result?.changes) ? result.changes : [];
+		}
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : String(error));
+	} finally {
+		state.changeReviewPending = false;
+		renderWorkspaceChanges();
+	}
+}
+
 function watchRunningJobs(jobs) {
 	for (const job of jobs) {
 		if ((job.status !== "running" && job.status !== "orphaned") || state.waitingJobs.has(job.id)) continue;
@@ -2215,6 +2451,10 @@ function refreshRuntimeFeatures() {
 	// The composer's mode chip needs these even while the runtime drawer is shut.
 	if (!state.runtimeAvailable) return;
 	sendCommand("get_runtime_features");
+}
+
+function startsBackgroundJob(event) {
+	return event.toolName === "ipython" && typeof event.args?.code === "string" && /\brlm\.jobs\.start\s*\(/.test(event.args.code);
 }
 
 function openRuntimeDrawer() {
@@ -2374,6 +2614,7 @@ const TRANSCRIPT_EVENTS = new Set([
 	"tool_execution_update",
 	"tool_execution_end",
 	"session_info_changed",
+	"rlm_child_update",
 ]);
 
 function handleAgentEvent(event) {
@@ -2413,6 +2654,7 @@ function handleAgentEvent(event) {
 	if (event.type === "message_start") {
 		const message = normalizeMessage(event.message);
 		message._streaming = message.role === "assistant";
+		if (hasTextPhase(message, "final_answer")) message._finalStartedAt = Date.now();
 		// The optimistic user row is the same message the engine just accepted.
 		const optimisticIndex =
 			message.role === "user"
@@ -2441,8 +2683,12 @@ function handleAgentEvent(event) {
 		if (index < 0 && message.role === "assistant") {
 			index = state.messages.findLastIndex((item) => item.role === "assistant");
 		}
-		if (index >= 0) state.messages[index] = { ...state.messages[index], ...message };
+		if (index >= 0) {
+			const finalStartedAt = state.messages[index]._finalStartedAt ?? (hasTextPhase(message, "final_answer") ? Date.now() : undefined);
+			state.messages[index] = { ...state.messages[index], ...message, ...(finalStartedAt ? { _finalStartedAt: finalStartedAt } : {}) };
+		}
 		else {
+			if (hasTextPhase(message, "final_answer")) message._finalStartedAt = Date.now();
 			state.messages.push(message);
 			index = state.messages.length - 1;
 		}
@@ -2469,6 +2715,7 @@ function handleAgentEvent(event) {
 	if (event.type === "tool_execution_end") {
 		const tool = state.tools.find((item) => item.toolCallId === event.toolCallId);
 		if (tool) Object.assign(tool, { result: event.result, done: true, isError: event.isError });
+		if (startsBackgroundJob(event)) refreshRuntimeFeatures();
 		renderMessages();
 		return;
 	}
@@ -2540,7 +2787,11 @@ async function startWorkspace(workspace, { silent = false } = {}) {
 	}
 }
 
-async function submitPrompt(message = input.value.trim(), allowWithoutModel = false) {
+async function submitPrompt(message, allowWithoutModel = false) {
+	const fromComposer = message === undefined;
+	const composerText = fromComposer ? input.value.trim() : "";
+	const attachments = fromComposer ? [...state.attachments] : [];
+	if (fromComposer) message = composePromptMessage(composerText, attachments);
 	if (!message) return;
 	// Selecting a command from the menu runs it immediately via applyCommand; this covers
 	// typing the full "/name args" line by hand and hitting Enter before the menu is open.
@@ -2560,6 +2811,7 @@ async function submitPrompt(message = input.value.trim(), allowWithoutModel = fa
 	const wasBusy = state.busy;
 	input.value = "";
 	input.style.height = "auto";
+	if (fromComposer) clearAttachments();
 	closeCommandMenu();
 	const optimisticMessage = normalizeMessage({ role: "user", content: message, timestamp: Date.now(), _optimistic: true });
 	state.messages.push(optimisticMessage);
@@ -2568,7 +2820,7 @@ async function submitPrompt(message = input.value.trim(), allowWithoutModel = fa
 		// Hold the prompt rather than the composer: the engine is either still
 		// starting or still attaching to the chat on screen, and sending now would
 		// deliver it to the conversation we just left.
-		state.queuedPrompt = { message, optimisticMessage };
+		state.queuedPrompt = { message, optimisticMessage, composerText, attachments };
 		setBusy(false, state.switchingSession ? "Opening conversation" : "Connecting…");
 		return;
 	}
@@ -2607,14 +2859,16 @@ function returnQueuedPromptToComposer() {
 	if (!queued) return;
 	state.messages = state.messages.filter((message) => message._key !== queued.optimisticMessage._key);
 	if (!input.value.trim()) {
-		input.value = queued.message;
+		input.value = queued.composerText ?? queued.message;
+		state.attachments = queued.attachments || [];
+		renderAttachments();
 		input.dispatchEvent(new Event("input"));
 	}
 	renderMessages();
 }
 
 async function copyMessageText(message) {
-	const text = contentText(message);
+	const text = assistantHasFinalAnswer(message) ? finalAnswerText(message) : contentText(message);
 	if (!text) return;
 	try {
 		await navigator.clipboard.writeText(text);
@@ -2622,6 +2876,165 @@ async function copyMessageText(message) {
 	} catch {
 		showToast("Could not copy to clipboard");
 	}
+}
+
+async function copyText(text, successMessage = "Copied to clipboard") {
+	if (!text) return;
+	try {
+		await navigator.clipboard.writeText(text);
+		showToast(successMessage);
+	} catch {
+		showToast("Could not copy to clipboard");
+	}
+}
+
+async function showNativeContextMenu(items, target) {
+	if (!items.length) return undefined;
+	target?.classList.add("context-open");
+	try {
+		return await window.desktopAgent.showContextMenu({ items });
+	} finally {
+		target?.classList.remove("context-open");
+	}
+}
+
+function findWorkspaceChat(workspace, sessionPath) {
+	return (state.workspaceChats.get(workspace) || []).find((chat) => chat.path === sessionPath);
+}
+
+async function renameConversation(workspace, sessionPath) {
+	const chat = findWorkspaceChat(workspace, sessionPath);
+	if (!chat) return;
+	const value = await openInteraction({
+		title: "Rename conversation",
+		kind: "input",
+		prefill: chat.name || "",
+		placeholder: "Conversation name",
+		confirmLabel: "Rename",
+	});
+	const name = typeof value === "string" ? value.trim() : "";
+	if (!name) return;
+	try {
+		if (workspace === state.workspace && sessionPathKey(sessionPath) === sessionPathKey(state.activeSessionPath)) {
+			sendCommand("set_session_name", { name });
+		} else {
+			await window.desktopAgent.renameSession({ sessionPath, name });
+			chat.name = name;
+			renderWorkspaceList();
+		}
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : String(error));
+	}
+}
+
+async function deleteConversation(workspace, sessionPath) {
+	const chat = findWorkspaceChat(workspace, sessionPath);
+	if (!chat) return;
+	const active = workspace === state.workspace && sessionPathKey(sessionPath) === sessionPathKey(state.activeSessionPath);
+	const confirmed = await openInteraction({
+		title: "Move conversation to trash?",
+		message: `“${chat.name}” will be removed from Prometheus and moved to the system trash.`,
+		confirmLabel: "Move to trash",
+	});
+	if (confirmed !== true) return;
+	try {
+		if (active) {
+			const { sessionPath: replacementPath } = await window.desktopAgent.createWorkspaceSession({ workspace });
+			state.tools = [];
+			state.queuedPrompt = undefined;
+			input.value = "";
+			clearAttachments();
+			input.dispatchEvent(new Event("input"));
+			state.switchingSession = true;
+			state.openedWorkspace = workspace;
+			const switchToken = showSessionLocally(replacementPath, "New conversation");
+			setBusy(false, "Opening conversation");
+			const response = await sendCommandAwait("switch_session", { sessionPath: replacementPath });
+			if (switchToken !== state.switchToken || response.data?.cancelled === true) {
+				throw new Error("That conversation could not be opened.");
+			}
+			state.switchingSession = false;
+			await window.desktopAgent.trashSession({ sessionPath });
+			renderWorkspaceList();
+			sendCommand("get_state");
+			sendCommand("get_messages");
+			sendCommand("get_available_models");
+			refreshRuntimeFeatures();
+			flushQueuedPrompt();
+		} else {
+			await window.desktopAgent.trashSession({ sessionPath });
+		}
+		state.workspaceChats.set(workspace, (state.workspaceChats.get(workspace) || []).filter((item) => item.path !== sessionPath));
+		renderWorkspaceList();
+		showToast("Conversation moved to trash");
+	} catch (error) {
+		state.switchingSession = false;
+		sendCommand("get_state");
+		sendCommand("get_messages");
+		showToast(error instanceof Error ? error.message : String(error));
+	}
+}
+
+function removeWorkspaceFromSidebar(workspace) {
+	state.workspaces = state.workspaces.filter((item) => item !== workspace);
+	state.collapsedWorkspaces.delete(workspace);
+	state.workspaceChats.delete(workspace);
+	saveStoredWorkspaces();
+	renderWorkspaceList();
+	showToast(`Removed ${workspaceName(workspace)} from the sidebar`);
+}
+
+async function refreshAllWorkspaceChats() {
+	await Promise.all(state.workspaces.map((workspace) => refreshWorkspaceChats(workspace)));
+	showToast("Conversation history refreshed");
+}
+
+async function handleWorkspaceContextMenu(event, workspace, target) {
+	event.preventDefault();
+	const collapsed = state.collapsedWorkspaces.has(workspace);
+	const action = await showNativeContextMenu([
+		{ id: "new", label: "New conversation" },
+		{ id: "refresh", label: "Refresh conversations" },
+		{ type: "separator" },
+		{ id: "open-folder", label: "Open in File Explorer" },
+		{ id: "copy-path", label: "Copy workspace path" },
+		{ type: "separator" },
+		{ id: "toggle", label: collapsed ? "Expand workspace" : "Collapse workspace" },
+		{ id: "remove", label: "Remove from sidebar" },
+	], target);
+	if (action === "new") {
+		openWorkspace(workspace);
+		if (workspace === state.workspace) void createNewSession();
+		else void switchWorkspace(workspace);
+	} else if (action === "refresh") void refreshWorkspaceChats(workspace);
+	else if (action === "open-folder") void window.desktopAgent.openPath(workspace);
+	else if (action === "copy-path") void copyText(workspace, "Workspace path copied");
+	else if (action === "toggle") toggleWorkspaceCollapse(workspace);
+	else if (action === "remove") removeWorkspaceFromSidebar(workspace);
+}
+
+async function handleSessionContextMenu(event, workspace, sessionPath, target) {
+	event.preventDefault();
+	const chat = findWorkspaceChat(workspace, sessionPath);
+	if (!chat) return;
+	const active = workspace === state.workspace && sessionPathKey(sessionPath) === sessionPathKey(state.activeSessionPath);
+	const working = isSessionWorking(sessionPath);
+	const action = await showNativeContextMenu([
+		{ id: "open", label: active ? "Conversation is open" : "Open conversation", enabled: !active },
+		{ id: "rename", label: "Rename conversation", enabled: !working || active },
+		{ type: "separator" },
+		{ id: "copy-name", label: "Copy conversation name" },
+		{ id: "show-file", label: "Show in File Explorer" },
+		{ id: "copy-path", label: "Copy session path" },
+		{ type: "separator" },
+		{ id: "delete", label: "Move conversation to trash", enabled: active || !working },
+	], target);
+	if (action === "open") void openConversation(workspace, sessionPath);
+	else if (action === "rename") void renameConversation(workspace, sessionPath);
+	else if (action === "copy-name") void copyText(chat.name, "Conversation name copied");
+	else if (action === "show-file") void window.desktopAgent.showItem(sessionPath);
+	else if (action === "copy-path") void copyText(sessionPath, "Session path copied");
+	else if (action === "delete") void deleteConversation(workspace, sessionPath);
 }
 
 // The session that fork() switches to is a brand new file with its own history;
@@ -2975,18 +3388,126 @@ input.addEventListener("keydown", (event) => {
 
 input.addEventListener("blur", closeCommandMenu);
 
-// Attachments are handed to the agent as file paths; it reads them itself.
-function insertPaths(paths) {
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(["avif", "bmp", "gif", "ico", "jpeg", "jpg", "png", "svg", "webp"]);
+const attachmentPreviewCache = new Map();
+
+function attachmentName(path) {
+	return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function attachmentExtension(path) {
+	const name = attachmentName(path);
+	const dot = name.lastIndexOf(".");
+	return dot > 0 ? name.slice(dot + 1).toLowerCase() : "file";
+}
+
+function imageAttachmentPreview(path) {
+	if (!attachmentPreviewCache.has(path)) {
+		attachmentPreviewCache.set(
+			path,
+			window.desktopAgent.getImagePreview(path).catch(() => undefined),
+		);
+	}
+	return attachmentPreviewCache.get(path);
+}
+
+function createAttachmentRemoveButton(path, name) {
+	const button = document.createElement("button");
+	button.className = "attachment-remove";
+	button.type = "button";
+	button.title = `Remove ${name}`;
+	button.setAttribute("aria-label", button.title);
+	button.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 3 6 6M9 3 3 9"/></svg>';
+	button.addEventListener("click", () => {
+		state.attachments = state.attachments.filter((attachment) => attachment !== path);
+		attachmentPreviewCache.delete(path);
+		renderAttachments();
+		syncComposer();
+		input.focus();
+	});
+	return button;
+}
+
+function renderAttachments() {
+	attachmentList.replaceChildren();
+	for (const path of state.attachments) {
+		const name = attachmentName(path);
+		const extension = attachmentExtension(path);
+		const card = document.createElement("div");
+		card.className = `attachment-card attachment-card-${IMAGE_ATTACHMENT_EXTENSIONS.has(extension) ? "image" : "file"}`;
+		card.setAttribute("role", "listitem");
+		card.title = path;
+		if (IMAGE_ATTACHMENT_EXTENSIONS.has(extension)) {
+			card.classList.add("preview-loading");
+			const preview = document.createElement("img");
+			preview.className = "attachment-preview";
+			preview.alt = name;
+			preview.addEventListener("error", () => {
+				card.classList.remove("preview-loading");
+				card.classList.add("preview-failed");
+			});
+			const fallback = document.createElement("span");
+			fallback.className = "attachment-preview-fallback";
+			fallback.setAttribute("aria-hidden", "true");
+			fallback.innerHTML = '<svg viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><circle cx="7" cy="8" r="1.5"/><path d="m4.5 14 3.5-3 2.5 2 2-1.5 3 2.5"/></svg>';
+			card.append(preview, fallback);
+			void imageAttachmentPreview(path).then((source) => {
+				if (!card.isConnected) return;
+				card.classList.remove("preview-loading");
+				if (source) preview.src = source;
+				else card.classList.add("preview-failed");
+			});
+		} else {
+			const icon = document.createElement("span");
+			icon.className = "attachment-file-icon";
+			icon.setAttribute("aria-hidden", "true");
+			icon.innerHTML = '<svg viewBox="0 0 20 20"><path d="M5 2.75h6l4 4v10.5H5z"/><path d="M11 2.75v4h4M7.5 10h5M7.5 13h5"/></svg>';
+			const copy = document.createElement("span");
+			copy.className = "attachment-file-copy";
+			const title = document.createElement("span");
+			title.className = "attachment-file-name";
+			title.textContent = name;
+			const type = document.createElement("span");
+			type.className = "attachment-file-type";
+			type.textContent = extension;
+			copy.append(title, type);
+			card.append(icon, copy);
+		}
+		card.appendChild(createAttachmentRemoveButton(path, name));
+		attachmentList.appendChild(card);
+	}
+	attachmentList.hidden = state.attachments.length === 0;
+}
+
+function clearAttachments() {
+	if (!state.attachments.length) return;
+	for (const path of state.attachments) attachmentPreviewCache.delete(path);
+	state.attachments = [];
+	renderAttachments();
+}
+
+function composePromptMessage(text, attachments) {
+	const paths = attachments.map((path) => (/\s/.test(path) ? `"${path}"` : path)).join(" ");
+	return [text, paths].filter(Boolean).join(" ");
+}
+
+// Attachments are handed to the agent as file paths; the cards keep those paths
+// out of the editable prompt while preserving the existing prompt payload.
+function addAttachments(paths) {
 	if (!paths?.length) return;
-	const text = paths.map((item) => (/\s/.test(item) ? `"${item}"` : item)).join(" ");
-	const prefix = input.value && !/\s$/.test(input.value) ? " " : "";
-	input.value += `${prefix}${text} `;
+	const knownPaths = new Set(state.attachments.map((path) => path.toLocaleLowerCase()));
+	for (const path of paths) {
+		if (typeof path !== "string" || !path || knownPaths.has(path.toLocaleLowerCase())) continue;
+		knownPaths.add(path.toLocaleLowerCase());
+		state.attachments.push(path);
+	}
+	renderAttachments();
+	syncComposer();
 	input.focus();
-	input.dispatchEvent(new Event("input"));
 }
 
 $("attach-button").addEventListener("click", async () => {
-	insertPaths(await window.desktopAgent.chooseFiles());
+	addAttachments(await window.desktopAgent.chooseFiles());
 });
 
 input.addEventListener("paste", async (event) => {
@@ -3000,7 +3521,7 @@ input.addEventListener("paste", async (event) => {
 			await window.desktopAgent.savePastedImage({ data, extension: file.type.split("/")[1] || "png" }),
 		);
 	}
-	insertPaths(paths);
+	addAttachments(paths);
 });
 
 const composerBox = document.querySelector(".composer-box");
@@ -3019,7 +3540,7 @@ composerBox.addEventListener("drop", (event) => {
 	const files = Array.from(event.dataTransfer?.files || []);
 	if (input.disabled || !files.length) return;
 	event.preventDefault();
-	insertPaths(files.map((file) => window.desktopAgent.getFilePath(file)).filter(Boolean));
+	addAttachments(files.map((file) => window.desktopAgent.getFilePath(file)).filter(Boolean));
 });
 // A file dropped outside the composer would otherwise navigate the window away.
 window.addEventListener("dragover", (event) => event.preventDefault());
@@ -3105,6 +3626,8 @@ function showSessionLocally(sessionPath, sessionName) {
 	state.waitingJobs.clear();
 	state.subagents.clear();
 	state.approval = undefined;
+	state.workspaceChanges = [];
+	renderWorkspaceChanges();
 	const chat = (state.workspaceChats.get(state.workspace) || []).find((entry) => entry.path === sessionPath);
 	state.sessionName = sessionName || chat?.name || "New conversation";
 	$("header-title").textContent = state.sessionName;
@@ -3112,6 +3635,7 @@ function showSessionLocally(sessionPath, sessionName) {
 	renderWorkspaceList();
 	// A session that has not been minted yet has nothing to read.
 	if (!sessionPath) return token;
+	void refreshWorkspaceChanges();
 	void window.desktopAgent
 		.readSessionMessages({ sessionPath })
 		.then(({ messages }) => {
@@ -3146,6 +3670,7 @@ async function openConversation(workspace, sessionPath) {
 	// Leaving for another chat abandons anything typed for this one, queued included.
 	state.queuedPrompt = undefined;
 	input.value = "";
+	clearAttachments();
 	input.dispatchEvent(new Event("input"));
 	if (workspace !== state.workspace) {
 		displayWorkspace(workspace);
@@ -3159,6 +3684,7 @@ async function createNewSession() {
 	state.tools = [];
 	state.queuedPrompt = undefined;
 	input.value = "";
+	clearAttachments();
 	setBusy(false, "Creating session");
 	// Blank the conversation on click rather than after the round trip: an empty
 	// chat is exactly what the new session will contain. The switch flag is what
@@ -3186,6 +3712,7 @@ async function switchWorkspace(workspace) {
 	// the composer holds any prompt typed while the session attaches.
 	state.queuedPrompt = undefined;
 	input.value = "";
+	clearAttachments();
 	input.dispatchEvent(new Event("input"));
 	const previousWorkspace = state.workspace;
 	displayWorkspace(workspace);
@@ -3228,6 +3755,150 @@ workspaceList.addEventListener("click", (event) => {
 		toggleWorkspaceCollapse(target.dataset.collapseWorkspace);
 		return;
 	}
+	if (target?.dataset.selectWorkspace) {
+		void switchWorkspace(target.dataset.selectWorkspace);
+	}
+});
+
+async function handleTranscriptContextMenu(event, row) {
+	const key = row.dataset.key || "";
+	if (key.startsWith("t:")) {
+		event.preventDefault();
+		const details = row.querySelector(".tool-card");
+		const command = row.querySelector(".tool-command-code")?.textContent || "";
+		const output = row.querySelector(".diff-card-body, .tool-output")?.textContent || "";
+		const action = await showNativeContextMenu([
+			{ id: "toggle", label: details?.open ? "Collapse tool details" : "Expand tool details" },
+			{ type: "separator" },
+			{ id: "copy-output", label: "Copy tool output", enabled: Boolean(output) },
+			{ id: "copy-command", label: "Copy command", enabled: Boolean(command) },
+		], row);
+		if (action === "toggle" && details) details.open = !details.open;
+		else if (action === "copy-output") void copyText(output, "Tool output copied");
+		else if (action === "copy-command") void copyText(command, "Command copied");
+		return;
+	}
+
+	const match = /^m:(\d+)$/.exec(key);
+	const messages = state.subagentView?.messages || state.messages;
+	const message = match ? messages[Number(match[1])] : undefined;
+	if (!message || !["user", "assistant"].includes(message.role) || message._streaming || message._optimistic) return;
+	event.preventDefault();
+	const selection = window.getSelection()?.toString().trim() || "";
+	const readOnly = Boolean(state.subagentView);
+	const items = selection ? [{ id: "copy-selection", label: "Copy selection" }, { type: "separator" }] : [];
+	if (!readOnly && message.role === "user") {
+		items.push(
+			{ id: "edit", label: "Edit and resend" },
+			{ id: "fork", label: "Fork from here" },
+			{ type: "separator" },
+		);
+	} else if (!readOnly && message.role === "assistant") {
+		items.push({ id: "retry", label: "Retry response" }, { type: "separator" });
+	}
+	items.push({ id: "copy", label: "Copy message" });
+	const action = await showNativeContextMenu(items, row);
+	if (action === "copy-selection") void copyText(selection);
+	else if (action === "copy") void copyMessageText(message);
+	else if (action === "edit") void editFromMessage(message);
+	else if (action === "fork") void forkFromMessage(message);
+	else if (action === "retry") void retryAssistantMessage(message);
+}
+
+async function handleSidebarBackgroundContextMenu(event) {
+	event.preventDefault();
+	const action = await showNativeContextMenu([
+		{ id: "new", label: "New conversation", enabled: Boolean(state.workspace && state.ready) },
+		{ id: "add", label: "Add workspace…" },
+		{ id: "refresh", label: "Refresh all conversations", enabled: state.workspaces.length > 0 },
+		{ type: "separator" },
+		{ id: "expand", label: "Expand all workspaces", enabled: state.collapsedWorkspaces.size > 0 },
+		{ id: "collapse", label: "Collapse all workspaces", enabled: state.workspaces.length > 0 },
+	], sidebar);
+	if (action === "new") void createNewSession();
+	else if (action === "add") $("workspace-add-button").click();
+	else if (action === "refresh") void refreshAllWorkspaceChats();
+	else if (action === "expand") {
+		state.collapsedWorkspaces.clear();
+		renderWorkspaceList();
+	} else if (action === "collapse") {
+		state.collapsedWorkspaces = new Set(state.workspaces);
+		renderWorkspaceList();
+	}
+}
+
+document.addEventListener("contextmenu", (event) => {
+	if (!(event.target instanceof Element)) return;
+	const target = event.target;
+	const editable = target.closest("input, textarea, [contenteditable='true']");
+	if (editable) {
+		event.preventDefault();
+		void showNativeContextMenu([
+			{ role: "undo" },
+			{ role: "redo" },
+			{ type: "separator" },
+			{ role: "cut" },
+			{ role: "copy" },
+			{ role: "paste" },
+			{ type: "separator" },
+			{ role: "selectAll" },
+		], editable);
+		return;
+	}
+	const session = target.closest("[data-session-path][data-session-workspace]");
+	if (session) {
+		void handleSessionContextMenu(event, session.dataset.sessionWorkspace, session.dataset.sessionPath, session);
+		return;
+	}
+	const workspaceCard = target.closest("[data-workspace]");
+	if (workspaceCard) {
+		void handleWorkspaceContextMenu(event, workspaceCard.dataset.workspace, workspaceCard.querySelector(".workspace-card-header"));
+		return;
+	}
+	const link = target.closest("a[href]");
+	if (link) {
+		event.preventDefault();
+		void showNativeContextMenu([
+			{ id: "open", label: "Open link" },
+			{ id: "copy", label: "Copy link address" },
+		], link).then((action) => {
+			if (action === "open") void window.desktopAgent.openExternal(link.href);
+			else if (action === "copy") void copyText(link.href, "Link copied");
+		});
+		return;
+	}
+	const code = target.closest("pre, code");
+	if (code) {
+		event.preventDefault();
+		void showNativeContextMenu([{ id: "copy", label: "Copy code" }], code).then((action) => {
+			if (action === "copy") void copyText(code.textContent || "", "Code copied");
+		});
+		return;
+	}
+	const transcriptRow = target.closest(".message-row");
+	if (transcriptRow) {
+		void handleTranscriptContextMenu(event, transcriptRow);
+		return;
+	}
+	if (target.closest(".topbar-context")) {
+		event.preventDefault();
+		void showNativeContextMenu([
+			{ id: "rename", label: "Rename conversation" },
+			{ id: "export", label: "Export conversation" },
+			{ id: "stats", label: "Show conversation stats" },
+			{ type: "separator" },
+			{ id: "show-file", label: "Show in File Explorer", enabled: Boolean(state.activeSessionPath) },
+			{ id: "copy-path", label: "Copy session path", enabled: Boolean(state.activeSessionPath) },
+		], target.closest(".topbar-context")).then((action) => {
+			if (action === "rename") void findClientCommand("name")?.run("");
+			else if (action === "export") sendCommand("export_html");
+			else if (action === "stats") sendCommand("get_session_stats");
+			else if (action === "show-file") void window.desktopAgent.showItem(state.activeSessionPath);
+			else if (action === "copy-path") void copyText(state.activeSessionPath, "Session path copied");
+		});
+		return;
+	}
+	if (target.closest(".sidebar")) void handleSidebarBackgroundContextMenu(event);
 });
 document.addEventListener("scroll", (event) => revealScrollbar(event.target), true);
 document.addEventListener("pointermove", (event) => revealScrollbar(event.target), { passive: true });
@@ -3324,6 +3995,19 @@ subagentBackButton.addEventListener("click", closeSubagentConversation);
 jobBannerToggle.addEventListener("click", () => {
 	state.jobBannerExpanded = !state.jobBannerExpanded;
 	renderJobBanner(state.runtimeFeatures?.jobs || []);
+});
+changeReviewToggle.addEventListener("click", () => {
+	state.changeReviewExpanded = !state.changeReviewExpanded;
+	renderWorkspaceChanges();
+});
+acceptAllChanges.addEventListener("click", () => void applyWorkspaceChangeReview("accept-all"));
+rejectAllChanges.addEventListener("click", async () => {
+	const confirmed = await openInteraction({
+		title: "Reject all workspace changes?",
+		message: "This undoes the listed agent changes while preserving compatible edits made afterward.",
+		confirmLabel: "Reject changes",
+	});
+	if (confirmed === true) void applyWorkspaceChangeReview("reject-all");
 });
 async function requestExecutionMode(mode) {
 	if (!mode || mode === state.runtimeFeatures?.executionMode) return;
@@ -3452,7 +4136,10 @@ setInterval(() => {
 	refreshBusySessions();
 	void refreshViewedSubagent();
 }, 2000);
-document.addEventListener("visibilitychange", () => refreshBusySessions());
+document.addEventListener("visibilitychange", () => {
+	refreshBusySessions();
+	if (!document.hidden) void refreshWorkspaceChanges();
+});
 
 window.desktopAgent.onEvent(handleAgentEvent);
 window.desktopAgent.onProviderLoginEvent(handleProviderLoginEvent);
