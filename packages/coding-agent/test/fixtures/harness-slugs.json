@@ -1,0 +1,12 @@
+[
+	{ "input": "Café deploy notes", "fallback": "memory", "expected": "caf_deploy_notes" },
+	{ "input": "  spaced  ", "fallback": "memory", "expected": "spaced" },
+	{ "input": "日本語", "fallback": "memory", "expected": "memory" },
+	{ "input": "", "fallback": "skill", "expected": "skill" },
+	{ "input": "a---b___c", "fallback": "memory", "expected": "a_b_c" },
+	{
+		"input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"fallback": "memory",
+		"expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	}
+]

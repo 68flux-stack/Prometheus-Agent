@@ -10,16 +10,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 HarnessKind = Literal["prompt", "memory", "skill", "subagent"]
 HarnessScope = Literal["local", "global"]
 
 _DEFAULT_FILE_NAME = "harness_state.json"
+_BACKUP_FILE_NAME = "harness_state.bak.json"
+_RECOVERY_FILE_NAME = "harness_recovery.json"
 _DEFAULT_HARNESS_DIR_NAME = "harness"
+_SCHEMA_VERSION = 2
 _KINDS: tuple[HarnessKind, ...] = ("prompt", "memory", "skill", "subagent")
 _state_cache: dict[tuple[Path, HarnessScope], "HarnessState"] = {}
 
@@ -29,9 +34,78 @@ def _now() -> str:
 
 
 def _slug(raw: str, fallback: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")[:80]
+    return normalized or fallback
+
+
+def canonical_harness_id(raw: str, fallback: str) -> str:
+    return _slug(raw, fallback)
+
+
+def _legacy_slug(raw: str, fallback: str) -> str:
     normalized = "".join(ch.lower() if ch.isalnum() else "_" for ch in raw.strip())
     normalized = "_".join(part for part in normalized.split("_") if part)
     return (normalized or fallback)[:80]
+
+
+def _safe_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} does not contain a JSON object")
+    return value
+
+
+def _flush_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any], *, backup: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
+    backup_temp: Path | None = None
+    try:
+        if backup and path.exists():
+            try:
+                current = _load_json_object(path)
+            except (json.JSONDecodeError, ValueError):
+                current = None
+            if current is not None:
+                backup_path = path.with_name(_BACKUP_FILE_NAME)
+                backup_temp = backup_path.with_name(
+                    f"{backup_path.name}.{os.getpid()}.{uuid4().hex}.tmp"
+                )
+                with backup_temp.open("w", encoding="utf-8", newline="\n") as stream:
+                    json.dump(current, stream, indent=2, ensure_ascii=False)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(backup_temp, backup_path)
+                backup_temp = None
+        with temp_path.open("w", encoding="utf-8", newline="\n") as stream:
+            json.dump(data, stream, indent=2, ensure_ascii=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+        _flush_directory(path.parent)
+    finally:
+        for candidate in (temp_path, backup_temp):
+            if candidate is not None:
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def _agent_dir() -> Path:
@@ -172,7 +246,10 @@ class HarnessState:
         # store; reads and global_=True delegation keep working.
         self._local_write_error = local_write_error
         self.entries: dict[HarnessKind, dict[str, HarnessEntry]] = {kind: {} for kind in _KINDS}
+        self.aliases: dict[HarnessKind, dict[str, str]] = {kind: {} for kind in _KINDS}
         self.refinements: list[RefinementEvent] = []
+        self.recovery: dict[str, Any] | None = None
+        self._degraded_error: str | None = None
         self._global_target_state_dir: Path | None = None
         # mtime of the file as of the last load/save, used to detect out-of-process
         # writes (e.g. the host `/refine` command) and avoid clobbering them.
@@ -182,6 +259,25 @@ class HarnessState:
     def _ensure_local_writable(self) -> None:
         if self._local_write_error is not None:
             raise RuntimeError(self._local_write_error)
+        if self._degraded_error is not None:
+            raise RuntimeError(self._degraded_error)
+
+    def _resolve_alias(self, kind: HarnessKind, entry_id: str) -> str:
+        seen: set[str] = set()
+        resolved = entry_id
+        while resolved in self.aliases[kind] and resolved not in seen:
+            seen.add(resolved)
+            resolved = self.aliases[kind][resolved]
+        return resolved
+
+    def _generated_entry_id(self, kind: HarnessKind, title: str) -> str:
+        canonical = _slug(title, kind)
+        legacy = _legacy_slug(title, kind)
+        if canonical in self.entries[kind]:
+            return canonical
+        if legacy in self.entries[kind]:
+            return legacy
+        return canonical
 
     def _disk_mtime(self) -> int | None:
         if self.file_path is None:
@@ -209,16 +305,64 @@ class HarnessState:
             return self
         mtime = self._disk_mtime()
         try:
-            with self.file_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            # A corrupt or unreadable state file must not crash the kernel or block
-            # refinement. Treat it as empty; the next save() rewrites it cleanly.
-            data = {}
-        # json.load returns non-dict types for valid JSON like `null`, `[]`, or a bare
-        # string; coerce those to an empty object before attribute access.
-        if not isinstance(data, dict):
-            data = {}
+            data = _load_json_object(self.file_path)
+            self._degraded_error = None
+        except (json.JSONDecodeError, ValueError) as error:
+            quarantine = self.file_path.with_name(
+                f"harness_state.corrupt-{_safe_timestamp()}-{uuid4().hex}.json"
+            )
+            try:
+                os.replace(self.file_path, quarantine)
+            except FileNotFoundError:
+                return self.load()
+            backup_path = self.file_path.with_name(_BACKUP_FILE_NAME)
+            restored = False
+            if backup_path.exists():
+                try:
+                    data = _load_json_object(backup_path)
+                    _atomic_write_json(self.file_path, data, backup=False)
+                    mtime = self._disk_mtime()
+                    restored = True
+                except (OSError, json.JSONDecodeError, ValueError):
+                    data = {}
+            else:
+                data = {}
+            self.recovery = {
+                "quarantine_path": str(quarantine),
+                "backup_path": str(backup_path) if restored else None,
+                "restored": restored,
+                "error": str(error),
+            }
+            _atomic_write_json(
+                self.file_path.with_name(_RECOVERY_FILE_NAME),
+                self.recovery,
+                backup=False,
+            )
+            if not restored:
+                self._degraded_error = (
+                    f"Harness state is read-only because {self.file_path} was corrupt and no valid backup "
+                    f"could be restored. Recover from {quarantine} or explicitly reset the state."
+                )
+        except FileNotFoundError as error:
+            if self.file_path.exists():
+                return self.load()
+            backup_path = self.file_path.with_name(_BACKUP_FILE_NAME)
+            try:
+                data = _load_json_object(backup_path)
+                self._degraded_error = None
+            except (OSError, json.JSONDecodeError, ValueError):
+                self._degraded_error = (
+                    f"Harness state is read-only because a concurrent recovery moved {self.file_path} "
+                    "before a replacement became available. Retry after recovery completes."
+                )
+                self.recovery = {"error": str(error), "restored": False}
+                self._loaded_mtime = mtime
+                return self
+        except OSError as error:
+            self._degraded_error = f"Harness state is read-only because {self.file_path} could not be read: {error}"
+            self.recovery = {"error": str(error), "restored": False}
+            self._loaded_mtime = mtime
+            return self
 
         entries: dict[HarnessKind, dict[str, HarnessEntry]] = {kind: {} for kind in _KINDS}
         raw_entries = data.get("entries", {})
@@ -260,6 +404,18 @@ class HarnessState:
                         entries[kind][str(entry_id)] = HarnessEntry(**entry_data)
         self.entries = entries
 
+        self.aliases = {kind: {} for kind in _KINDS}
+        raw_aliases = data.get("aliases", {})
+        if isinstance(raw_aliases, dict):
+            for kind in _KINDS:
+                kind_aliases = raw_aliases.get(kind, {})
+                if isinstance(kind_aliases, dict):
+                    self.aliases[kind] = {
+                        str(alias): str(target)
+                        for alias, target in kind_aliases.items()
+                        if isinstance(target, str)
+                    }
+
         self.refinements = []
         raw_refinements = data.get("refinements", [])
         if isinstance(raw_refinements, list):
@@ -293,19 +449,21 @@ class HarnessState:
         if self.file_path is None:
             # in_memory fallback: nothing to persist.
             return self
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "schema": 1,
+        self._ensure_local_writable()
+        _atomic_write_json(self.file_path, self._serialize())
+        self._loaded_mtime = self._disk_mtime()
+        return self
+
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "schema": _SCHEMA_VERSION,
             "entries": {
                 kind: {entry_id: asdict(entry) for entry_id, entry in records.items()}
                 for kind, records in self.entries.items()
             },
+            "aliases": self.aliases,
             "refinements": [asdict(event) for event in self.refinements],
         }
-        with self.file_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        self._loaded_mtime = self._disk_mtime()
-        return self
 
     def upsert(
         self,
@@ -369,7 +527,7 @@ class HarnessState:
         if kind not in self.entries:
             raise ValueError(f"unknown harness kind {kind!r}; expected one of {_KINDS}")
 
-        entry_id = id or _slug(title, kind)
+        entry_id = self._resolve_alias(kind, id) if id is not None else self._generated_entry_id(kind, title)
         existing = self.entries[kind].get(entry_id)
         if existing:
             existing.title = title
@@ -414,7 +572,7 @@ class HarnessState:
         self._sync_from_disk()
         if kind not in self.entries:
             raise ValueError(f"unknown harness kind {kind!r}; expected one of {_KINDS}")
-        return self.entries[kind].get(id)
+        return self.entries[kind].get(self._resolve_alias(kind, id))
 
     def delete(self, kind: HarnessKind, id: str, *, global_: bool = False, **kwargs: Any) -> bool:
         id, global_ = _strip_scope_prefix(id, global_)
@@ -424,9 +582,11 @@ class HarnessState:
         self._sync_from_disk()
         if kind not in self.entries:
             raise ValueError(f"unknown harness kind {kind!r}; expected one of {_KINDS}")
+        id = self._resolve_alias(kind, id)
         if id not in self.entries[kind]:
             return False
         del self.entries[kind][id]
+        self.aliases[kind] = {alias: target for alias, target in self.aliases[kind].items() if target != id}
         self.save()
         return True
 
@@ -474,7 +634,7 @@ class HarnessState:
         self._sync_from_disk()
         if kind not in self.entries:
             raise ValueError(f"unknown harness kind {kind!r}; expected one of {_KINDS}")
-        entry_id = id or _slug(title, kind)
+        entry_id = self._resolve_alias(kind, id) if id is not None else self._generated_entry_id(kind, title)
         if entry_id in self.entries[kind]:
             raise ValueError(f"{kind} entry {entry_id!r} already exists")
         return self._upsert(
@@ -521,6 +681,7 @@ class HarnessState:
         self._sync_from_disk()
         if kind not in self.entries:
             raise ValueError(f"unknown harness kind {kind!r}; expected one of {_KINDS}")
+        id = self._resolve_alias(kind, id)
         if id not in self.entries[kind]:
             raise ValueError(f"{kind} entry {id!r} does not exist")
         return self._upsert(
@@ -808,12 +969,89 @@ class HarnessState:
         return {
             "file_path": str(self.file_path),
             "scope": self.scope,
+            "aliases": self.aliases,
+            "recovery": self.recovery,
+            "degraded": self._degraded_error is not None,
             "entries": {
                 kind: {entry_id: asdict(entry) for entry_id, entry in records.items()}
                 for kind, records in self.entries.items()
             },
             "refinements": [asdict(event) for event in self.refinements],
         }
+
+    def migrate_ids(self, *, apply: bool = False) -> dict[str, Any]:
+        """Plan or apply unambiguous legacy generated-id migrations."""
+        self._sync_from_disk()
+        proposals: list[dict[str, str]] = []
+        collisions: list[dict[str, str]] = []
+        for kind in _KINDS:
+            for entry_id, entry in list(self.entries[kind].items()):
+                legacy = _legacy_slug(entry.title, kind)
+                canonical = _slug(entry.title, kind)
+                if entry_id != legacy or entry_id == canonical:
+                    continue
+                item = {"kind": kind, "from": entry_id, "to": canonical}
+                if canonical in self.entries[kind]:
+                    collisions.append(item)
+                else:
+                    proposals.append(item)
+        if apply:
+            self._ensure_local_writable()
+            assert self.file_path is not None
+            snapshot_path = self.file_path.with_name(
+                f"harness_state.migration-{_safe_timestamp()}-{uuid4().hex}.json"
+            )
+            _atomic_write_json(snapshot_path, self._serialize(), backup=False)
+            for item in proposals:
+                kind = item["kind"]
+                old_id = item["from"]
+                new_id = item["to"]
+                entry = self.entries[kind].pop(old_id)
+                entry.id = new_id
+                self.entries[kind][new_id] = entry
+                self.aliases[kind][old_id] = new_id
+            self.save()
+            return {"applied": proposals, "collisions": collisions, "snapshot_path": str(snapshot_path)}
+        return {"proposed": proposals, "collisions": collisions}
+
+    def recover_from(self, recovery_path: str | Path) -> "HarnessState":
+        if self.file_path is None:
+            raise RuntimeError("In-memory harness state cannot be recovered from disk")
+        source = Path(recovery_path).expanduser().resolve()
+        data = _load_json_object(source)
+        _atomic_write_json(self.file_path, data, backup=False)
+        self._degraded_error = None
+        self.recovery = {"restored": True, "backup_path": str(source)}
+        _atomic_write_json(
+            self.file_path.with_name(_RECOVERY_FILE_NAME),
+            {**self.recovery, "error": "State restored by explicit recovery."},
+            backup=False,
+        )
+        return self.load()
+
+    def reset(self) -> "HarnessState":
+        if self.file_path is None:
+            self.entries = {kind: {} for kind in _KINDS}
+            self.aliases = {kind: {} for kind in _KINDS}
+            self.refinements = []
+            return self
+        snapshot_path = self.file_path.with_name(
+            f"harness_state.reset-{_safe_timestamp()}-{uuid4().hex}.json"
+        )
+        _atomic_write_json(snapshot_path, self._serialize(), backup=False)
+        self.entries = {kind: {} for kind in _KINDS}
+        self.aliases = {kind: {} for kind in _KINDS}
+        self.refinements = []
+        self._degraded_error = None
+        self.recovery = {"restored": True, "backup_path": str(snapshot_path)}
+        _atomic_write_json(self.file_path, self._serialize(), backup=False)
+        _atomic_write_json(
+            self.file_path.with_name(_RECOVERY_FILE_NAME),
+            {**self.recovery, "error": "State reset by explicit recovery."},
+            backup=False,
+        )
+        self._loaded_mtime = self._disk_mtime()
+        return self
 
 
 def get_harness_state(
@@ -849,5 +1087,6 @@ __all__ = [
     "HarnessScope",
     "HarnessState",
     "RefinementEvent",
+    "canonical_harness_id",
     "get_harness_state",
 ]

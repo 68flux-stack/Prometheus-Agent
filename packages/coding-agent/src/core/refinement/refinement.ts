@@ -1,19 +1,23 @@
 import { randomUUID } from "node:crypto";
 import {
 	appendFileSync,
+	closeSync,
 	existsSync,
+	fsyncSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../../config.js";
+import { estimateTokens } from "../compaction/index.js";
 import { serializeConversation } from "../compaction/utils.js";
 import { convertToLlm } from "../messages.js";
 import type { CustomEntry } from "../session-manager.js";
@@ -23,6 +27,10 @@ export const REFINEMENT_CUSTOM_TYPE = "prime-agent.refinement";
 
 export const REFINE_SKILL_NAME = "refine";
 const HARNESS_STATE_DIR_NAME = "harness";
+const HARNESS_STATE_FILE_NAME = "harness_state.json";
+const HARNESS_BACKUP_FILE_NAME = "harness_state.bak.json";
+const HARNESS_RECOVERY_FILE_NAME = "harness_recovery.json";
+const HARNESS_SCHEMA_VERSION = 2;
 const REFINEMENT_HISTORY_FILE_NAME = "refinements.jsonl";
 const DEFAULT_OVERVIEW_ENTRY_LIMIT = 6;
 const DEFAULT_OVERVIEW_REFINEMENT_LIMIT = 5;
@@ -60,7 +68,17 @@ export interface HarnessRefinementEvent {
 export interface HarnessState {
 	schema: number;
 	entries: Record<RefinementKind, Record<string, HarnessEntry>>;
+	aliases?: Record<RefinementKind, Record<string, string>>;
 	refinements: HarnessRefinementEvent[];
+	recovery?: HarnessRecoveryState;
+	readOnlyReason?: string;
+}
+
+export interface HarnessRecoveryState {
+	quarantinePath?: string;
+	backupPath?: string;
+	restored: boolean;
+	error: string;
 }
 
 export interface RefinementEdit {
@@ -136,12 +154,12 @@ Continual harness components:
 - prompt: supplemental prompt notes only. The base system prompt is immutable and MUST NOT be rewritten.
 - memory: durable facts, decisions, failures, preferences, and outcomes.
 - skill: installed Python REPL skill. Skill create/update edits MUST include a \`reference\` object with \`{"type":"python"}\`, a Python import, and a callable or call pattern; they also MUST include an \`arguments\` object describing accepted inputs, required fields, defaults, and constraints. Use \`{}\` for \`arguments\` only when the Python callable truly needs no external inputs. Include the RLM-native call form \`await <skill_import>(...)\`.
-- subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn with \`handle = await rlm("sub-task")\`; admission returns immediately with \`rlm_child_id\`, \`name\`, \`session_dir\`, and \`model\`, never the child's answer. A child's final response is relayed automatically; explicit \`agent_message\` calls are for progress updates and intermediate findings. Use \`await rlm.list_subagents()\` to recover direct child handles and \`await agent_message.send(..., receiver_role="child", receiver_name=handle.name)\` for follow-ups. Do not invent wrappers like \`run_subagent(...)\`.
+- subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn with \`handle = await rlm("sub-task")\`; admission returns immediately with \`rlm_child_id\`, \`name\`, \`session_dir\`, and \`model\`, never the child's answer. A child's final response is relayed automatically; explicit \`agent_message\` calls are for progress updates and intermediate findings. Children send progress with \`receiver_role="parent"\`. Use \`await rlm.list_subagents()\` to recover direct child handles and \`await agent_message.send(..., receiver_role="child", receiver_name=handle.name)\` for follow-ups. Do not invent wrappers like \`run_subagent(...)\`.
 
 Scope and persistence policy:
 - The default editable continual harness store is local to the current Prometheus session. Use it for session-specific progress, active task state, current-run coordination notes, temporary blockers, and project facts that should not affect other sessions.
 - A caller may explicitly request global refinement. Global edits must be stable cross-session lessons, durable user preferences, reusable skills/subagents, or tool/environment facts that should affect future sessions.
-- Entry ids in the harness overview may carry a display-only \`local:\` or \`global:\` prefix. Always use the bare id (no prefix) in edits.
+- Entry ids in the harness overview may carry a \`local:\` or \`global:\` prefix. Preserve a prefix when targeting a scoped collision; otherwise bare ids inherit the requested scope. Never mix local and global edits in one proposal.
 - All edits in one refinement apply only to the requested scope's store. During a local refinement, global entries are read-only context: never propose update or delete edits for them; create a local entry instead when a session-specific override is genuinely needed.
 - Project/workspace-specific lessons may be persisted globally only when the title, path, or content explicitly names the project/workspace and the lesson is likely to be reused in future sessions for that project. Prefer local edits when the lesson only belongs in the current conversation.
 - Use memory for declarative facts and preferences, skill for repeatable procedures exposed as Python calls, prompt for narrow behavioral policy addendums, and subagent for reusable delegation roles.
@@ -205,14 +223,56 @@ function autoRefineReviewMaxOutputTokens(model: Model<any>): number {
 	return Math.min(model.maxTokens, AUTO_REFINE_REVIEW_MAX_OUTPUT_TOKENS);
 }
 
+function estimatedTextTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+function refinementConversationText(
+	messages: AgentMessage[],
+	model: Model<any>,
+	fixedText: string,
+	outputTokens: number,
+	fraction: number,
+): string {
+	const safetyTokens = Math.max(4_096, Math.floor(model.contextWindow * 0.1));
+	const availableTokens = Math.min(
+		Math.floor(model.contextWindow * fraction),
+		model.contextWindow - outputTokens - safetyTokens - estimatedTextTokens(fixedText),
+	);
+	if (availableTokens < 512) {
+		throw new Error(
+			"Refinement skipped because the selected model has insufficient context after prompt reservations.",
+		);
+	}
+	const selected: AgentMessage[] = [];
+	let used = 0;
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const messageTokens = estimateTokens(messages[index]);
+		if (selected.length > 0 && used + messageTokens > availableTokens) break;
+		selected.unshift(messages[index]);
+		used += messageTokens;
+		if (used >= availableTokens) break;
+	}
+	let serialized = serializeConversation(convertToLlm(selected));
+	const maxChars = availableTokens * 4;
+	if (serialized.length > maxChars) serialized = serialized.slice(-maxChars);
+	return serialized;
+}
+
 function now(): string {
 	return new Date().toISOString();
 }
 
 function emptyHarnessState(): HarnessState {
 	return {
-		schema: 1,
+		schema: HARNESS_SCHEMA_VERSION,
 		entries: {
+			prompt: {},
+			memory: {},
+			skill: {},
+			subagent: {},
+		},
+		aliases: {
 			prompt: {},
 			memory: {},
 			skill: {},
@@ -230,6 +290,32 @@ function slug(raw: string, fallback: string): string {
 		.replace(/^_+|_+$/g, "")
 		.slice(0, 80);
 	return normalized || fallback;
+}
+
+export function canonicalHarnessId(raw: string, fallback: string): string {
+	return slug(raw, fallback);
+}
+
+function legacySlug(raw: string, fallback: string): string {
+	const normalized = Array.from(raw.trim())
+		.map((character) => (/^[\p{L}\p{N}]$/u.test(character) ? character.toLowerCase() : "_"))
+		.join("")
+		.split("_")
+		.filter(Boolean)
+		.join("_")
+		.slice(0, 80);
+	return normalized || fallback;
+}
+
+function resolveHarnessAlias(state: HarnessState, kind: RefinementKind, id: string): string {
+	const aliases = state.aliases?.[kind] ?? {};
+	const seen = new Set<string>();
+	let resolved = id;
+	while (aliases[resolved] && !seen.has(resolved)) {
+		seen.add(resolved);
+		resolved = aliases[resolved];
+	}
+	return resolved;
 }
 
 function cloneEntry(entry: HarnessEntry | undefined): HarnessEntry | undefined {
@@ -276,7 +362,61 @@ export function getLocalHarnessStateDir(sessionArtifactDir: string | undefined):
 }
 
 export function getHarnessStatePath(harnessStateDir: string = getGlobalHarnessStateDir()): string {
-	return join(harnessStateDir, "harness_state.json");
+	return join(harnessStateDir, HARNESS_STATE_FILE_NAME);
+}
+
+function parseHarnessObject(path: string): Partial<HarnessState> {
+	const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new SyntaxError(`${path} does not contain a JSON object`);
+	}
+	return parsed as Partial<HarnessState>;
+}
+
+function atomicWriteHarnessState(statePath: string, state: HarnessState, createBackup: boolean): void {
+	const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
+	const backupPath = join(dirname(statePath), HARNESS_BACKUP_FILE_NAME);
+	let backupTempPath: string | undefined;
+	try {
+		if (createBackup && existsSync(statePath)) {
+			let current: Partial<HarnessState> | undefined;
+			try {
+				current = parseHarnessObject(statePath);
+			} catch (error) {
+				if (!(error instanceof SyntaxError)) throw error;
+			}
+			if (current) {
+				backupTempPath = `${backupPath}.${process.pid}.${randomUUID()}.tmp`;
+				writeAndFlushJson(backupTempPath, current, statSync(statePath).mode & 0o777);
+				renameSync(backupTempPath, backupPath);
+				backupTempPath = undefined;
+			}
+		}
+		const mode = existsSync(statePath) ? statSync(statePath).mode & 0o777 : 0o600;
+		writeAndFlushJson(tempPath, state, mode);
+		renameSync(tempPath, statePath);
+	} finally {
+		for (const candidate of [tempPath, backupTempPath]) {
+			if (candidate && existsSync(candidate)) unlinkSync(candidate);
+		}
+	}
+}
+
+function writeAndFlushJson(path: string, value: unknown, mode: number): void {
+	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode });
+	const descriptor = openSync(path, "r+");
+	try {
+		fsyncSync(descriptor);
+	} finally {
+		closeSync(descriptor);
+	}
+}
+
+function safeHarnessTimestamp(): string {
+	return new Date()
+		.toISOString()
+		.replace(/[-:]/g, "")
+		.replace(/\.\d{3}Z$/, "Z");
 }
 
 export function loadHarnessState(
@@ -288,18 +428,81 @@ export function loadHarnessState(
 		return emptyHarnessState();
 	}
 	let parsed: Partial<HarnessState>;
+	let recovery: HarnessRecoveryState | undefined;
 	try {
-		const raw = JSON.parse(readFileSync(statePath, "utf8"));
-		// loadHarnessState runs on every system-prompt build and before each /refine, so
-		// a corrupt or unreadable (or non-object) state file must degrade to empty rather
-		// than throw and break the session. The next saveHarnessState rewrites it cleanly.
-		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-			return emptyHarnessState();
+		parsed = parseHarnessObject(statePath);
+	} catch (error) {
+		if (!(error instanceof SyntaxError)) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+				if (existsSync(statePath)) return loadHarnessState(harnessStateDir, scope);
+				try {
+					return normalizeHarnessState(parseHarnessObject(join(harnessStateDir, HARNESS_BACKUP_FILE_NAME)), scope);
+				} catch {
+					// A concurrent recovery may not have published either replacement yet.
+				}
+			}
+			const state = emptyHarnessState();
+			state.readOnlyReason = `Harness state could not be read: ${error instanceof Error ? error.message : String(error)}`;
+			return state;
 		}
-		parsed = raw as Partial<HarnessState>;
-	} catch {
-		return emptyHarnessState();
+		const quarantinePath = join(
+			harnessStateDir,
+			`harness_state.corrupt-${safeHarnessTimestamp()}-${randomUUID()}.json`,
+		);
+		try {
+			renameSync(statePath, quarantinePath);
+		} catch (renameError) {
+			if (!existsSync(statePath)) return loadHarnessState(harnessStateDir, scope);
+			const state = emptyHarnessState();
+			state.readOnlyReason = `Harness state could not be quarantined: ${renameError instanceof Error ? renameError.message : String(renameError)}`;
+			return state;
+		}
+		const backupPath = join(harnessStateDir, HARNESS_BACKUP_FILE_NAME);
+		try {
+			parsed = parseHarnessObject(backupPath);
+			const restoredState = normalizeHarnessState(parsed, scope);
+			atomicWriteHarnessState(statePath, restoredState, false);
+			recovery = {
+				quarantinePath,
+				backupPath,
+				restored: true,
+				error: error.message,
+			};
+		} catch {
+			const state = emptyHarnessState();
+			state.recovery = { quarantinePath, restored: false, error: error.message };
+			state.readOnlyReason = `Harness state is read-only because no valid backup could be restored. Recover from ${quarantinePath} or explicitly reset the state.`;
+			writeAndFlushJson(join(harnessStateDir, HARNESS_RECOVERY_FILE_NAME), state.recovery, 0o600);
+			return state;
+		}
+		writeAndFlushJson(join(harnessStateDir, HARNESS_RECOVERY_FILE_NAME), recovery, 0o600);
 	}
+	const state = normalizeHarnessState(parsed, scope);
+	if (!recovery) {
+		try {
+			const marker = parseHarnessObject(join(harnessStateDir, HARNESS_RECOVERY_FILE_NAME)) as unknown as Record<
+				string,
+				unknown
+			>;
+			if (typeof marker.restored === "boolean" && typeof marker.error === "string") {
+				const quarantinePath = marker.quarantinePath ?? marker.quarantine_path;
+				const backupPath = marker.backupPath ?? marker.backup_path;
+				recovery = {
+					restored: marker.restored,
+					error: marker.error,
+					...(typeof quarantinePath === "string" ? { quarantinePath } : {}),
+					...(typeof backupPath === "string" ? { backupPath } : {}),
+				};
+			}
+		} catch {
+			// Recovery markers are diagnostics only.
+		}
+	}
+	state.recovery = recovery;
+	return state;
+}
+
+function normalizeHarnessState(parsed: Partial<HarnessState>, scope: HarnessScope): HarnessState {
 	const state = emptyHarnessState();
 	state.schema = typeof parsed.schema === "number" ? parsed.schema : 1;
 	for (const kind of Object.keys(state.entries) as RefinementKind[]) {
@@ -315,6 +518,16 @@ export function loadHarnessState(
 					arguments: objectRecord(entry.arguments) ?? {},
 					metadata: objectRecord(entry.metadata) ?? {},
 				};
+			}
+		}
+	}
+	const aliases = objectRecord(parsed.aliases);
+	if (aliases) {
+		for (const kind of Object.keys(state.aliases ?? {}) as RefinementKind[]) {
+			const records = objectRecord(aliases[kind]);
+			if (!records) continue;
+			for (const [alias, target] of Object.entries(records)) {
+				if (typeof target === "string") state.aliases![kind][alias] = target;
 			}
 		}
 	}
@@ -339,23 +552,21 @@ export function mergeHarnessStates(globalState: HarnessState, localState?: Harne
 			merged.entries[kind][mergedId] = scopedEntry;
 		}
 	}
+	for (const kind of Object.keys(merged.aliases ?? {}) as RefinementKind[]) {
+		merged.aliases![kind] = { ...(globalState.aliases?.[kind] ?? {}), ...(localState?.aliases?.[kind] ?? {}) };
+	}
 	merged.refinements = [...globalState.refinements, ...(localState?.refinements ?? [])];
 	return merged;
 }
 
 export function saveHarnessState(harnessStateDir: string, state: HarnessState): string {
 	const statePath = getHarnessStatePath(harnessStateDir);
-	const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
+	if (state.readOnlyReason) throw new Error(state.readOnlyReason);
 	mkdirSync(harnessStateDir, { recursive: true });
-	try {
-		const mode = existsSync(statePath) ? statSync(statePath).mode & 0o777 : 0o600;
-		writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode });
-		renameSync(tempPath, statePath);
-	} finally {
-		if (existsSync(tempPath)) {
-			unlinkSync(tempPath);
-		}
-	}
+	const persistedState: HarnessState = { ...state, schema: HARNESS_SCHEMA_VERSION };
+	delete persistedState.recovery;
+	delete persistedState.readOnlyReason;
+	atomicWriteHarnessState(statePath, persistedState, true);
 	return statePath;
 }
 
@@ -710,16 +921,28 @@ export function applyRefinementProposal(
 	proposal: RefinementProposal,
 	options: { id: string; rollbackOf?: string; scope?: HarnessScope; baselineState?: HarnessState },
 ): RefinementResult {
+	state.aliases ??= { prompt: {}, memory: {}, skill: {}, subagent: {} };
 	const appliedEdits: AppliedRefinementEdit[] = [];
 	const proposalModifiedKeys = new Set<string>();
 	for (const edit of proposal.edits) {
-		const computedId = edit.id ?? (edit.action === "create" ? slug(edit.title ?? edit.kind, edit.kind) : undefined);
-		const id = computedId ?? "";
-		const validationError = validateEdit(edit, id);
+		const preliminaryId = edit.id ?? (edit.action === "create" ? slug(edit.title ?? edit.kind, edit.kind) : "");
+		const validationError = validateEdit(edit, preliminaryId);
 		if (validationError) {
-			appliedEdits.push({ ...edit, id, applied: false, error: validationError });
+			appliedEdits.push({ ...edit, id: preliminaryId, applied: false, error: validationError });
 			continue;
 		}
+		let computedId = edit.id;
+		if (!computedId && edit.action === "create") {
+			const title = edit.title ?? edit.kind;
+			const canonical = slug(title, edit.kind);
+			const legacy = legacySlug(title, edit.kind);
+			computedId = state.entries[edit.kind][canonical]
+				? canonical
+				: state.entries[edit.kind][legacy]
+					? legacy
+					: canonical;
+		}
+		const id = computedId ? resolveHarnessAlias(state, edit.kind, computedId) : "";
 
 		const records = state.entries[edit.kind];
 		const before = cloneEntry(records[id]);
@@ -745,6 +968,9 @@ export function applyRefinementProposal(
 				continue;
 			}
 			delete records[id];
+			state.aliases![edit.kind] = Object.fromEntries(
+				Object.entries(state.aliases?.[edit.kind] ?? {}).filter(([, target]) => target !== id),
+			);
 			proposalModifiedKeys.add(entryKey);
 			appliedEdits.push({ ...edit, id, before, applied: true });
 			continue;
@@ -800,6 +1026,123 @@ export function applyRefinementProposal(
 		rollbackOf: options.rollbackOf,
 		scope: options.scope,
 	};
+}
+
+export interface HarnessIdMigrationItem {
+	kind: RefinementKind;
+	from: string;
+	to: string;
+}
+
+export interface HarnessIdMigrationResult {
+	proposed?: HarnessIdMigrationItem[];
+	applied?: HarnessIdMigrationItem[];
+	collisions: HarnessIdMigrationItem[];
+	snapshotPath?: string;
+}
+
+export function migrateHarnessIds(
+	harnessStateDir: string,
+	scope: HarnessScope,
+	apply: boolean,
+): HarnessIdMigrationResult {
+	const state = loadHarnessState(harnessStateDir, scope);
+	if (state.readOnlyReason) throw new Error(state.readOnlyReason);
+	const proposed: HarnessIdMigrationItem[] = [];
+	const collisions: HarnessIdMigrationItem[] = [];
+	for (const kind of Object.keys(state.entries) as RefinementKind[]) {
+		for (const [id, entry] of Object.entries(state.entries[kind])) {
+			const legacy = legacySlug(entry.title, kind);
+			const canonical = slug(entry.title, kind);
+			if (id !== legacy || id === canonical) continue;
+			const item = { kind, from: id, to: canonical };
+			if (state.entries[kind][canonical]) collisions.push(item);
+			else proposed.push(item);
+		}
+	}
+	if (!apply) return { proposed, collisions };
+	const snapshotPath = join(harnessStateDir, `harness_state.migration-${safeHarnessTimestamp()}-${randomUUID()}.json`);
+	writeAndFlushJson(snapshotPath, state, 0o600);
+	for (const item of proposed) {
+		const entry = state.entries[item.kind][item.from];
+		delete state.entries[item.kind][item.from];
+		entry.id = item.to;
+		state.entries[item.kind][item.to] = entry;
+		state.aliases![item.kind][item.from] = item.to;
+	}
+	saveHarnessState(harnessStateDir, state);
+	return { applied: proposed, collisions, snapshotPath };
+}
+
+export function recoverHarnessState(
+	harnessStateDir: string,
+	scope: HarnessScope,
+	options: { from?: string; reset?: boolean },
+): HarnessState {
+	if ((options.from ? 1 : 0) + (options.reset ? 1 : 0) !== 1) {
+		throw new Error("Harness recovery requires exactly one of from or reset");
+	}
+	mkdirSync(harnessStateDir, { recursive: true });
+	const statePath = getHarnessStatePath(harnessStateDir);
+	if (options.from) {
+		const restored = normalizeHarnessState(parseHarnessObject(options.from), scope);
+		atomicWriteHarnessState(statePath, restored, false);
+		writeAndFlushJson(
+			join(harnessStateDir, HARNESS_RECOVERY_FILE_NAME),
+			{ restored: true, backupPath: resolve(options.from), error: "State restored by explicit recovery." },
+			0o600,
+		);
+		return loadHarnessState(harnessStateDir, scope);
+	}
+	const current = loadHarnessState(harnessStateDir, scope);
+	const snapshotPath = join(harnessStateDir, `harness_state.reset-${safeHarnessTimestamp()}-${randomUUID()}.json`);
+	writeAndFlushJson(snapshotPath, current, 0o600);
+	const reset = emptyHarnessState();
+	atomicWriteHarnessState(statePath, reset, false);
+	reset.recovery = { restored: true, backupPath: snapshotPath, error: "State reset by explicit recovery." };
+	writeAndFlushJson(join(harnessStateDir, HARNESS_RECOVERY_FILE_NAME), reset.recovery, 0o600);
+	return reset;
+}
+
+export function normalizeRefinementProposalScope(
+	proposal: RefinementProposal,
+	requestedScope: HarnessScope,
+): { proposal: RefinementProposal; scope: HarnessScope } {
+	const scopes = new Set<HarnessScope>();
+	const edits = proposal.edits.map((edit) => {
+		let scope = requestedScope;
+		let id = edit.id;
+		if (id?.startsWith("local:")) {
+			scope = "local";
+			id = id.slice("local:".length);
+		} else if (id?.startsWith("global:")) {
+			scope = "global";
+			id = id.slice("global:".length);
+		}
+		scopes.add(scope);
+		return { ...edit, id };
+	});
+	if (scopes.size > 1) {
+		throw new Error(
+			"A refinement proposal cannot mix local and global edits. Submit separate refinements for each scope.",
+		);
+	}
+	return { proposal: { ...proposal, edits }, scope: scopes.values().next().value ?? requestedScope };
+}
+
+export function baselineForHarnessScope(state: HarnessState, scope: HarnessScope): HarnessState {
+	const baseline = emptyHarnessState();
+	baseline.schema = state.schema;
+	for (const kind of Object.keys(baseline.entries) as RefinementKind[]) {
+		for (const [id, entry] of Object.entries(state.entries[kind])) {
+			const entryScope = normalizeHarnessScope(entry.scope, id.startsWith("local:") ? "local" : "global");
+			if (entryScope !== scope) continue;
+			const bareId = id.startsWith(`${scope}:`) ? id.slice(scope.length + 1) : id;
+			baseline.entries[kind][bareId] = { ...cloneEntry(entry)!, id: bareId, scope };
+		}
+		baseline.aliases![kind] = { ...(state.aliases?.[kind] ?? {}) };
+	}
+	return baseline;
 }
 
 function rollbackProposal(target: RefinementResult): RefinementProposal {
@@ -890,20 +1233,26 @@ export async function planRefinement(
 		};
 	}
 
-	const conversationText = serializeConversation(convertToLlm(messages)).slice(-80_000);
 	const scopeInstruction = options.global
 		? "Requested refinement scope: global. Only propose stable cross-session continual harness edits, durable user preferences, reusable skills/subagents, or explicitly project-qualified facts that should affect future Prometheus sessions. Do not persist session-only progress, temporary blockers, or current-run coordination globally."
 		: "Requested refinement scope: local. Prefer local continual harness edits for current task progress, temporary blockers, current-run coordination, and project facts that are not clearly reusable across Prometheus sessions. Global entries in the overview are read-only context: do not propose update or delete edits for them; create a local entry instead if an override is needed.";
-	const userPrompt = [
+	const fixedSections = [
 		`<current_harness_state>\n${overviewForPrompt(state)}\n</current_harness_state>`,
 		`<refinement_history>\n${historyForPrompt(history)}\n</refinement_history>`,
-		`<conversation>\n${conversationText}\n</conversation>`,
 		`<scope_policy>\n${scopeInstruction}\n</scope_policy>`,
 		options.instructions ? `<user_refine_instructions>\n${options.instructions}\n</user_refine_instructions>` : "",
 		"Return only JSON edits. If no useful edit is justified, return an empty edits array with a rationale.",
 	]
 		.filter(Boolean)
 		.join("\n\n");
+	const conversationText = refinementConversationText(
+		messages,
+		model,
+		`${REFINEMENT_SYSTEM_PROMPT}\n${fixedSections}`,
+		refinementMaxOutputTokens(model),
+		0.4,
+	);
+	const userPrompt = `${fixedSections}\n\n<conversation>\n${conversationText}\n</conversation>`;
 
 	// /refine requires a parseable JSON object in the final text. Some reasoning-capable
 	// OpenAI-compatible models can spend the response on visible thinking and return no
@@ -958,8 +1307,7 @@ export async function reviewAutoRefine(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 ): Promise<AutoRefineReview> {
-	const conversationText = serializeConversation(convertToLlm(messages)).slice(-40_000);
-	const userPrompt = [
+	const fixedSections = [
 		`<trigger>
 ${context.reason}; ${context.turnsSinceLastReview} assistant turns since last auto-refine review
 </trigger>`,
@@ -969,11 +1317,16 @@ ${overviewForPrompt(state)}
 		`<refinement_history>
 ${historyForPrompt(history)}
 </refinement_history>`,
-		`<conversation>
-${conversationText}
-</conversation>`,
 		"Return shouldRefine=true when the trajectory contains evidence useful to this session's future turns. Prefer local harness edits for current task progress, temporary blockers, and current-run coordination. Ask for global refinement only for durable cross-session lessons or explicitly project-qualified facts likely to be reused in future sessions.",
 	].join("\n\n");
+	const conversationText = refinementConversationText(
+		messages,
+		model,
+		`${AUTO_REFINE_REVIEW_SYSTEM_PROMPT}\n${fixedSections}`,
+		autoRefineReviewMaxOutputTokens(model),
+		0.2,
+	);
+	const userPrompt = `${fixedSections}\n\n<conversation>\n${conversationText}\n</conversation>`;
 	// Auto-refine review requires parseable JSON. Keep it non-reasoning so
 	// reasoning-capable models use final text budget for the JSON object.
 	void thinkingLevel;

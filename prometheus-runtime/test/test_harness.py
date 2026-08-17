@@ -10,7 +10,7 @@ from pathlib import Path
 
 from rlm import harness as package_harness
 from rlm import rlm as callable_rlm
-from rlm.harness import HarnessState, get_harness_state
+from rlm.harness import HarnessState, canonical_harness_id, get_harness_state
 
 PYTHON_REFERENCE = {
     "type": "python",
@@ -21,6 +21,22 @@ PYTHON_REFERENCE = {
 
 
 class HarnessStateTest(unittest.TestCase):
+    def test_matches_shared_canonical_slug_vectors(self) -> None:
+        fixture_path = (
+            Path(__file__).resolve().parents[2]
+            / "packages"
+            / "coding-agent"
+            / "test"
+            / "fixtures"
+            / "harness-slugs.json"
+        )
+        vectors = json.loads(fixture_path.read_text(encoding="utf-8"))
+        for vector in vectors:
+            self.assertEqual(
+                canonical_harness_id(vector["input"], vector["fallback"]),
+                vector["expected"],
+            )
+
     def test_crud_for_all_entry_kinds(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             state = HarnessState(Path(temp_dir) / "harness_state.json")
@@ -267,7 +283,7 @@ class HarnessStateTest(unittest.TestCase):
                     arguments={},
                 )
 
-    def test_load_tolerates_corrupt_or_non_object_state(self) -> None:
+    def test_load_quarantines_corrupt_or_non_object_state(self) -> None:
         for payload in ("not json at all", "null", "[]", '"a string"', "123"):
             with tempfile.TemporaryDirectory() as temp_dir:
                 state_path = Path(temp_dir) / "harness_state.json"
@@ -277,9 +293,90 @@ class HarnessStateTest(unittest.TestCase):
 
                 self.assertEqual(state.list(), [])
                 self.assertEqual(state.refinements, [])
-                # The store must remain usable and self-heal on the next write.
-                created = state.create_memory("Recovered", "Works after corruption.", id="recovered")
-                self.assertEqual(HarnessState(state_path).get("memory", "recovered").content, created.content)
+                self.assertTrue(state.snapshot()["degraded"])
+                quarantine_path = Path(state.recovery["quarantine_path"])
+                self.assertEqual(quarantine_path.read_text(encoding="utf-8"), payload)
+                with self.assertRaisesRegex(RuntimeError, "read-only"):
+                    state.create_memory("Recovered", "Blocked until recovery.", id="recovered")
+
+    def test_load_restores_last_valid_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "harness_state.json"
+            state = HarnessState(state_path)
+            state.create_memory("First", "preserved", id="first")
+            state.create_memory("Second", "newer", id="second")
+            state_path.write_text("{truncated", encoding="utf-8")
+
+            restored = HarnessState(state_path)
+
+            self.assertTrue(restored.recovery["restored"])
+            self.assertIsNotNone(restored.get("memory", "first"))
+            self.assertIsNone(restored.get("memory", "second"))
+            self.assertFalse(restored.snapshot()["degraded"])
+
+    def test_omitted_id_reuses_legacy_generated_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "harness_state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "entries": {
+                            "memory": {
+                                "café_notes": {
+                                    "id": "café_notes",
+                                    "kind": "memory",
+                                    "title": "Café notes",
+                                    "content": "old",
+                                }
+                            }
+                        },
+                        "refinements": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = HarnessState(state_path)
+
+            updated = state.upsert("memory", "Café notes", "new")
+
+            self.assertEqual(updated.id, "café_notes")
+            self.assertEqual(list(state.entries["memory"]), ["café_notes"])
+
+    def test_aliases_resolve_across_get_update_and_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state = HarnessState(Path(temp_dir) / "harness_state.json")
+            state.create_memory("Café notes", "old", id="caf_notes")
+            state.aliases["memory"]["café_notes"] = "caf_notes"
+            state.save()
+
+            self.assertEqual(state.get("memory", "café_notes").id, "caf_notes")
+            state.update_memory("café_notes", "Café notes", "updated")
+            self.assertEqual(state.get("memory", "caf_notes").content, "updated")
+            self.assertTrue(state.delete_memory("café_notes"))
+            self.assertIsNone(state.get("memory", "caf_notes"))
+            self.assertNotIn("café_notes", state.aliases["memory"])
+
+    def test_id_migration_is_dry_run_idempotent_and_collision_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state = HarnessState(Path(temp_dir) / "harness_state.json")
+            state.create_memory("Café notes", "legacy", id="café_notes")
+
+            preview = state.migrate_ids()
+            self.assertEqual(preview["proposed"][0]["to"], "caf_notes")
+            self.assertIsNotNone(state.get("memory", "café_notes"))
+            applied = state.migrate_ids(apply=True)
+            self.assertEqual(applied["applied"], preview["proposed"])
+            self.assertEqual(state.get("memory", "café_notes").id, "caf_notes")
+            self.assertEqual(state.migrate_ids()["proposed"], [])
+
+            collision = HarnessState(Path(temp_dir) / "collision.json")
+            collision.create_memory("Café notes", "legacy", id="café_notes")
+            collision.create_memory("Explicit", "canonical", id="caf_notes")
+            result = collision.migrate_ids(apply=True)
+            self.assertEqual(result["applied"], [])
+            self.assertEqual(len(result["collisions"]), 1)
+            self.assertEqual(len(collision.entries["memory"]), 2)
 
     def test_update_skill_preserves_omitted_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

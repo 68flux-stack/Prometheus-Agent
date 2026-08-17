@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Added crash-safe continual harness recovery, compatibility aliases, scoped ID migration, and explicit recovery commands.
+- Added root-tree RLM child count, concurrency, and optional cost limits with session and global controls.
+- Added privacy-safe local harness exposure events and deterministic replay evaluation fixtures.
+- Changed oversized kernel output to retain UTF-8-safe head and tail previews with permission-restricted full-output spill files.
+- Changed refinement context selection to reserve model capacity and select the newest messages by estimated tokens.
 - Changed the built-in `websearch` skill from the Serper API to Exa's remote MCP server; it now works anonymously out of the box, with an optional API key (via `/login`) to raise the rate limit.
 - Fixed `websearch` paying a fresh TCP+TLS handshake on every call by reusing a pooled connection across searches.
 - Fixed the desktop stop control and conversation activity indicator remaining visually active after an abort.

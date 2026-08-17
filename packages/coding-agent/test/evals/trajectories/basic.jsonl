@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-08-16T00:00:00.000Z","message":{"role":"user","content":"Remember that this project requires focused edits.","timestamp":1786838400000}}
+{"type":"message","timestamp":"2026-08-16T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I will keep edits focused."}],"api":"faux","provider":"faux","model":"faux","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1786838401000}}

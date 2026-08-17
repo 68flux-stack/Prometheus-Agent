@@ -129,6 +129,10 @@ export interface Settings {
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	defaultServiceTier?: ServiceTier;
 	rlmMaxDepth?: number; // default for new sessions; unset falls through to RLM_MAX_DEPTH, then 1
+	rlmMaxChildren?: number;
+	rlmMaxConcurrentChildren?: number;
+	rlmChildBudgetUsd?: number;
+	rlmCancelChildrenOnBudgetExceeded?: boolean;
 	idleEvictionMinutes?: number | "off"; // global daemon policy; default: 90
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
@@ -778,6 +782,46 @@ export class SettingsManager {
 	setRlmMaxDepth(maxDepth: number): void {
 		this.globalSettings.rlmMaxDepth = maxDepth;
 		this.markModified("rlmMaxDepth");
+		this.save();
+	}
+
+	getRlmMaxChildren(): number | undefined {
+		return this.globalSettings.rlmMaxChildren;
+	}
+
+	setRlmMaxChildren(value: number): void {
+		this.globalSettings.rlmMaxChildren = value;
+		this.markModified("rlmMaxChildren");
+		this.save();
+	}
+
+	getRlmMaxConcurrentChildren(): number | undefined {
+		return this.globalSettings.rlmMaxConcurrentChildren;
+	}
+
+	setRlmMaxConcurrentChildren(value: number): void {
+		this.globalSettings.rlmMaxConcurrentChildren = value;
+		this.markModified("rlmMaxConcurrentChildren");
+		this.save();
+	}
+
+	getRlmChildBudgetUsd(): number | undefined {
+		return this.globalSettings.rlmChildBudgetUsd;
+	}
+
+	setRlmChildBudgetUsd(value: number | undefined): void {
+		this.globalSettings.rlmChildBudgetUsd = value;
+		this.markModified("rlmChildBudgetUsd");
+		this.save();
+	}
+
+	getRlmCancelChildrenOnBudgetExceeded(): boolean {
+		return this.globalSettings.rlmCancelChildrenOnBudgetExceeded ?? false;
+	}
+
+	setRlmCancelChildrenOnBudgetExceeded(value: boolean): void {
+		this.globalSettings.rlmCancelChildrenOnBudgetExceeded = value;
+		this.markModified("rlmCancelChildrenOnBudgetExceeded");
 		this.save();
 	}
 

@@ -1,4 +1,13 @@
-import { appendFileSync, chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	chmodSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -8,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	appendGlobalRefinement,
 	applyRefinementProposal,
+	baselineForHarnessScope,
+	canonicalHarnessId,
 	formatHarnessStateForPrompt,
 	getGlobalHarnessStateDir,
 	getHarnessStatePath,
@@ -20,11 +31,14 @@ import {
 	loadHarnessState,
 	mergeHarnessStates,
 	mergeRefinementHistory,
+	migrateHarnessIds,
+	normalizeRefinementProposalScope,
 	planRefinement,
 	type RefinementAction,
 	type RefinementKind,
 	type RefinementProposal,
 	type RefinementResult,
+	recoverHarnessState,
 	refineHarness,
 	saveHarnessState,
 } from "../src/core/refinement/index.js";
@@ -139,6 +153,15 @@ function seedEntry(state: HarnessState, kind: RefinementKind, id = `${kind}_entr
 }
 
 describe("harness refinement", () => {
+	it("matches the shared canonical slug vectors", () => {
+		const vectors = JSON.parse(
+			readFileSync(join(process.cwd(), "test", "fixtures", "harness-slugs.json"), "utf8"),
+		) as Array<{ input: string; fallback: string; expected: string }>;
+		for (const vector of vectors) {
+			expect(canonicalHarnessId(vector.input, vector.fallback)).toBe(vector.expected);
+		}
+	});
+
 	it("rejects an edit when the target entry changed after planning", () => {
 		const harnessStateDir = makeTempDir();
 		const baselineState = loadHarnessState(harnessStateDir);
@@ -185,6 +208,31 @@ describe("harness refinement", () => {
 		expect(result.appliedEdits.map((edit) => edit.applied)).toEqual([true, true]);
 		expect(state.entries.memory.memory_entry.content).toBe("second");
 		expect(state.entries.memory.memory_entry.version).toBe(3);
+	});
+
+	it("rejects mixed local and global edits before mutation", () => {
+		expect(() =>
+			normalizeRefinementProposalScope(
+				proposal("mixed", [
+					{ action: "delete", kind: "memory", id: "local:shared" },
+					{ action: "delete", kind: "memory", id: "global:shared" },
+				]),
+				"local",
+			),
+		).toThrow("cannot mix local and global edits");
+	});
+
+	it("extracts a colliding local entry into a scope-specific baseline", () => {
+		const root = makeTempDir();
+		const globalState = loadHarnessState(join(root, "global"), "global");
+		seedEntry(globalState, "memory", "shared");
+		const localState = loadHarnessState(join(root, "local"), "local");
+		seedEntry(localState, "memory", "shared");
+		localState.entries.memory.shared.content = "local";
+		const baseline = baselineForHarnessScope(mergeHarnessStates(globalState, localState), "local");
+
+		expect(baseline.entries.memory.shared.content).toBe("local");
+		expect(baseline.entries.memory["local:shared"]).toBeUndefined();
 	});
 
 	it("infers legacy refinement scope from applied edit snapshots", () => {
@@ -669,7 +717,7 @@ describe("harness refinement", () => {
 	});
 
 	it.each(["not json at all", "null", "[]", '"a string"', "123"])(
-		"loads empty harness state from a corrupt or non-object file (%s)",
+		"quarantines corrupt or non-object state in read-only mode (%s)",
 		(payload) => {
 			const dir = makeTempDir();
 			writeFileSync(getHarnessStatePath(dir), payload, "utf8");
@@ -678,18 +726,91 @@ describe("harness refinement", () => {
 
 			expect(state.entries).toEqual({ prompt: {}, memory: {}, skill: {}, subagent: {} });
 			expect(state.refinements).toEqual([]);
-			// Still usable: a refinement applies and persists cleanly over the bad file.
-			applyRefinementProposal(
-				state,
-				proposal("Recover", [
-					{ action: "create", kind: "memory", id: "recovered", title: "Recovered", content: "ok" },
-				]),
-				{ id: "refine_recover" },
-			);
-			saveHarnessState(dir, state);
-			expect(loadHarnessState(dir).entries.memory.recovered.content).toBe("ok");
+			expect(state.readOnlyReason).toContain("read-only");
+			expect(state.recovery?.restored).toBe(false);
+			const quarantinePath = state.recovery?.quarantinePath;
+			expect(quarantinePath).toBeDefined();
+			expect(readFileSync(quarantinePath!, "utf8")).toBe(payload);
+			expect(() => saveHarnessState(dir, state)).toThrow("read-only");
 		},
 	);
+
+	it("restores the last valid backup after a corrupt write", () => {
+		const dir = makeTempDir();
+		const state = loadHarnessState(dir, "local");
+		seedEntry(state, "memory", "first");
+		saveHarnessState(dir, state);
+		seedEntry(state, "memory", "second");
+		saveHarnessState(dir, state);
+		writeFileSync(getHarnessStatePath(dir), "{truncated", "utf8");
+
+		const restored = loadHarnessState(dir, "local");
+
+		expect(restored.recovery?.restored).toBe(true);
+		expect(restored.entries.memory.first).toBeDefined();
+		expect(restored.entries.memory.second).toBeUndefined();
+		expect(restored.readOnlyReason).toBeUndefined();
+	});
+
+	it("resolves persisted aliases across updates and deletes", () => {
+		const legacyId = "café_notes";
+		const state = loadHarnessState(makeTempDir(), "local");
+		seedEntry(state, "memory", "caf_notes");
+		state.aliases!.memory[legacyId] = "caf_notes";
+		const update = applyRefinementProposal(
+			state,
+			proposal("Update alias", [
+				{ action: "update", kind: "memory", id: "café_notes", title: "Café notes", content: "updated" },
+			]),
+			{ id: "refine_alias_update" },
+		);
+		expect(update.appliedEdits[0]).toMatchObject({ id: "caf_notes", applied: true });
+		const deletion = applyRefinementProposal(
+			state,
+			proposal("Delete alias", [{ action: "delete", kind: "memory", id: "café_notes" }]),
+			{ id: "refine_alias_delete" },
+		);
+		expect(deletion.appliedEdits[0]).toMatchObject({ id: "caf_notes", applied: true });
+		expect(state.aliases!.memory[legacyId]).toBeUndefined();
+	});
+
+	it("previews and applies collision-safe id migration idempotently", () => {
+		const legacyId = "café_notes";
+		const dir = makeTempDir();
+		const state = loadHarnessState(dir, "local");
+		seedEntry(state, "memory", legacyId);
+		state.entries.memory[legacyId].title = "Café notes";
+		saveHarnessState(dir, state);
+		expect(migrateHarnessIds(dir, "local", false).proposed).toEqual([
+			{ kind: "memory", from: "café_notes", to: "caf_notes" },
+		]);
+		const applied = migrateHarnessIds(dir, "local", true);
+		expect(applied.applied).toHaveLength(1);
+		expect(loadHarnessState(dir, "local").aliases!.memory[legacyId]).toBe("caf_notes");
+		expect(migrateHarnessIds(dir, "local", true).applied).toEqual([]);
+
+		const collided = loadHarnessState(makeTempDir(), "local");
+		seedEntry(collided, "memory", legacyId);
+		collided.entries.memory[legacyId].title = "Café notes";
+		seedEntry(collided, "memory", "caf_notes");
+		const collisionDir = makeTempDir();
+		saveHarnessState(collisionDir, collided);
+		expect(migrateHarnessIds(collisionDir, "local", true)).toMatchObject({ applied: [], collisions: [{}] });
+	});
+
+	it("explicitly restores a selected quarantine or backup", () => {
+		const dir = makeTempDir();
+		const source = join(dir, "selected.json");
+		const state = loadHarnessState(dir, "local");
+		seedEntry(state, "memory", "selected");
+		writeFileSync(source, JSON.stringify(state), "utf8");
+		writeFileSync(getHarnessStatePath(dir), "{broken", "utf8");
+
+		const restored = recoverHarnessState(dir, "local", { from: source });
+
+		expect(restored.entries.memory.selected).toBeDefined();
+		expect(restored.recovery?.restored).toBe(true);
+	});
 
 	it("extracts refinement history from custom session entries", () => {
 		const result: RefinementResult = {
@@ -1024,7 +1145,7 @@ describe("harness refinement", () => {
 			systemPrompt: expect.stringContaining("A caller may explicitly request global refinement"),
 		});
 		expect(completeSimpleMock.mock.calls[0][1]).toMatchObject({
-			systemPrompt: expect.stringContaining("Always use the bare id (no prefix) in edits"),
+			systemPrompt: expect.stringContaining("Preserve a prefix when targeting a scoped collision"),
 		});
 		expect(completeSimpleMock.mock.calls[0][1]).toMatchObject({
 			systemPrompt: expect.stringContaining(
@@ -1392,6 +1513,36 @@ describe("global refinement history", () => {
 		const userPrompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text;
 		expect(userPrompt).toContain("Requested refinement scope: global");
 		expect(userPrompt).toContain("Do not persist session-only progress");
+	});
+
+	it("skips refinement when fixed and response reservations exhaust context", async () => {
+		const model = { ...createRefineModel(false), contextWindow: 8_000, maxTokens: 4_000 };
+		await expect(
+			planRefinement(
+				[{ role: "user", content: "recent", timestamp: Date.now() } satisfies AgentMessage],
+				loadHarnessState(makeTempDir()),
+				[],
+				model,
+				"api-key",
+			),
+		).rejects.toThrow("insufficient context");
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+	});
+
+	it("selects newest complete refinement messages within the conversation budget", async () => {
+		completeSimpleMock.mockResolvedValueOnce(assistantText(JSON.stringify(proposal("No edit", []))));
+		const model = { ...createRefineModel(false), contextWindow: 24_000, maxTokens: 2_000 };
+		const messages = Array.from({ length: 20 }, (_, index) => ({
+			role: "user" as const,
+			content: `${index === 0 ? "oldest-boundary" : `message-${index}`} ${"x".repeat(2_000)}`,
+			timestamp: Date.now() + index,
+		}));
+
+		await planRefinement(messages, loadHarnessState(makeTempDir()), [], model, "api-key");
+
+		const userPrompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text;
+		expect(userPrompt).toContain("message-19");
+		expect(userPrompt).not.toContain("oldest-boundary");
 	});
 
 	it("plans a rollback without mutating harness state", async () => {

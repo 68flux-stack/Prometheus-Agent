@@ -726,6 +726,17 @@ describe("DaemonAgentConnection", () => {
 		expect(fakeClient.requests).toEqual([]);
 	});
 
+	it("capability-gates root-tree RLM child-limit commands", async () => {
+		const fakeClient = new FakeDaemonClient();
+		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1");
+
+		await expect(connection.prompt("/rlm-limits --children 8")).rejects.toThrow("require a newer Prometheus daemon");
+		expect(fakeClient.requests).toEqual([]);
+		fakeClient.serverCapabilities.add("rlm_child_limits");
+		await connection.prompt("/rlm-limits --children 8");
+		expect(fakeClient.requests.at(-1)).toMatchObject({ message: "/rlm-limits --children 8" });
+	});
+
 	it("carries an opt-out-only telemetry policy on attach", async () => {
 		const fakeClient = new FakeDaemonClient();
 		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1", {

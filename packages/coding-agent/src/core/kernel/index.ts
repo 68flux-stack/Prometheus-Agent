@@ -1,7 +1,7 @@
 // TODO: reconsider persistent kernel vs stateless `python -c` once RLM-1 weights land.
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -9,6 +9,7 @@ import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
 import { v4 as uuid } from "uuid";
 import { Dealer, Subscriber } from "zeromq";
 import { getShellEnv } from "../../utils/shell.js";
+import { OutputAccumulator } from "../tools/output-accumulator.js";
 import { ensureKernelPython, type KernelBootstrapProgressHandler, type KernelPythonSkill } from "./bootstrap.js";
 import { ForkServerUnavailable, forkKernel, isForkServerEnabled } from "./fork-server.js";
 import {
@@ -53,6 +54,27 @@ const KERNEL_BUSY_INTERRUPT_INTERVAL_MS = 500;
 const MAX_LATE_SENT_AGENT_MESSAGE_HANDLERS = 256;
 const KERNEL_BUSY_AFTER_INTERRUPT_MESSAGE =
 	"IPython kernel is still running the previously interrupted cell. Wait and try again, or kill the IPython kernel to start fresh.";
+const SPILL_FILE_GRACE_MS = 24 * 60 * 60 * 1000;
+let staleSpillsCleaned = false;
+
+function cleanStaleKernelSpillFiles(): void {
+	if (staleSpillsCleaned) return;
+	staleSpillsCleaned = true;
+	const now = Date.now();
+	try {
+		for (const name of readdirSync(tmpdir())) {
+			if (!/^prometheus-kernel-(?:stdout|stderr|[a-f0-9-]+-result)-[a-f0-9]{16}\.log$/.test(name)) continue;
+			const path = join(tmpdir(), name);
+			try {
+				if (now - statSync(path).mtimeMs > SPILL_FILE_GRACE_MS) unlinkSync(path);
+			} catch {
+				// Spill cleanup is best-effort and must not block kernel startup.
+			}
+		}
+	} catch {
+		// A restricted temporary directory must not block kernel startup.
+	}
+}
 
 export class KernelBusyAfterInterruptError extends Error {
 	constructor() {
@@ -175,6 +197,8 @@ export interface ExecuteResult {
 	stderr: string;
 	/** Last `execute_result` payload (text/plain), if the cell produced one. */
 	result?: string;
+	/** Complete channel outputs preserved when display output was truncated. */
+	fullOutputPaths?: { stdout?: string; stderr?: string; result?: string };
 	/** Diffs emitted via display_data, in order. */
 	diffs?: KernelDiffDisplay[];
 	/** Media attachments emitted via display_data, in order. */
@@ -347,11 +371,10 @@ interface ActiveExecution {
 	started: number;
 	maxChars: number;
 	opts: ExecuteOptions;
-	stdout: string;
-	stderr: string;
-	stdoutTruncated: boolean;
-	stderrTruncated: boolean;
-	result?: string;
+	stdout: OutputAccumulator;
+	stderr: OutputAccumulator;
+	result: OutputAccumulator;
+	hasResult: boolean;
 	diffs: KernelDiffDisplay[];
 	attachments: KernelAttachment[];
 	sentAgentMessages: KernelSentAgentMessage[];
@@ -631,6 +654,7 @@ export class KernelManager {
 	private snapshotTimer?: ReturnType<typeof globalThis.setTimeout>;
 
 	constructor(options: KernelManagerOptions) {
+		cleanStaleKernelSpillFiles();
 		this.options = {
 			python: options.python,
 			cwd: options.cwd,
@@ -976,10 +1000,22 @@ export class KernelManager {
 			started,
 			maxChars,
 			opts,
-			stdout: "",
-			stderr: "",
-			stdoutTruncated: false,
-			stderrTruncated: false,
+			stdout: new OutputAccumulator({
+				maxLines: Number.MAX_SAFE_INTEGER,
+				maxBytes: maxChars,
+				tempFilePrefix: "prometheus-kernel-stdout",
+			}),
+			stderr: new OutputAccumulator({
+				maxLines: Number.MAX_SAFE_INTEGER,
+				maxBytes: maxChars,
+				tempFilePrefix: "prometheus-kernel-stderr",
+			}),
+			result: new OutputAccumulator({
+				maxLines: Number.MAX_SAFE_INTEGER,
+				maxBytes: maxChars,
+				tempFilePrefix: `prometheus-kernel-${requestMsgId}-result`,
+			}),
+			hasResult: false,
 			diffs: [],
 			attachments: [],
 			sentAgentMessages: [],
@@ -1098,33 +1134,26 @@ export class KernelManager {
 		if (t === "stream") {
 			const c = incoming.content as { name: "stdout" | "stderr"; text: string };
 			if (c.name === "stdout") {
-				if (execution.stdout.length < execution.maxChars) {
-					execution.stdout += c.text;
-					if (execution.stdout.length > execution.maxChars) {
-						execution.stdout = execution.stdout.slice(0, execution.maxChars);
-						execution.stdoutTruncated = true;
-					}
-				}
+				execution.stdout.append(Buffer.from(c.text, "utf8"));
 			} else if (c.name === "stderr") {
-				if (execution.stderr.length < execution.maxChars) {
-					execution.stderr += c.text;
-					if (execution.stderr.length > execution.maxChars) {
-						execution.stderr = execution.stderr.slice(0, execution.maxChars);
-						execution.stderrTruncated = true;
-					}
-				}
+				execution.stderr.append(Buffer.from(c.text, "utf8"));
 			}
 			execution.opts.onStream?.(c.text, c.name);
 		} else if (t === "execute_result") {
 			const c = incoming.content as { data: Record<string, string> };
-			if (c.data["text/plain"]) execution.result = c.data["text/plain"];
+			if (c.data["text/plain"]) {
+				execution.result.append(Buffer.from(c.data["text/plain"], "utf8"));
+				execution.hasResult = true;
+			}
 		} else if (t === "display_data" || t === "update_display_data") {
 			const c = incoming.content as { data?: Record<string, unknown> };
 			const diff = parseDiffDisplay(c.data?.[DIFF_DISPLAY_MIME]);
 			if (diff) execution.diffs.push(diff);
 			const attachment = parseAttachmentDisplay(c.data?.[ATTACHMENT_DISPLAY_MIME]);
 			if (attachment === "oversized") {
-				execution.stderr += `${execution.stderr ? "\n" : ""}attachment dropped: exceeds ${MAX_ATTACHMENT_DATA_CHARS} base64 chars`;
+				execution.stderr.append(
+					Buffer.from(`\nattachment dropped: exceeds ${MAX_ATTACHMENT_DATA_CHARS} base64 chars`, "utf8"),
+				);
 				execution.status = "error";
 			} else if (attachment) {
 				execution.attachments.push(attachment);
@@ -1165,22 +1194,33 @@ export class KernelManager {
 				this.registerLateSentAgentMessageHandler(execution.requestMsgId, execution.opts.onLateSentAgentMessage);
 			}
 
-			let stdout = execution.stdout;
-			let stderr = execution.stderr;
-			let result = execution.result;
+			execution.stdout.finish();
+			execution.stderr.finish();
+			execution.result.finish();
+			const stdoutSnapshot = execution.stdout.snapshotHeadTail({ persistIfTruncated: true });
+			const stderrSnapshot = execution.stderr.snapshotHeadTail({ persistIfTruncated: true });
+			const resultSnapshot = execution.result.snapshotHeadTail({ persistIfTruncated: true });
+			const fullOutputPaths: NonNullable<ExecuteResult["fullOutputPaths"]> = {};
+			const renderChannel = (
+				channel: "stdout" | "stderr" | "result",
+				snapshot: ReturnType<OutputAccumulator["snapshotHeadTail"]>,
+			): string => {
+				if (!snapshot.fullOutputPath) return snapshot.content;
+				fullOutputPaths[channel] = snapshot.fullOutputPath;
+				return `${snapshot.content}\n[full output: ${snapshot.fullOutputPath}]`;
+			};
+			const stdout = renderChannel("stdout", stdoutSnapshot);
+			const stderr = renderChannel("stderr", stderrSnapshot);
+			const result = execution.hasResult ? renderChannel("result", resultSnapshot) : undefined;
 			let status = execution.status;
-			if (execution.stdoutTruncated) stdout += `\n[... output truncated at ${execution.maxChars} chars ...]`;
-			if (execution.stderrTruncated) stderr += `\n[... output truncated at ${execution.maxChars} chars ...]`;
-			if (result !== undefined && result.length > execution.maxChars) {
-				result = `${result.slice(0, execution.maxChars)}\n[... output truncated at ${execution.maxChars} chars ...]`;
-			}
 
 			if (execution.opts.signal?.aborted) status = "aborted";
 
-			execution.resolve({
+			const resolvedResult: ExecuteResult = {
 				stdout,
 				stderr,
 				result,
+				fullOutputPaths: Object.keys(fullOutputPaths).length > 0 ? fullOutputPaths : undefined,
 				diffs: execution.diffs.length > 0 ? execution.diffs : undefined,
 				attachments: execution.attachments.length > 0 ? execution.attachments : undefined,
 				sentAgentMessages: execution.sentAgentMessages.length > 0 ? execution.sentAgentMessages : undefined,
@@ -1188,7 +1228,15 @@ export class KernelManager {
 				error: execution.error,
 				status,
 				durationMs: Date.now() - execution.started,
-			});
+			};
+			void Promise.all([
+				execution.stdout.closeTempFile(),
+				execution.stderr.closeTempFile(),
+				execution.result.closeTempFile(),
+			]).then(
+				() => execution.resolve(resolvedResult),
+				() => execution.resolve(resolvedResult),
+			);
 		}
 		if (didClearActive) {
 			this.notifyActiveExecutionIdle();
@@ -1230,6 +1278,14 @@ export class KernelManager {
 			return;
 		}
 		this.activeExecution = undefined;
+		execution.stdout.finish();
+		execution.stderr.finish();
+		execution.result.finish();
+		void Promise.all([
+			execution.stdout.closeTempFile(),
+			execution.stderr.closeTempFile(),
+			execution.result.closeTempFile(),
+		]).catch(() => undefined);
 		execution.reject(error);
 		this.notifyActiveExecutionIdle();
 	}

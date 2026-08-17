@@ -797,6 +797,9 @@ export class DaemonAgentConnection implements AgentConnection {
 		message: string,
 		options?: AgentConnectionPromptOptions,
 	): Promise<void> {
+		if (/^\s*\/rlm-limits(?:\s|$)/.test(message) && !this.client.supportsServerCapability("rlm_child_limits")) {
+			throw new Error("RLM child limits require a newer Prometheus daemon. Restart the daemon and try again.");
+		}
 		const signal = options?.signal;
 		if (signal?.aborted) {
 			throw new AgentConnectionPromptAdmissionError("Prompt admission was cancelled.", "cancelled");

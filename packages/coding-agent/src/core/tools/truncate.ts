@@ -44,6 +44,51 @@ export interface TruncationOptions {
 	maxBytes?: number;
 }
 
+const HEAD_TAIL_MARKER = "\n[... output elided; middle removed ...]\n";
+
+/** Keep both the beginning and end of large output so setup context and final errors survive. */
+export function truncateHeadTail(content: string, options: TruncationOptions = {}): TruncationResult {
+	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	const totalBytes = Buffer.byteLength(content, "utf-8");
+	const totalLines = content.split("\n").length;
+	if (totalLines <= maxLines && totalBytes <= maxBytes) {
+		return {
+			content,
+			truncated: false,
+			truncatedBy: null,
+			totalLines,
+			totalBytes,
+			outputLines: totalLines,
+			outputBytes: totalBytes,
+			lastLinePartial: false,
+			firstLineExceedsLimit: false,
+			maxLines,
+			maxBytes,
+		};
+	}
+	const markerBytes = Buffer.byteLength(HEAD_TAIL_MARKER, "utf-8");
+	const contentBudget = Math.max(0, maxBytes - markerBytes);
+	const headBudget = Math.floor(contentBudget * 0.4);
+	const tailBudget = contentBudget - headBudget;
+	const head = truncateStringToBytesFromStart(content, headBudget);
+	const tail = truncateStringToBytesFromEnd(content, tailBudget);
+	const output = `${head}${HEAD_TAIL_MARKER}${tail}`;
+	return {
+		content: output,
+		truncated: true,
+		truncatedBy: totalBytes > maxBytes ? "bytes" : "lines",
+		totalLines,
+		totalBytes,
+		outputLines: output.split("\n").length,
+		outputBytes: Buffer.byteLength(output, "utf-8"),
+		lastLinePartial: true,
+		firstLineExceedsLimit: false,
+		maxLines,
+		maxBytes,
+	};
+}
+
 /**
  * Format bytes as human-readable size.
  */
@@ -248,6 +293,14 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 	}
 
 	return buf.slice(start).toString("utf-8");
+}
+
+function truncateStringToBytesFromStart(str: string, maxBytes: number): string {
+	const buffer = Buffer.from(str, "utf-8");
+	if (buffer.length <= maxBytes) return str;
+	let end = maxBytes;
+	while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--;
+	return buffer.subarray(0, end).toString("utf-8");
 }
 
 /**

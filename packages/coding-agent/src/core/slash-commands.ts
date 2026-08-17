@@ -17,6 +17,9 @@ export const SESSION_SLASH_COMMAND_NAMES = [
 	"autonomous",
 	"changes",
 	"permissions",
+	"rlm-limits",
+	"harness-recover",
+	"harness-migrate-ids",
 ] as const;
 
 export type SessionSlashCommandName = (typeof SESSION_SLASH_COMMAND_NAMES)[number];
@@ -195,6 +198,24 @@ const CANONICAL_BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		description:
 			"Set/view the per-chat persistent RLM max depth immediately; never interrupts or queues the running turn",
 		argumentHint: "[<int> [--global]]",
+		takesArgument: true,
+	},
+	{
+		name: "rlm-limits",
+		description: "View or set root-tree RLM child limits",
+		argumentHint: "[--children N] [--concurrent N] [--budget-usd N|off] [--cancel-on-budget on|off] [--global]",
+		takesArgument: true,
+	},
+	{
+		name: "harness-recover",
+		description: "Restore or explicitly reset local/global continual harness state",
+		argumentHint: "(--from <path>|--reset --confirm) [--global]",
+		takesArgument: true,
+	},
+	{
+		name: "harness-migrate-ids",
+		description: "Preview or apply reversible continual harness ID migration",
+		argumentHint: "[--apply] [--global]",
 		takesArgument: true,
 	},
 	{
