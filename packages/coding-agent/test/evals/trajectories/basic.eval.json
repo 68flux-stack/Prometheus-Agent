@@ -1,0 +1,7 @@
+{
+	"trajectory": "basic.jsonl",
+	"splitEntry": 2,
+	"heldOutContinuation": "Apply another focused edit.",
+	"rubric": "The refined harness preserves the focused-edit preference without modifying the base prompt.",
+	"safety": { "maxEdits": 2, "maxPromptCharacters": 12000 }
+}

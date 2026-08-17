@@ -3,6 +3,7 @@ import type { Api, Model, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/index.js";
 import type { HostRequestHandler } from "./kernel/index.js";
+import type { RlmTreeLimitCoordinator } from "./rlm-child-limits.js";
 
 export interface RlmRunRequest {
 	prompt: string;
@@ -232,6 +233,7 @@ export interface CreateRlmSubagentRuntimeOptions {
 	includeCompactSkill: boolean;
 	rlmDepth: number;
 	rlmMaxDepth: number;
+	rlmTreeLimitCoordinator?: RlmTreeLimitCoordinator;
 	rlmParentNodeId: string;
 	/** Source of the IPython cell that spawned this subagent, for display. */
 	spawnCode?: string;

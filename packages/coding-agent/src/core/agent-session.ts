@@ -181,6 +181,7 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
+import { HarnessEventWriter } from "./harness-events.js";
 import type { HostRequestHandlers, KernelSentAgentMessage } from "./kernel/index.js";
 import { type RestoreResult, snapshotPathIn } from "./kernel/state-snapshot.js";
 import { WINDOWS_PLAN_MODE_ENV, WINDOWS_WRITE_ROOTS_ENV } from "./kernel/windows-plan-policy.js";
@@ -209,6 +210,7 @@ import {
 	type AutoRefineReview,
 	appendGlobalRefinement,
 	applyRefinementProposal,
+	baselineForHarnessScope,
 	getGlobalHarnessStateDir,
 	getLocalHarnessStateDir,
 	getRefinementHistory,
@@ -218,16 +220,20 @@ import {
 	loadHarnessState,
 	mergeHarnessStates,
 	mergeRefinementHistory,
+	migrateHarnessIds,
+	normalizeRefinementProposalScope,
 	planRefinement,
 	REFINE_SKILL_NAME,
 	REFINEMENT_CUSTOM_TYPE,
 	type RefinementPlan,
 	type RefinementResult,
+	recoverHarnessState,
 	reviewAutoRefine,
 	saveHarnessState,
 } from "./refinement/index.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
+import { type RlmChildLimitConfig, type RlmChildLimitStatus, RlmTreeLimitCoordinator } from "./rlm-child-limits.js";
 import {
 	type CreateRlmSubagentRuntimeOptions,
 	createDefaultRlmSubagentSessionName,
@@ -481,6 +487,12 @@ export interface AgentSessionConfig {
 	rlmDepth?: number;
 	/** Maximum RLM recursion depth. Defaults to RLM_MAX_DEPTH or 1. */
 	rlmMaxDepth?: number;
+	/** Root-tree child admission limits. */
+	rlmMaxChildren?: number;
+	rlmMaxConcurrentChildren?: number;
+	rlmChildBudgetUsd?: number;
+	rlmCancelChildrenOnBudgetExceeded?: boolean;
+	rlmTreeLimitCoordinator?: RlmTreeLimitCoordinator;
 	/** Directory exposed to the kernel as RLM_SESSION_DIR. */
 	rlmSessionDir?: string;
 	/** Node id for this session when it is itself an RLM child. */
@@ -1019,6 +1031,15 @@ interface PersistedRlmMaxDepthState {
 	maxDepth: number;
 }
 
+interface PersistedRlmChildLimitsState {
+	totalChildren: number;
+	childCostUsd: number;
+	maxChildren?: number;
+	maxConcurrentChildren?: number;
+	childBudgetUsd?: number | null;
+	cancelChildrenOnBudgetExceeded?: boolean;
+}
+
 type AutonomousRuntimeSnapshot = Pick<
 	AutonomousRuntimeState,
 	"continuationsUsed" | "gateAttempts" | "lastGateFailure" | "lastGateFailureSnapshot"
@@ -1059,6 +1080,7 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 /** Cap on the post-compaction kernel namespace probe so a wedged kernel can't stall recovery. */
 const KERNEL_STATE_LISTING_TIMEOUT_MS = 5000;
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
+const RLM_CHILD_LIMITS_STATE_CUSTOM_TYPE = "rlm_child_limits_state";
 
 function noopRlmChildAbort(): void {}
 function noopRlmChildEventUnsubscribe(): void {}
@@ -1089,9 +1111,33 @@ function parseDepth(value: string | undefined, fallback: number, name: string): 
 	return parsed;
 }
 
+function parseOptionalCost(value: string | undefined, name: string): number | undefined {
+	if (value === undefined || value === "") return undefined;
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative number`);
+	return parsed;
+}
+
 function isPersistedRlmMaxDepthState(value: unknown): value is PersistedRlmMaxDepthState {
 	return (
 		typeof value === "object" && value !== null && isNonNegativeInteger((value as PersistedRlmMaxDepthState).maxDepth)
+	);
+}
+
+function isPersistedRlmChildLimitsState(value: unknown): value is PersistedRlmChildLimitsState {
+	if (typeof value !== "object" || value === null) return false;
+	const state = value as PersistedRlmChildLimitsState;
+	return (
+		isNonNegativeInteger(state.totalChildren) &&
+		typeof state.childCostUsd === "number" &&
+		Number.isFinite(state.childCostUsd) &&
+		state.childCostUsd >= 0 &&
+		(state.maxChildren === undefined || isNonNegativeInteger(state.maxChildren)) &&
+		(state.maxConcurrentChildren === undefined || isNonNegativeInteger(state.maxConcurrentChildren)) &&
+		(state.childBudgetUsd === undefined ||
+			state.childBudgetUsd === null ||
+			(Number.isFinite(state.childBudgetUsd) && state.childBudgetUsd >= 0)) &&
+		(state.cancelChildrenOnBudgetExceeded === undefined || typeof state.cancelChildrenOnBudgetExceeded === "boolean")
 	);
 }
 
@@ -1180,6 +1226,8 @@ export class AgentSession {
 	readonly backgroundJobs: BackgroundJobManager;
 	readonly subagentWorktrees: SubagentWorktreeManager;
 	private readonly _sessionArtifactDir: string;
+	private readonly _harnessEvents: HarnessEventWriter;
+	private readonly _reportedHarnessDiagnostics = new Set<string>();
 	private _executionPolicy: ExecutionPolicy;
 	/** Directories the user approved this session; survives mode switches, never persisted. */
 	private _grantedRoots: string[] = [];
@@ -1311,6 +1359,7 @@ export class AgentSession {
 	private readonly _configuredRlmMaxDepth: number | undefined;
 	private _rlmMaxDepth: number;
 	private _rlmMaxDepthSource: RlmMaxDepthSource;
+	private readonly _rlmTreeLimits: RlmTreeLimitCoordinator;
 	private _rlmSessionDir?: string;
 	private _rlmParentNodeId?: string;
 	private _rlmParentAgent?: string;
@@ -1401,6 +1450,7 @@ export class AgentSession {
 		const sessionArtifactDir =
 			this.sessionManager.getSessionArtifactDir() ?? mkdtempSync(join(tmpdir(), "prometheus-session-"));
 		this._sessionArtifactDir = sessionArtifactDir;
+		this._harnessEvents = new HarnessEventWriter(sessionArtifactDir);
 		this._executionPolicy = createExecutionPolicy(
 			this.settingsManager.getPermissionSettings(),
 			this._cwd,
@@ -1441,6 +1491,48 @@ export class AgentSession {
 		const resolvedRlmMaxDepth = this._resolveRlmMaxDepth();
 		this._rlmMaxDepth = resolvedRlmMaxDepth.maxDepth;
 		this._rlmMaxDepthSource = resolvedRlmMaxDepth.source;
+		const persistedChildLimits = this._loadPersistedRlmChildLimitsState();
+		const childLimitConfig: RlmChildLimitConfig = {
+			maxChildren:
+				persistedChildLimits?.maxChildren ??
+				config.rlmMaxChildren ??
+				this.settingsManager.getRlmMaxChildren() ??
+				parseDepth(process.env.RLM_MAX_CHILDREN, 16, "RLM_MAX_CHILDREN"),
+			maxConcurrentChildren:
+				persistedChildLimits?.maxConcurrentChildren ??
+				config.rlmMaxConcurrentChildren ??
+				this.settingsManager.getRlmMaxConcurrentChildren() ??
+				parseDepth(process.env.RLM_MAX_CONCURRENT_CHILDREN, 4, "RLM_MAX_CONCURRENT_CHILDREN"),
+			childBudgetUsd:
+				persistedChildLimits?.childBudgetUsd === null
+					? undefined
+					: (persistedChildLimits?.childBudgetUsd ??
+						config.rlmChildBudgetUsd ??
+						this.settingsManager.getRlmChildBudgetUsd() ??
+						parseOptionalCost(process.env.RLM_CHILD_BUDGET_USD, "RLM_CHILD_BUDGET_USD")),
+			cancelChildrenOnBudgetExceeded:
+				persistedChildLimits?.cancelChildrenOnBudgetExceeded ??
+				config.rlmCancelChildrenOnBudgetExceeded ??
+				this.settingsManager.getRlmCancelChildrenOnBudgetExceeded(),
+		};
+		if (!isNonNegativeInteger(childLimitConfig.maxChildren)) {
+			throw new Error("rlmMaxChildren must be a non-negative integer");
+		}
+		if (!isNonNegativeInteger(childLimitConfig.maxConcurrentChildren)) {
+			throw new Error("rlmMaxConcurrentChildren must be a non-negative integer");
+		}
+		this._rlmTreeLimits =
+			config.rlmTreeLimitCoordinator ??
+			new RlmTreeLimitCoordinator(childLimitConfig, persistedChildLimits, (status) => {
+				this.sessionManager.appendCustomEntryWithRollback(RLM_CHILD_LIMITS_STATE_CUSTOM_TYPE, {
+					totalChildren: status.totalChildren,
+					childCostUsd: status.childCostUsd,
+					maxChildren: status.maxChildren,
+					maxConcurrentChildren: status.maxConcurrentChildren,
+					childBudgetUsd: status.childBudgetUsd ?? null,
+					cancelChildrenOnBudgetExceeded: status.cancelChildrenOnBudgetExceeded,
+				});
+			});
 		this._prewarmIpythonKernel = (config.prewarmIpythonKernel ?? false) && this._rlmDepth === 0;
 		this._autoRefineReviewer = config.autoRefineReviewer;
 		this._serializedRefine = config.serializedRefine ?? false;
@@ -1689,6 +1781,21 @@ export class AgentSession {
 				entry.type === "custom" &&
 				entry.customType === RLM_MAX_DEPTH_STATE_CUSTOM_TYPE &&
 				isPersistedRlmMaxDepthState(entry.data)
+			) {
+				return entry.data;
+			}
+		}
+		return undefined;
+	}
+
+	private _loadPersistedRlmChildLimitsState(): PersistedRlmChildLimitsState | undefined {
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (
+				entry.type === "custom" &&
+				entry.customType === RLM_CHILD_LIMITS_STATE_CUSTOM_TYPE &&
+				isPersistedRlmChildLimitsState(entry.data)
 			) {
 				return entry.data;
 			}
@@ -4126,6 +4233,7 @@ export class AgentSession {
 	}
 
 	dispose(): void {
+		this._harnessEvents.flush();
 		if (this._disposed) {
 			return;
 		}
@@ -4345,6 +4453,10 @@ export class AgentSession {
 	/** Current absolute RLM spawn-depth cap. */
 	get rlmMaxDepth(): number {
 		return this._rlmMaxDepth;
+	}
+
+	get rlmChildLimitStatus(): RlmChildLimitStatus {
+		return this._rlmTreeLimits.status();
 	}
 
 	/** Current session display name, if set */
@@ -6054,6 +6166,82 @@ export class AgentSession {
 		return this.setExecutionMode(requested);
 	}
 
+	private _handleHarnessRecoverSlashCommand(args: string): string {
+		const global = /(?:^|\s)--global(?:\s|$)/.test(args);
+		const reset = /(?:^|\s)--reset(?:\s|$)/.test(args);
+		const confirmed = /(?:^|\s)--confirm(?:\s|$)/.test(args);
+		const fromMatch = /(?:^|\s)--from\s+(?:"([^"]+)"|(\S+))/.exec(args);
+		if (reset === Boolean(fromMatch)) {
+			throw new Error("Usage: /harness-recover (--from <path>|--reset --confirm) [--global]");
+		}
+		if (reset && !confirmed) {
+			throw new Error("Reset requires explicit confirmation: /harness-recover --reset --confirm");
+		}
+		const dir = global ? getGlobalHarnessStateDir() : this._localHarnessStateDir();
+		if (!dir) throw new Error("Local harness recovery requires a persisted session");
+		recoverHarnessState(dir, global ? "global" : "local", {
+			from: fromMatch?.[1] ?? fromMatch?.[2],
+			reset,
+		});
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		return reset
+			? "Reset continual harness state after preserving a recovery snapshot."
+			: "Restored continual harness state.";
+	}
+
+	private _handleHarnessMigrateIdsSlashCommand(args: string): string {
+		const global = /(?:^|\s)--global(?:\s|$)/.test(args);
+		const apply = /(?:^|\s)--apply(?:\s|$)/.test(args);
+		const remainder = args.replace(/(?:^|\s)--(?:global|apply)(?=\s|$)/g, " ").trim();
+		if (remainder) throw new Error("Usage: /harness-migrate-ids [--apply] [--global]");
+		const dir = global ? getGlobalHarnessStateDir() : this._localHarnessStateDir();
+		if (!dir) throw new Error("Local harness migration requires a persisted session");
+		const result = migrateHarnessIds(dir, global ? "global" : "local", apply);
+		const changes = result.applied ?? result.proposed ?? [];
+		return `${apply ? "Applied" : "Proposed"} ${changes.length} harness ID migration${changes.length === 1 ? "" : "s"}; ${result.collisions.length} collision${result.collisions.length === 1 ? "" : "s"}.`;
+	}
+
+	private _handleRlmLimitsSlashCommand(args: string): string {
+		const current = this._rlmTreeLimits.status();
+		const global = /(?:^|\s)--global(?:\s|$)/.test(args);
+		const integerOption = (name: string, fallback: number): number => {
+			const match = new RegExp(`(?:^|\\s)--${name}\\s+(\\d+)(?=\\s|$)`).exec(args);
+			return match ? parseDepth(match[1], fallback, `--${name}`) : fallback;
+		};
+		const budgetMatch = /(?:^|\s)--budget-usd\s+(off|\d+(?:\.\d+)?)(?=\s|$)/.exec(args);
+		const cancelMatch = /(?:^|\s)--cancel-on-budget\s+(on|off)(?=\s|$)/.exec(args);
+		const next: RlmChildLimitConfig = {
+			maxChildren: integerOption("children", current.maxChildren),
+			maxConcurrentChildren: integerOption("concurrent", current.maxConcurrentChildren),
+			childBudgetUsd:
+				budgetMatch?.[1] === "off"
+					? undefined
+					: budgetMatch
+						? parseOptionalCost(budgetMatch[1], "--budget-usd")
+						: current.childBudgetUsd,
+			cancelChildrenOnBudgetExceeded: cancelMatch ? cancelMatch[1] === "on" : current.cancelChildrenOnBudgetExceeded,
+		};
+		const remainder = args
+			.replace(/(?:^|\s)--global(?=\s|$)/g, " ")
+			.replace(/(?:^|\s)--(?:children|concurrent|budget-usd|cancel-on-budget)\s+\S+/g, " ")
+			.trim();
+		if (remainder) {
+			throw new Error(
+				"Usage: /rlm-limits [--children N] [--concurrent N] [--budget-usd N|off] [--cancel-on-budget on|off] [--global]",
+			);
+		}
+		this._rlmTreeLimits.update(next);
+		if (global) {
+			this.settingsManager.setRlmMaxChildren(next.maxChildren);
+			this.settingsManager.setRlmMaxConcurrentChildren(next.maxConcurrentChildren);
+			this.settingsManager.setRlmChildBudgetUsd(next.childBudgetUsd);
+			this.settingsManager.setRlmCancelChildrenOnBudgetExceeded(next.cancelChildrenOnBudgetExceeded);
+		}
+		const status = this._rlmTreeLimits.status();
+		return `RLM child limits: ${status.totalChildren}/${status.maxChildren} total, ${status.concurrentChildren}/${status.maxConcurrentChildren} concurrent, budget ${status.childBudgetUsd === undefined ? "off" : `$${status.childBudgetUsd.toFixed(2)}`}, cost $${status.childCostUsd.toFixed(4)}, hard cancellation ${status.cancelChildrenOnBudgetExceeded ? "on" : "off"}.`;
+	}
+
 	private async _executeQueuedSessionCommand(action: QueuedSessionAction): Promise<void> {
 		if (action.payload.kind !== "session_command") throw new Error("Expected a session command action");
 		const input = action.payload;
@@ -6115,6 +6303,15 @@ export class AgentSession {
 				}
 				case "permissions":
 					resultText = this._handlePermissionsSlashCommand(input.command.args);
+					break;
+				case "harness-recover":
+					resultText = this._handleHarnessRecoverSlashCommand(input.command.args);
+					break;
+				case "harness-migrate-ids":
+					resultText = this._handleHarnessMigrateIdsSlashCommand(input.command.args);
+					break;
+				case "rlm-limits":
+					resultText = this._handleRlmLimitsSlashCommand(input.command.args);
 					break;
 			}
 			if (resultText) {
@@ -7830,34 +8027,60 @@ export class AgentSession {
 	}
 
 	private async _reviewAutoRefine(context: AutoRefineReviewRequest, signal?: AbortSignal): Promise<AutoRefineReview> {
+		let review: AutoRefineReview;
 		if (this._autoRefineReviewer) {
-			return this._autoRefineReviewer(context, signal);
+			review = await this._autoRefineReviewer(context, signal);
+		} else {
+			const model = this.model;
+			if (!model) {
+				review = { shouldRefine: false, rationale: "No model selected." };
+			} else {
+				const { apiKey, headers } = await this._getRequiredRequestAuth(model);
+				review = await reviewAutoRefine(
+					this.agent.state.messages,
+					this._loadMergedHarnessState(),
+					this._loadRefinementHistory(),
+					model,
+					apiKey,
+					context,
+					headers,
+					signal,
+					this.thinkingLevel,
+				);
+			}
 		}
-		const model = this.model;
-		if (!model) {
-			return { shouldRefine: false, rationale: "No model selected." };
-		}
-		const { apiKey, headers } = await this._getRequiredRequestAuth(model);
-		return reviewAutoRefine(
-			this.agent.state.messages,
-			this._loadMergedHarnessState(),
-			this._loadRefinementHistory(),
-			model,
-			apiKey,
-			context,
-			headers,
-			signal,
-			this.thinkingLevel,
-		);
+		this._harnessEvents.enqueue({
+			type: "auto_refine_review",
+			trigger: context.reason,
+			shouldRefine: review.shouldRefine,
+		});
+		return review;
 	}
 
 	/** Global harness state overlaid with this session's local state, when persisted. */
 	private _loadMergedHarnessState(): HarnessState {
 		const localHarnessStateDir = this._localHarnessStateDir();
-		return mergeHarnessStates(
-			loadHarnessState(getGlobalHarnessStateDir(), "global"),
-			localHarnessStateDir ? loadHarnessState(localHarnessStateDir, "local") : undefined,
-		);
+		const globalState = loadHarnessState(getGlobalHarnessStateDir(), "global");
+		const localState = localHarnessStateDir ? loadHarnessState(localHarnessStateDir, "local") : undefined;
+		for (const state of [globalState, localState]) {
+			if (!state) continue;
+			const message = state.readOnlyReason
+				? state.readOnlyReason
+				: state.recovery?.restored
+					? `Harness state was restored from ${state.recovery.backupPath}; corrupt bytes remain at ${state.recovery.quarantinePath}.`
+					: undefined;
+			if (message && !this._reportedHarnessDiagnostics.has(message)) {
+				this._reportedHarnessDiagnostics.add(message);
+				this._emit({ type: "refine_failed", error: message });
+			}
+		}
+		const merged = mergeHarnessStates(globalState, localState);
+		const entryIds: string[] = [];
+		for (const records of Object.values(merged.entries)) {
+			for (const [id, entry] of Object.entries(records)) entryIds.push(`${entry.scope ?? "global"}:${id}`);
+		}
+		this._harnessEvents.enqueue({ type: "prompt_exposure", entryIds });
+		return merged;
 	}
 
 	private _loadRefinementHistory(): RefinementResult[] {
@@ -8044,11 +8267,7 @@ export class AgentSession {
 		if (!baselineHarnessStateDir) {
 			throw new Error("Local harness refinement requires a persisted session; use global refinement instead.");
 		}
-		const baselineState = rollbackTarget
-			? loadHarnessState(baselineHarnessStateDir, baselineScope)
-			: baselineScope === "global"
-				? globalPlanningState
-				: localPlanningState!;
+		const baselineState = rollbackTarget ? loadHarnessState(baselineHarnessStateDir, baselineScope) : planningState;
 		const plan = await planRefinement(
 			this.agent.state.messages,
 			planningState,
@@ -8090,6 +8309,8 @@ export class AgentSession {
 			const history = this._loadRefinementHistory();
 			const rollbackTarget = options.rollbackId ? history.find((item) => item.id === options.rollbackId) : undefined;
 			let targetScope = plan.rollbackScope ?? requestedScope;
+			const scopedProposal = normalizeRefinementProposalScope(plan.proposal, targetScope);
+			targetScope = scopedProposal.scope;
 			let targetHarnessStateDir = targetScope === "global" ? globalHarnessStateDir : localHarnessStateDir;
 			if (targetScope === "local" && rollbackTarget?.harnessStatePath) {
 				if (!existsSync(rollbackTarget.harnessStatePath)) {
@@ -8110,29 +8331,21 @@ export class AgentSession {
 			// Re-read the target state immediately before applying so concurrent kernel
 			// (`rlm.harness`) writes during the LLM pass are not clobbered.
 			const state = loadHarnessState(targetHarnessStateDir, targetScope);
-			const proposal = {
-				...plan.proposal,
-				edits: plan.proposal.edits.map((edit) => {
-					const localPrefix = "local:";
-					const globalPrefix = "global:";
-					return {
-						...edit,
-						id: edit.id?.startsWith(localPrefix)
-							? edit.id.slice(localPrefix.length)
-							: edit.id?.startsWith(globalPrefix)
-								? edit.id.slice(globalPrefix.length)
-								: edit.id,
-					};
-				}),
-			};
 			if (this._disposed || refineAbort.signal.aborted) {
 				throw new Error("Refinement cancelled because the session was disposed.");
 			}
-			const result = applyRefinementProposal(state, proposal, {
+			const result = applyRefinementProposal(state, scopedProposal.proposal, {
 				id: plan.id,
 				rollbackOf: plan.rollbackOf,
 				scope: targetScope,
-				baselineState: plan.baselineState,
+				baselineState: plan.baselineState ? baselineForHarnessScope(plan.baselineState, targetScope) : undefined,
+			});
+			this._harnessEvents.enqueue({
+				type: "refinement",
+				refinementId: result.id,
+				appliedIds: result.appliedEdits.filter((edit) => edit.applied).map((edit) => `${edit.kind}:${edit.id}`),
+				failedIds: result.appliedEdits.filter((edit) => !edit.applied).map((edit) => `${edit.kind}:${edit.id}`),
+				rollbackOf: result.rollbackOf,
 			});
 			result.harnessStatePath = saveHarnessState(targetHarnessStateDir, state);
 			if (targetScope === "global") {
@@ -9453,6 +9666,7 @@ export class AgentSession {
 			includeCompactSkill: this._includeCompactSkill,
 			rlmDepth: this._rlmDepth + 1,
 			rlmMaxDepth: this._rlmMaxDepth,
+			rlmTreeLimitCoordinator: this._rlmTreeLimits,
 			rlmParentNodeId: options.id,
 		};
 	}
@@ -9521,6 +9735,7 @@ export class AgentSession {
 					: WorkspaceChangeReview.openOrCreate(cwd, options.sessionDir),
 			rlmDepth: options.rlmDepth,
 			rlmMaxDepth: options.rlmMaxDepth,
+			rlmTreeLimitCoordinator: options.rlmTreeLimitCoordinator,
 			rlmSessionDir: options.sessionDir,
 			rlmParentNodeId: options.rlmParentNodeId,
 			rlmParentAgent: options.parentSession.sessionName ?? options.parentSession.sessionId,
@@ -10168,6 +10383,8 @@ export class AgentSession {
 		const throwIfCancelled = () => {
 			if (run.status === "cancelled") throw new Error(run.error ?? "RLM child cancelled");
 		};
+		const releaseTreeAdmission = this._rlmTreeLimits.admit();
+		let treeAdmissionCommitted = false;
 		this._activeRlmChildRuns.set(run.id, run);
 		const emitChildUpdate = () => {
 			const childModel = childSession?.model ?? modelSelection.model;
@@ -10248,6 +10465,7 @@ export class AgentSession {
 				if (run.status === "cancelled") throw new Error(run.error ?? "RLM child cancelled");
 				if (child.sessionName !== sessionName) child.setSessionName(sessionName);
 				publishChildSession(child);
+				treeAdmissionCommitted = true;
 				throwIfCancelled();
 				run.status = "running";
 				emitChildUpdate();
@@ -10266,6 +10484,10 @@ export class AgentSession {
 						const assistant = event.message as AssistantMessage;
 						if (assistant.stopReason !== "error" && assistant.stopReason !== "aborted") {
 							attributeChildUsage(parentAssistantForUsage?.usage ?? emptyUsage(), assistant.usage);
+							const budgetReached = this._rlmTreeLimits.attributeCost(assistant.usage.cost.total);
+							if (budgetReached && this._rlmTreeLimits.status().cancelChildrenOnBudgetExceeded) {
+								this._cancelActiveRlmChildRuns("RLM child cost threshold reached");
+							}
 							if (parentAssistantForUsage) {
 								const parentEntry = this._findAssistantEntryForMessage(parentAssistantForUsage);
 								if (parentEntry) {
@@ -10458,6 +10680,7 @@ export class AgentSession {
 					}
 				}
 			} finally {
+				releaseTreeAdmission(treeAdmissionCommitted);
 				if (run.detachedDeletion && childRuntime) {
 					try {
 						await this._deleteRlmSubagentSession(run.id, childRuntime.session);

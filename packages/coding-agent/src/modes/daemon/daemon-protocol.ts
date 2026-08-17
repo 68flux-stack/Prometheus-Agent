@@ -59,8 +59,9 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 13 narrows agent-origin reach and roster wire shapes to the nuclear family.
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
 // Revision 15 adds capability-gated desktop runtime controls.
-export const DAEMON_SCHEMA_REVISION = 15;
-export const DAEMON_SCHEMA_ID = "protocol-7-schema-15-709e4403f3c1";
+// Revision 16 advertises root-tree RLM child-limit controls exposed through session commands.
+export const DAEMON_SCHEMA_REVISION = 16;
+export const DAEMON_SCHEMA_ID = "protocol-7-schema-16-1f38a274efcc";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -99,7 +100,8 @@ export type DaemonServerCapability =
 	| "transient_bash"
 	| "session_input_admission"
 	| "prompt_admission_cancellation"
-	| "runtime_controls";
+	| "runtime_controls"
+	| "rlm_child_limits";
 
 export type DaemonReplayStatus = "complete" | "partial" | "unavailable";
 
@@ -138,6 +140,7 @@ export const DAEMON_DEFAULT_SERVER_CAPABILITIES: readonly DaemonServerCapability
 	"session_input_admission",
 	"prompt_admission_cancellation",
 	"runtime_controls",
+	"rlm_child_limits",
 ];
 
 export interface DaemonRuntimeIdentity {

@@ -2376,6 +2376,7 @@ export class AgentDaemon {
 					},
 					rlmDepth: options.rlmDepth,
 					rlmMaxDepth: options.rlmMaxDepth,
+					rlmTreeLimitCoordinator: options.rlmTreeLimitCoordinator,
 					rlmSessionDir: options.sessionDir,
 					rlmParentNodeId: options.rlmParentNodeId,
 					rlmParentAgent: options.parentSession.sessionName ?? options.parentSession.sessionId,

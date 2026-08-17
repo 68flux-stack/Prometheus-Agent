@@ -366,6 +366,7 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 					changeReview: options.isolation !== "worktree" ? options.parentSession.changeReview : undefined,
 					rlmDepth: options.rlmDepth,
 					rlmMaxDepth: options.rlmMaxDepth,
+					rlmTreeLimitCoordinator: options.rlmTreeLimitCoordinator,
 					rlmSessionDir: options.sessionDir,
 					rlmParentNodeId: options.rlmParentNodeId,
 					rlmParentAgent: options.parentSession.sessionName ?? options.parentSession.sessionId,

@@ -92,6 +92,12 @@ describe("daemon protocol helpers", () => {
 		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).toContain("runtime_controls");
 	});
 
+	it("advertises optional root-tree RLM child limits without a protocol-version bump", () => {
+		expect(DAEMON_PROTOCOL_VERSION).toBe(7);
+		expect(DAEMON_SCHEMA_REVISION).toBeGreaterThanOrEqual(16);
+		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).toContain("rlm_child_limits");
+	});
+
 	it("schema-gates the RLM max depth commands at their introducing revision", () => {
 		expect(DAEMON_COMMAND_COMPATIBILITY.get_rlm_max_depth_status).toEqual({ minProtocol: 7, minSchemaRevision: 11 });
 		expect(DAEMON_COMMAND_COMPATIBILITY.set_rlm_max_depth).toEqual({ minProtocol: 7, minSchemaRevision: 11 });

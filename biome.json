@@ -32,6 +32,7 @@
 			"!**/test-sessions.ts",
 			"!**/models.generated.ts",
 			"!packages/mom/data/**/*",
+			"!**/.pytest_cache",
 			"!!**/node_modules",
 			"!.worktrees",
 			"!.claude/worktrees"

@@ -399,6 +399,7 @@ export interface IpythonToolDetails {
 	stdout?: string;
 	stderr?: string;
 	result?: string;
+	fullOutputPaths?: ExecuteResult["fullOutputPaths"];
 	/** Diffs streamed from file edits, rendered by the IPython cell. */
 	diffs?: KernelDiffDisplay[];
 	/** Media attachments loaded into context (e.g. by the attach-image skill). */
@@ -974,6 +975,7 @@ export function createIpythonToolDefinition(
 						stdout: r.stdout,
 						stderr: r.stderr,
 						result: r.result,
+						fullOutputPaths: r.fullOutputPaths,
 						diffs: r.diffs,
 						attachments: r.attachments,
 						sentAgentMessages: r.sentAgentMessages,
