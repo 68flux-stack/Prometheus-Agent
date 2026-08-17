@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld("desktopAgent", {
 	getFilePath: (file) => webUtils.getPathForFile(file),
 	savePastedImage: (payload) => ipcRenderer.invoke("files:save-pasted-image", payload),
 	getImagePreview: (filePath) => ipcRenderer.invoke("files:image-preview", { filePath }),
+	getImageAttachment: (filePath) => ipcRenderer.invoke("files:image-attachment", { filePath }),
 	startDictation: () => ipcRenderer.invoke("dictation:start"),
 	openPath: (target) => ipcRenderer.invoke("shell:open-path", target),
 	showItem: (target) => ipcRenderer.invoke("shell:show-item", target),

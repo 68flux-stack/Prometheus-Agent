@@ -3,7 +3,7 @@
 // nothing, every chat switch shows an empty conversation for several seconds.
 import { createRequire } from "node:module";
 import Module from "node:module";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,4 +67,10 @@ assert(messages.length === 2, `reads the transcript the engine would return (got
 assert(messages[0].role === "user" && messages[1].role === "assistant", "keeps roles and order");
 assert(main.readSessionMessages({ sessionPath: join(sessionDir, "missing.jsonl") }).messages.length === 0, "a missing transcript reads as empty rather than throwing");
 assert(main.readSessionMessages({}).messages.length === 0, "a session that has not been minted yet reads as empty");
+const imagePath = join(workspace, "attached.png");
+const imageBytes = Buffer.from("iVBORw0KGgo=", "base64");
+writeFileSync(imagePath, imageBytes);
+const image = main.readImageAttachment({ filePath: imagePath });
+assert(image.type === "image" && image.mimeType === "image/png", "turns an attached image into a provider image block");
+assert(image.data === imageBytes.toString("base64"), "keeps the original image bytes instead of sending its path");
 if (!process.exitCode) console.log("PASS");

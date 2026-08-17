@@ -593,7 +593,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			if (!forkedSessionPath) {
 				throw new Error("Failed to create forked session");
 			}
-			const sessionManager = SessionManager.open(forkedSessionPath, sessionDir);
+			// createBranchedSession mutates its source manager and defers creating an
+			// empty branch file until its first assistant response. Reopening that
+			// not-yet-persisted path loses its header and falls back to process.cwd().
+			const sessionManager = sourceManager;
 			const lease = this.acquireReplacementLease(sessionManager.getSessionFile());
 			await this.teardownForReplacement("fork", sessionManager.getSessionFile(), lease);
 			await this.buildAndApplyReplacement(

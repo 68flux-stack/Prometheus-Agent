@@ -1033,9 +1033,6 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
-	if (isDaemonWorkerProcess()) {
-		waitForDaemonWorkerStartupGate();
-	}
 	installFileLogSink();
 	if (isDaemonCatalogProcess()) {
 		await runDaemonCatalogProcess();
@@ -1316,6 +1313,13 @@ export async function main(args: string[], options?: MainOptions) {
 	if (appMode === "daemon" && parsed.listModels === undefined) {
 		printTimings();
 		if (isDaemonWorkerProcess()) {
+			// The gate is held until here, not at the top of main, so a worker can be
+			// spawned before the session that will live in it: everything above is
+			// interpreter start, config reads and idempotent migrations, none of which
+			// touches the session, its socket or its leases. The supervisor commits
+			// the gate when it has work, and a worker it never claims is cancelled by
+			// the gate closing — same contract, just after the expensive part.
+			waitForDaemonWorkerStartupGate();
 			await runDaemonMode({
 				socketPath: parsed.daemonSocket,
 				defaultSessionConfig: daemonDefaultSessionConfig,

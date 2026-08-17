@@ -50,6 +50,8 @@ import {
 	resetApiProviders,
 	supportsFastMode,
 } from "@earendil-works/pi-ai";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
@@ -285,7 +287,7 @@ import { createAllToolDefinitions } from "./tools/index.js";
 import { IpythonKernelProvisioner } from "./tools/ipython.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import { addAssistantUsage, emptyUsage } from "./usage.js";
-import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR, WEBSEARCH_SKILL_NAME } from "./websearch-credential.js";
+import { EXA_CREDENTIAL_ID, EXA_ENV_VAR, WEBSEARCH_SKILL_NAME } from "./websearch-credential.js";
 import { WorkspaceChangeReview, type WorkspaceMutationDiff } from "./workspace-change-review.js";
 
 export type { GoalState, GoalStatus } from "./goals.js";
@@ -1282,6 +1284,9 @@ export class AgentSession {
 	private _agentMessageController?: AgentSessionMessageController;
 	private _agentObserveController?: AgentObserveController;
 	private _mcpManager?: McpManager;
+	// Reused across "websearch.search" calls (Windows Plan Mode only) so repeat
+	// searches skip the TCP+TLS handshake and MCP initialize round trip.
+	private _exaMcpClient?: { client: McpClient; apiKey: string | undefined };
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
@@ -9012,6 +9017,25 @@ export class AgentSession {
 		return { granted: true, root, message: `${root} is accessible for the rest of this conversation.` };
 	}
 
+	/** Connected Exa MCP client, reused across calls; reconnects if the apiKey changes or a call fails. */
+	private async _getExaMcpClient(apiKey: string | undefined): Promise<McpClient> {
+		if (this._exaMcpClient && this._exaMcpClient.apiKey === apiKey) {
+			return this._exaMcpClient.client;
+		}
+		if (this._exaMcpClient) {
+			await this._exaMcpClient.client.close().catch(() => {});
+			this._exaMcpClient = undefined;
+		}
+		const transport = new StreamableHTTPClientTransport(new URL("https://mcp.exa.ai/mcp"), {
+			requestInit: apiKey ? { headers: { "x-api-key": apiKey } } : undefined,
+		});
+		const client = new McpClient({ name: "prometheus-coding-agent", version: "1.0.0" });
+		await client.connect(transport);
+		this._exaMcpClient = { client, apiKey };
+		this.registerDisposeCallback(() => client.close().catch(() => {}));
+		return client;
+	}
+
 	private _createKernelHostHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
@@ -9036,7 +9060,7 @@ export class AgentSession {
 				if (!this._modelVisibleSkills().some((skill) => skill.name === WEBSEARCH_SKILL_NAME)) {
 					throw new Error("Web search is not available in this session");
 				}
-				if (this._executionPolicy.permission("network", "google.serper.dev", "allow") !== "allow") {
+				if (this._executionPolicy.permission("network", "mcp.exa.ai", "allow") !== "allow") {
 					throw new Error("Web search is denied by the current network permission rules");
 				}
 				if (typeof payload.query !== "string" || !payload.query.trim() || payload.query.length > 2_000) {
@@ -9050,24 +9074,39 @@ export class AgentSession {
 				if (!Number.isInteger(numResults) || (numResults as number) < 1 || (numResults as number) > 10) {
 					throw new Error("websearch.search num_results must be between 1 and 10");
 				}
-				const envKey = process.env[SERPER_ENV_VAR]?.trim();
-				const credential = this._modelRegistry.authStorage.get(SERPER_CREDENTIAL_ID);
+				// Exa's MCP server works anonymously; an API key (env var or stored via
+				// /login) is optional and only raises the free-tier rate limit.
+				const envKey = process.env[EXA_ENV_VAR]?.trim();
+				const credential = this._modelRegistry.authStorage.get(EXA_CREDENTIAL_ID);
 				const apiKey =
 					envKey || (credential?.type === "api_key" ? resolveConfigValue(credential.key)?.trim() : undefined);
-				if (!apiKey) throw new Error("Web search is not configured. Add a Serper API key through /login.");
-				const response = await fetch("https://google.serper.dev/search", {
-					method: "POST",
-					headers: { "Content-Type": "application/json", "X-API-KEY": apiKey },
-					body: JSON.stringify({ q: payload.query }),
-					signal: AbortSignal.timeout((timeout as number) * 1_000),
-				});
-				if (!response.ok) {
-					const body = (await response.text()).slice(0, 2_000);
-					throw new Error(`Serper search error (${response.status}): ${body}`);
+				const callExa = async () => {
+					const client = await this._getExaMcpClient(apiKey);
+					return client.callTool(
+						{ name: "web_search_exa", arguments: { query: payload.query, numResults } },
+						undefined,
+						{ timeout: (timeout as number) * 1_000 },
+					);
+				};
+				let result: Awaited<ReturnType<typeof callExa>>;
+				try {
+					result = await callExa();
+				} catch {
+					// Reused client may hold a stale/closed connection; drop and retry once.
+					if (this._exaMcpClient) {
+						await this._exaMcpClient.client.close().catch(() => {});
+						this._exaMcpClient = undefined;
+					}
+					result = await callExa();
 				}
-				const data: unknown = await response.json();
-				if (!isObjectRecord(data)) throw new Error("Serper returned an invalid response");
-				return { data };
+				const text = Array.isArray(result.content)
+					? result.content
+							.map((block) => (block && typeof block === "object" && "text" in block ? block.text : undefined))
+							.filter((value): value is string => typeof value === "string")
+							.join("\n")
+					: "";
+				if (result.isError) throw new Error(text || "Exa search error");
+				return { text };
 			},
 			"jobs.start": async (payload) => {
 				if (typeof payload.command !== "string" || !payload.command.trim()) {
@@ -9298,7 +9337,7 @@ export class AgentSession {
 			env.PROMETHEUS_CODING_AGENT_DIR = this._agentDir;
 		}
 
-		if (process.env[SERPER_ENV_VAR]?.trim()) {
+		if (process.env[EXA_ENV_VAR]?.trim()) {
 			return;
 		}
 		// Inject only when a websearch skill (bundled or custom) is actually loaded,
@@ -9306,13 +9345,13 @@ export class AgentSession {
 		if (!this._resourceLoader.getSkills().skills.some((skill) => skill.name === WEBSEARCH_SKILL_NAME)) {
 			return;
 		}
-		const cred = this._modelRegistry.authStorage.get(SERPER_CREDENTIAL_ID);
+		const cred = this._modelRegistry.authStorage.get(EXA_CREDENTIAL_ID);
 		if (cred?.type !== "api_key") {
 			return;
 		}
 		const resolved = resolveConfigValue(cred.key)?.trim();
 		if (resolved) {
-			env[SERPER_ENV_VAR] = resolved;
+			env[EXA_ENV_VAR] = resolved;
 		}
 	}
 

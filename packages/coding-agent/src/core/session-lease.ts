@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -125,14 +125,48 @@ export function getWindowsProcessStartId(pid: number, query: ProcessQuery = runP
 		return undefined;
 	}
 	try {
-		const startTicks = query("powershell.exe", [
-			"-NoLogo",
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			`([System.Diagnostics.Process]::GetProcessById(${pid})).StartTime.ToUniversalTime().Ticks`,
-		]).trim();
+		const startTicks = query("powershell.exe", windowsProcessStartIdArgs(pid)).trim();
 		return /^\d+$/.test(startTicks) ? `win:${startTicks}` : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function windowsProcessStartIdArgs(pid: number): string[] {
+	return [
+		"-NoLogo",
+		"-NoProfile",
+		"-NonInteractive",
+		"-Command",
+		`([System.Diagnostics.Process]::GetProcessById(${pid})).StartTime.ToUniversalTime().Ticks`,
+	];
+}
+
+/**
+ * Same identity as {@link getProcessStartId} without blocking the event loop.
+ *
+ * On Windows the only source is a PowerShell process, whose cold start is
+ * hundreds of milliseconds — synchronously, that freezes every other client of
+ * a long-lived process. Callers that already run on a promise should use this.
+ * Elsewhere the lookup is a /proc read, so the sync path is kept.
+ */
+export async function getProcessStartIdAsync(pid: number): Promise<string | undefined> {
+	if (!Number.isInteger(pid) || pid <= 0) {
+		return undefined;
+	}
+	if (process.platform !== "win32") {
+		return getProcessStartId(pid);
+	}
+	try {
+		const startTicks = await new Promise<string>((resolveQuery, rejectQuery) => {
+			execFile(
+				"powershell.exe",
+				windowsProcessStartIdArgs(pid),
+				{ encoding: "utf8", windowsHide: true },
+				(error, stdout) => (error ? rejectQuery(error) : resolveQuery(stdout)),
+			);
+		});
+		return /^\d+$/.test(startTicks.trim()) ? `win:${startTicks.trim()}` : undefined;
 	} catch {
 		return undefined;
 	}

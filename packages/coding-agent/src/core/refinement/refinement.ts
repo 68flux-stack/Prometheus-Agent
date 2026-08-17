@@ -474,7 +474,7 @@ export function formatHarnessStateForPrompt(
 		// IPython sessions, include the native `rlm` invocation hint.
 		if (kind === "subagent" && entries.length > 0 && includeIpythonExamples) {
 			lines.push(
-				`${kind}: ${entries.length} (invoke a spec by turning it into a concise task prompt and spawning with \`await rlm('<task>')\`; admission returns a child handle, never the answer)`,
+				`${kind}: ${entries.length} (invoke a spec by turning it into a concise task prompt and spawning with \`await rlm('<task>')\`; admission returns a child handle, never the answer). A matching spec is not a reason to delegate: spawn only when the sub-task also clears the delegation bar in the sub-agent guidance, and never do the child's work yourself after spawning it.`,
 			);
 		} else {
 			lines.push(`${kind}: ${entries.length}`);

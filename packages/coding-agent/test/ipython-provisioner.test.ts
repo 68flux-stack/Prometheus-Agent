@@ -269,50 +269,80 @@ describe("IpythonKernelProvisioner", () => {
 		expect(internals.startupListeners.has(onProgress)).toBe(false);
 	});
 
-	it("applies shell settings to bash cells after leading blank lines", async () => {
-		const execute = vi.fn<KernelManager["execute"]>().mockResolvedValueOnce(okExecuteResult());
-		const manager = { execute } as unknown as KernelManager;
-		const ensure = vi.fn(async () => manager);
-		const kill = vi.fn(async () => {});
-		const provisioner = { ensure, kill } as unknown as IpythonKernelProvisioner;
+	it("runs plain bash cells outside the kernel with shell settings applied", async () => {
+		const ensure = vi.fn();
+		const provisioner = { ensure, kill: vi.fn() } as unknown as IpythonKernelProvisioner;
 		const tool = createIpythonToolDefinition(tempDir, {
 			provisioner,
 			commandPrefix: "export TEST_PREFIX=1",
-			shellPath: "/custom/bash",
 		});
 
-		await tool.execute(
+		const result = await tool.execute(
 			"tool-call",
-			{ code: "\n \r\n\t%%bash\r\necho body" },
+			{
+				code: `
+
+	%%bash
+echo $TEST_PREFIX-body`,
+			},
 			undefined,
 			undefined,
 			{} as ExtensionContext,
 		);
 
-		expect(execute).toHaveBeenCalledWith(
-			"\n \r\n\t%%script /custom/bash\r\nexport TEST_PREFIX=1\necho body",
-			expect.objectContaining({ signal: undefined, onStream: expect.any(Function) }),
-		);
+		expect(result.content).toEqual([{ type: "text", text: "1-body\n" }]);
+		expect(result.details.status).toBe("ok");
+		expect(ensure).not.toHaveBeenCalled();
 	});
 
-	it("double-quotes a shell path with spaces so IPython's arg_split keeps it in one token", async () => {
+	it("keeps bash magics that mutate the namespace on the kernel", async () => {
 		const execute = vi.fn<KernelManager["execute"]>().mockResolvedValueOnce(okExecuteResult());
 		const manager = { execute } as unknown as KernelManager;
 		const provisioner = {
 			ensure: vi.fn(async () => manager),
 			kill: vi.fn(async () => {}),
 		} as unknown as IpythonKernelProvisioner;
-		const tool = createIpythonToolDefinition(tempDir, {
-			provisioner,
-			shellPath: "C:\\Program Files\\Git\\bin\\bash.exe",
+		const tool = createIpythonToolDefinition(tempDir, { provisioner });
+
+		await tool.execute(
+			"tool-call",
+			{ code: "%%bash --out captured\necho hi" },
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+
+		expect(execute).toHaveBeenCalledWith("%%bash --out captured\necho hi", expect.anything());
+	});
+
+	it("runs sibling plain bash cells concurrently", async () => {
+		const provisioner = { ensure: vi.fn(), kill: vi.fn() } as unknown as IpythonKernelProvisioner;
+		const tool = createIpythonToolDefinition(tempDir, { provisioner });
+		expect(tool.executionMode).toBe("parallel");
+		const waitForPeer = (own: string, peer: string) => ({
+			code: `%%bash\ntouch ${own}\nfor i in {1..50}; do [ -f ${peer} ] && exit 0; sleep 0.05; done; exit 1`,
 		});
 
-		await tool.execute("tool-call", { code: "%%bash\necho hi" }, undefined, undefined, {} as ExtensionContext);
+		const [first, second] = await Promise.all([
+			tool.execute(
+				"first",
+				waitForPeer("first-ready", "second-ready"),
+				undefined,
+				undefined,
+				{} as ExtensionContext,
+			),
+			tool.execute(
+				"second",
+				waitForPeer("second-ready", "first-ready"),
+				undefined,
+				undefined,
+				{} as ExtensionContext,
+			),
+		]);
 
-		expect(execute).toHaveBeenCalledWith(
-			'%%script "C:\\Program Files\\Git\\bin\\bash.exe"\necho hi',
-			expect.anything(),
-		);
+		expect(first.details.status).toBe("ok");
+		expect(second.details.status).toBe("ok");
+		expect(provisioner.ensure).not.toHaveBeenCalled();
 	});
 
 	it("lets the user wait when an interrupted kernel is still busy", async () => {

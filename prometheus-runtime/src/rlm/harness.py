@@ -762,8 +762,8 @@ class HarnessState:
             "harness skill entries are Python REPL skills and must include a Python reference plus arguments. "
             "Spawn a subagent spec by composing a concise task prompt and calling "
             "handle = await rlm('sub-task'); admission returns immediately with rlm_child_id, name, session_dir, "
-            "and model, never the child's answer. Results arrive only through explicit agent_message replies or "
-            "files; children reply with await agent_message.send(message, receiver_role='parent'). Use "
+            "and model, never the child's answer. A child's final response is relayed automatically; "
+            "agent_message is only for progress updates or intermediate findings. Use "
             "await rlm.list_subagents() to recover direct child handles and await agent_message.send(..., "
             "receiver_role='child', receiver_name=handle.name) for follow-ups.",
         ]

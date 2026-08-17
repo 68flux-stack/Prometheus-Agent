@@ -104,11 +104,19 @@ vi.mock("../src/cli/subprocess-launch.js", async (importOriginal) => {
 vi.mock("../src/core/session-lease.js", async (importOriginal) => {
 	const actual = (await importOriginal()) as Record<string, unknown> & {
 		getProcessStartId(pid: number): string | undefined;
+		getProcessStartIdAsync(pid: number): Promise<string | undefined>;
 	};
 	return {
 		...actual,
 		getProcessStartId(pid: number): string | undefined {
 			return workerLaunchTestState.forceMissingProcessStartId ? undefined : actual.getProcessStartId(pid);
+		},
+		// The launch path uses the async variant; it has to honour the same seam or
+		// these fixtures silently start shelling out for a made-up pid.
+		getProcessStartIdAsync(pid: number): Promise<string | undefined> {
+			return workerLaunchTestState.forceMissingProcessStartId
+				? Promise.resolve(undefined)
+				: actual.getProcessStartIdAsync(pid);
 		},
 	};
 });
@@ -535,6 +543,7 @@ describe("daemon worker supervisor monitoring", () => {
 		let assertionCount = 0;
 		const workers = new Map<string, unknown>();
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			...createSupervisorSnapshotState(),
 			defaultSessionConfig: { cwd: root, agentDir: root },
 			descriptorDir,
@@ -608,6 +617,9 @@ describe("daemon worker supervisor monitoring", () => {
 			}),
 			connectWorker,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 		}) as {
 			launchWorker(command: { type: "create"; config: { cwd: string; agentDir: string } }): Promise<unknown>;
@@ -671,6 +683,9 @@ describe("daemon worker supervisor monitoring", () => {
 			subscribeWorker: vi.fn(async () => undefined),
 			refreshWorkerSummaries: vi.fn(async () => undefined),
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 		}) as {
 			launchWorker(command: {
@@ -734,6 +749,9 @@ describe("daemon worker supervisor monitoring", () => {
 				Reflect.apply(persistWorker, this, [worker]);
 			}),
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 		}) as {
 			launchWorker(command: { type: "create"; config: { cwd: string; agentDir: string } }): Promise<unknown>;
@@ -795,6 +813,9 @@ describe("daemon worker supervisor monitoring", () => {
 			}),
 			deferWorkerRecovery,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 		}) as {
 			launchWorker(
@@ -881,6 +902,9 @@ describe("daemon worker supervisor monitoring", () => {
 			stopWorker: controlledStopWorker,
 			deferWorkerRecovery,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 		}) as {
 			shuttingDown: boolean;
@@ -928,6 +952,7 @@ describe("daemon worker supervisor monitoring", () => {
 			shutdown(exitCode: number, stopWorkers: boolean, relaunch?: boolean, forceWorkers?: boolean): Promise<never>;
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			shuttingDown: false,
 			signalCleanupHandlers: [],
 			workers: new Map(),
@@ -1050,6 +1075,9 @@ describe("daemon worker supervisor monitoring", () => {
 			assertRecoveryAllowed,
 			persistWorker,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			recoverWorker,
 		}) as DeferredRecoveryHarness;
 
@@ -1109,6 +1137,9 @@ describe("daemon worker supervisor monitoring", () => {
 			assertRecoveryAllowed,
 			persistWorker,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			recoverWorker,
 		}) as DeferredRecoveryHarness;
 
@@ -1180,6 +1211,9 @@ describe("daemon worker supervisor monitoring", () => {
 			assertRecoveryAllowed,
 			persistWorker,
 			syncAgentPeers: vi.fn(async () => undefined),
+			// These fixtures count spawned processes; the spare a launch primes for
+			// the next session is a second, unrelated spawn.
+			primeSpareWorker: vi.fn(),
 			recoverWorker,
 		}) as DeferredRecoveryHarness;
 
@@ -1227,6 +1261,7 @@ describe("daemon worker supervisor monitoring", () => {
 			const syncAgentPeers = vi.fn(async () => undefined);
 			const recoverWorker = vi.fn(async () => undefined);
 			const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+				primeSpareWorker: vi.fn(),
 				...createSupervisorSnapshotState(),
 				workers: new Map([[worker.descriptor.workerId, worker]]),
 				shuttingDown: false,
@@ -1296,6 +1331,7 @@ describe("daemon worker supervisor monitoring", () => {
 			worker.descriptor.lifecycle = "ready";
 		});
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			persistWorker,
 			recoverWorker,
@@ -1334,6 +1370,7 @@ describe("daemon worker supervisor monitoring", () => {
 			intentionalStop: false,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			shuttingDown: false,
 		}) as RecoveryHarness;
@@ -1382,6 +1419,7 @@ describe("daemon worker supervisor monitoring", () => {
 			stopRevision: 0,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			shuttingDown: false,
 			connectWorker: vi.fn(),
@@ -1451,6 +1489,7 @@ describe("daemon worker supervisor monitoring", () => {
 			launchWorker: vi.fn(async () => worker),
 			persistWorker: vi.fn(),
 			syncAgentPeers: vi.fn(async () => {}),
+			primeSpareWorker: vi.fn(),
 			log: vi.fn(),
 			assertRecoveryAllowed: vi.fn(async () => {}),
 		}) as RecoveryHarness;
@@ -1507,6 +1546,7 @@ describe("daemon worker supervisor monitoring", () => {
 			stopRevision: 0,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			shuttingDown: false,
 			connectWorker: vi.fn(async () => ({})),
@@ -1547,6 +1587,7 @@ describe("daemon worker supervisor monitoring", () => {
 				})}\n`,
 			);
 			const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+				primeSpareWorker: vi.fn(),
 				descriptorDir,
 				socketPath: "/tmp/supervisor.sock",
 				workers: new Map(),
@@ -1619,6 +1660,7 @@ describe("daemon worker supervisor monitoring", () => {
 		};
 		const seed = vi.fn();
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			clients: new Set([client]),
 			streamReconstructor: { seed },
@@ -1672,6 +1714,7 @@ describe("daemon worker supervisor monitoring", () => {
 			attachedActiveSessionIds: new Set<string>(),
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			clients: new Set([client]),
 		}) as {
@@ -1706,6 +1749,7 @@ describe("daemon worker supervisor monitoring", () => {
 			attachedActiveSessionIds: new Set<string>(),
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			clients: new Set([client]),
 			protocolClientIds: new Map(),
@@ -1746,6 +1790,7 @@ describe("daemon worker supervisor monitoring", () => {
 		};
 		const catchUpClient = vi.fn(async () => undefined);
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			clients: new Set([client]),
 			streamReconstructor: { observe: vi.fn() },
 			catchUpClient,
@@ -1781,6 +1826,7 @@ describe("daemon worker supervisor monitoring", () => {
 		const requestWorker = vi.fn(async () => ({ success: true }));
 		const worker: SubscriptionWorker = { client: { requestWorker } };
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			clients: new Set(),
 		}) as {
 			subscribeWorker(worker: SubscriptionWorker, activeSessionId: string): Promise<void>;
@@ -1839,6 +1885,7 @@ describe("daemon worker supervisor monitoring", () => {
 			attachedActiveSessionIds: new Set<string>(),
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([[worker.descriptor.workerId, worker]]),
 			clients: new Set([client]),
 		}) as {
@@ -1902,6 +1949,7 @@ describe("daemon worker supervisor monitoring", () => {
 		const markInterrupted = vi.fn(async () => undefined);
 		const kill = vi.spyOn(process, "kill").mockReturnValue(true);
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			catalog: { markInterrupted },
 			log: vi.fn(),
 			assertRecoveryAllowed: vi.fn(async () => {}),
@@ -1939,6 +1987,7 @@ describe("daemon worker supervisor monitoring", () => {
 			client,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([["worker", worker]]),
 		}) as { prepareUpdateRestartFenced(): Promise<unknown> };
 		await expect(supervisor.prepareUpdateRestartFenced()).rejects.toThrow(error);
@@ -1966,6 +2015,7 @@ describe("daemon worker supervisor monitoring", () => {
 			client,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([["worker", worker]]),
 			validateAndPersistUpdateManifest: vi.fn(),
 			stopWorker: vi.fn(async () => undefined),
@@ -1994,6 +2044,7 @@ describe("daemon worker supervisor monitoring", () => {
 		} as unknown as DaemonSocketClient;
 		const mutationDrain = { begin: vi.fn(), end: vi.fn() };
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			ready: Promise.resolve(),
 			workers: new Map(),
 			protocolClientIds: new WeakMap(),
@@ -2040,6 +2091,7 @@ describe("daemon worker supervisor monitoring", () => {
 		} as unknown as DaemonSocketClient;
 		const mutationDrain = { begin: vi.fn(), end: vi.fn() };
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			ready: Promise.resolve(),
 			workers: new Map(),
 			protocolClientIds: new WeakMap(),
@@ -2084,6 +2136,7 @@ describe("daemon worker supervisor monitoring", () => {
 			sessions: [],
 		}));
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			mutationDrain,
 			workers: new Map(),
 			prepareUpdateRestartFenced: prepareFenced,
@@ -2144,6 +2197,7 @@ describe("daemon worker supervisor monitoring", () => {
 			client: undefined,
 		};
 		const supervisor = Object.assign(Object.create(DaemonSupervisor.prototype), {
+			primeSpareWorker: vi.fn(),
 			workers: new Map([["resident-1", worker]]),
 		}) as {
 			prepareUpdateRestartFenced(): Promise<unknown>;

@@ -40,7 +40,12 @@ import {
 	type IdleEvictionMinutes,
 	type WorkerEvictionSnapshot,
 } from "../../core/session-action-store.js";
-import { canonicalSessionPath, getProcessStartId, SessionAlreadyActiveError } from "../../core/session-lease.js";
+import {
+	canonicalSessionPath,
+	getProcessStartId,
+	getProcessStartIdAsync,
+	SessionAlreadyActiveError,
+} from "../../core/session-lease.js";
 import { readSessionInfo, type SessionInfo } from "../../core/session-manager.js";
 import { SettingsManager } from "../../core/settings-manager.js";
 import { signalProcessGroupOrProcess } from "../../utils/child-process.js";
@@ -263,6 +268,28 @@ interface ResidentWorker {
 	ownerCleanupTimer?: ReturnType<typeof setTimeout>;
 	promotedOwnerClientId?: string;
 	updateRestartPrepareClient?: DaemonWorkerClient;
+}
+
+/** A spawned worker process before any session has been created in it. */
+interface WorkerProcess {
+	child: ChildProcess;
+	childClosed: Promise<void>;
+	startupGate: Writable;
+	workerId: string;
+	rootActiveSessionId: string;
+	socketPath: string;
+	token: string;
+	descriptorPath: string;
+	recoveryJournalPath: string;
+	orphanProcessJournalPath: string;
+}
+
+/** A worker process spawned ahead of demand, waiting on its startup gate. */
+interface SpareWorkerProcess extends WorkerProcess {
+	/** The directory it was spawned in; a worker cannot be moved to another. */
+	cwd: string;
+	/** Resolved while the spare waits, so the launch does not pay for it. */
+	processStartId: Promise<string | undefined>;
 }
 
 interface SnapshotDuplicateValidation {
@@ -606,6 +633,11 @@ export class DaemonSupervisor {
 	private readonly streamReconstructor = new CompactAssistantStreamReconstructor();
 	private readonly compactCatchupInProgress = new Set<string>();
 	private agentPeerSyncQueue: Promise<void> = Promise.resolve();
+	private queuedAgentPeerSync: Promise<void> | undefined;
+	/** At most one, held for the directory the last session was opened in. */
+	private spareWorker: SpareWorkerProcess | undefined;
+	/** Exit of every spare cancelled so far, including ones discarded in the background. */
+	private spareWorkerExit: Promise<void> = Promise.resolve();
 	private readonly pendingSessionNames = new Set<string>();
 	private readonly catalog: DaemonCatalogClient;
 	private readonly settingsManager: SettingsManager;
@@ -707,6 +739,12 @@ export class DaemonSupervisor {
 			this.scheduleIdleEvictionSweep();
 			await this.ownership.updatePhase("owner");
 			this.log(`Prometheus daemon supervisor ${this.generation} listening on ${this.socketPath}`);
+			// A daemon started for a workspace is about to be asked for a session in
+			// it — the client that spawned it is waiting on exactly that. Starting the
+			// worker now overlaps it with the rest of the client's own startup.
+			if (this.defaultSessionConfig.cwd) {
+				this.primeSpareWorker(this.defaultSessionConfig.cwd);
+			}
 			this.markReady();
 		} catch (error) {
 			const startupError = error instanceof Error ? error : new Error(String(error));
@@ -1429,7 +1467,7 @@ export class DaemonSupervisor {
 					const response = await this.forwardToWorker(worker, withoutSupervisorCreateFields(command));
 					if (response.success && isSessionSummary(response.data)) {
 						await this.refreshWorkerSummaries(worker);
-						await this.syncAgentPeers().catch(() => undefined);
+						void this.syncAgentPeers().catch(() => undefined);
 						return { ...response, id: command.id, data: this.publicSummary(worker, response.data) };
 					}
 					return responseWithId(response, command.id);
@@ -1922,7 +1960,7 @@ export class DaemonSupervisor {
 		await Promise.all(
 			[...this.workers.values()].map((worker) => this.refreshWorkerSummaries(worker).catch(() => undefined)),
 		);
-		await this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
+		void this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
 		const clientOwnedWorkers = [...this.workers.values()].filter((worker) => !this.isVisibleWorker(worker));
 		const active = [...this.workers.values()]
 			.filter(
@@ -2084,46 +2122,32 @@ export class DaemonSupervisor {
 			worker.ownerCleanupTimer = undefined;
 		}
 		worker.launchEnv = undefined;
-		await this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
+		void this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
 	}
 
-	private async launchWorker(
-		command: DaemonCreateCommand,
+	/**
+	 * Spawn a worker process and stop before its startup gate. The child pays the
+	 * interpreter start and bundle evaluation on its own, then blocks reading the
+	 * gate, so this returns long before the process is usable — which is what
+	 * lets a spare be started ahead of the session that will live in it.
+	 */
+	private spawnWorkerProcess(
+		cwd: string,
+		launchEnv: Record<string, string> | undefined,
 		existing?: ResidentWorker,
-		ownerClientId?: string,
-	): Promise<ResidentWorker> {
-		await this.assertRecoveryAllowed();
-		if (existing && this.isWorkerRecoveryCancelled(existing)) {
-			throw new Error(`Session worker ${existing.descriptor.workerId} recovery was cancelled`);
-		}
-		const recoveryStopRevision = existing?.stopRevision;
-		const launchEnv =
-			ownerClientId || existing?.descriptor.ownerClientId ? (command.launchEnv ?? existing?.launchEnv) : undefined;
-		const createCommand: DaemonCreateCommand = {
-			...withoutSupervisorCreateFields(command),
-			// The merge below fills cwd from the daemon's own default config, which
-			// leaves the worker unable to tell "the caller wants this directory" from
-			// "the daemon happens to run there" — and the worker treats config.cwd as
-			// an override of the session's recorded cwd. Capture the caller's intent
-			// before it is lost, or every session opened by path is bound to whichever
-			// directory started the daemon.
-			cwdOverride: command.cwdOverride ?? command.config?.cwd,
-			config: mergeAgentSessionRuntimeConfig(this.defaultSessionConfig, command.config),
-		};
+	): WorkerProcess {
 		const workerId = existing?.descriptor.workerId ?? createActiveSessionId();
 		const rootActiveSessionId = existing?.descriptor.rootActiveSessionId ?? createActiveSessionId();
 		const socketPath = existing?.descriptor.socketPath ?? workerSocketPath(this.socketPath, workerId);
 		const token = existing?.descriptor.authenticationToken ?? randomBytes(32).toString("base64url");
-		const now = new Date().toISOString();
 		const descriptorPath = existing?.descriptorPath ?? join(this.descriptorDir, `${workerId}.json`);
 		const recoveryJournalPath =
 			existing?.descriptor.recoveryJournalPath ?? join(this.descriptorDir, `${workerId}.recovery.jsonl`);
 		const orphanProcessJournalPath =
 			existing?.descriptor.orphanProcessJournalPath ?? join(this.descriptorDir, `${workerId}.orphans.jsonl`);
 		const launch = createCliSubprocessLaunchSpec(["--mode", "daemon", "--daemon-socket", socketPath]);
-		await this.assertRecoveryAllowed();
 		const child: ChildProcess = spawn(launch.command, launch.args, {
-			cwd: createCommand.config?.cwd ?? process.cwd(),
+			cwd,
 			detached: true,
 			env: createCliSubprocessEnv({
 				...process.env,
@@ -2155,6 +2179,157 @@ export class DaemonSupervisor {
 			);
 		});
 		const startupGate = child.stdio[WORKER_STARTUP_GATE_FD];
+		if (!(startupGate instanceof Writable)) {
+			child.kill();
+			throw new Error("Failed to create daemon session worker startup gate");
+		}
+		return {
+			child,
+			childClosed,
+			startupGate,
+			workerId,
+			rootActiveSessionId,
+			socketPath,
+			token,
+			descriptorPath,
+			recoveryJournalPath,
+			orphanProcessJournalPath,
+		};
+	}
+
+	/**
+	 * Start a worker process for `cwd` before anything asks for one, so the next
+	 * session there skips the interpreter start. Only one is ever held, and it is
+	 * replaced rather than added to when the directory changes: a worker is spawned
+	 * in a fixed directory and cannot be moved to another.
+	 *
+	 * Nothing is written to disk for a spare — no descriptor, no journals, and its
+	 * socket is not created until the gate commits — so an unclaimed one is
+	 * invisible to listings, peer sync, recovery and idle eviction. If this
+	 * supervisor dies the gate closes, which is the child's cancel signal.
+	 */
+	private primeSpareWorker(cwd: string): void {
+		if (this.shuttingDown || this.updateRestartPhase !== undefined) {
+			return;
+		}
+		if (this.spareWorker) {
+			if (this.spareWorker.cwd === cwd) {
+				return;
+			}
+			void this.discardSpareWorker();
+		}
+		let spare: SpareWorkerProcess;
+		try {
+			const spawned = this.spawnWorkerProcess(cwd, undefined);
+			spare = {
+				...spawned,
+				cwd,
+				// The Windows lookup shells out to PowerShell; resolving it here spends
+				// the wait on a process nobody is blocked on yet.
+				processStartId: spawned.child.pid
+					? getProcessStartIdAsync(spawned.child.pid).catch(() => undefined)
+					: Promise.resolve(undefined),
+			};
+		} catch (error) {
+			this.log(`Could not prime a spare session worker: ${String(error)}`);
+			return;
+		}
+		// A spare must never hold the supervisor's event loop open.
+		spare.child.unref();
+		this.spareWorker = spare;
+		void spare.childClosed.then(() => {
+			if (this.spareWorker === spare) {
+				this.spareWorker = undefined;
+			}
+		});
+	}
+
+	/** Claim the spare for `cwd`, or undefined when there is nothing usable. */
+	private takeSpareWorker(cwd: string): SpareWorkerProcess | undefined {
+		const spare = this.spareWorker;
+		if (!spare || spare.cwd !== cwd) {
+			return undefined;
+		}
+		this.spareWorker = undefined;
+		// exitCode/signalCode are set once the child is gone, and a spare that died
+		// waiting would fail the gate commit instead of serving the session.
+		if (spare.child.exitCode !== null || spare.child.signalCode !== null) {
+			return undefined;
+		}
+		return spare;
+	}
+
+	/**
+	 * Resolves once every cancelled spare is gone. Awaiting matters because the
+	 * process holds a handle on its working directory, so a caller tearing that
+	 * directory down has to outlive it.
+	 */
+	private discardSpareWorker(): Promise<void> {
+		const spare = this.spareWorker;
+		if (spare) {
+			this.spareWorker = undefined;
+			// Closing the gate without the commit marker is the documented cancel: the
+			// child reads a short marker and exits on its own.
+			spare.startupGate.destroy();
+			const closed = spare.childClosed;
+			this.spareWorkerExit = this.spareWorkerExit.then(
+				() => closed,
+				() => closed,
+			);
+		}
+		return this.spareWorkerExit;
+	}
+
+	private async launchWorker(
+		command: DaemonCreateCommand,
+		existing?: ResidentWorker,
+		ownerClientId?: string,
+	): Promise<ResidentWorker> {
+		await this.assertRecoveryAllowed();
+		if (existing && this.isWorkerRecoveryCancelled(existing)) {
+			throw new Error(`Session worker ${existing.descriptor.workerId} recovery was cancelled`);
+		}
+		const recoveryStopRevision = existing?.stopRevision;
+		const launchEnv =
+			ownerClientId || existing?.descriptor.ownerClientId ? (command.launchEnv ?? existing?.launchEnv) : undefined;
+		const createCommand: DaemonCreateCommand = {
+			...withoutSupervisorCreateFields(command),
+			// The merge below fills cwd from the daemon's own default config, which
+			// leaves the worker unable to tell "the caller wants this directory" from
+			// "the daemon happens to run there" — and the worker treats config.cwd as
+			// an override of the session's recorded cwd. Capture the caller's intent
+			// before it is lost, or every session opened by path is bound to whichever
+			// directory started the daemon.
+			cwdOverride: command.cwdOverride ?? command.config?.cwd,
+			config: mergeAgentSessionRuntimeConfig(this.defaultSessionConfig, command.config),
+		};
+		const spawnCwd = createCommand.config?.cwd ?? process.cwd();
+		// A replacement must keep the failed worker's identity, and a client-owned
+		// worker needs its caller's environment baked into the spawn — neither can
+		// be served by a process started before that was known.
+		const canUseSpare = existing === undefined && launchEnv === undefined;
+		const spare = canUseSpare ? this.takeSpareWorker(spawnCwd) : undefined;
+		// Replace it now rather than once this launch finishes: sessions arrive in
+		// runs, and the next one lands within a few hundred milliseconds of this one
+		// returning. Started here, the replacement boots alongside the launch it
+		// follows and is ready when that next create asks for it.
+		if (canUseSpare) {
+			this.primeSpareWorker(spawnCwd);
+		}
+		await this.assertRecoveryAllowed();
+		const {
+			child,
+			childClosed,
+			startupGate,
+			workerId,
+			rootActiveSessionId,
+			socketPath,
+			token,
+			descriptorPath,
+			recoveryJournalPath,
+			orphanProcessJournalPath,
+		} = spare ?? this.spawnWorkerProcess(spawnCwd, launchEnv, existing);
+		const now = new Date().toISOString();
 		const previousDescriptor = existing?.descriptor;
 		const previousIntentionalStop = existing?.intentionalStop;
 		let descriptorAssigned = false;
@@ -2165,11 +2340,10 @@ export class DaemonSupervisor {
 			if (!child.pid) {
 				throw new Error("Failed to obtain daemon session worker pid");
 			}
-			if (!(startupGate instanceof Writable)) {
-				throw new Error("Failed to create daemon session worker startup gate");
-			}
 			childPid = child.pid;
-			childProcessStartId = getProcessStartId(childPid);
+			// Async: on Windows this is a PowerShell round trip, and doing it
+			// synchronously froze the whole supervisor for the length of it.
+			childProcessStartId = await (spare?.processStartId ?? getProcessStartIdAsync(childPid));
 			await this.assertRecoveryAllowed();
 
 			const descriptor: DaemonWorkerDescriptor = {
@@ -2210,9 +2384,7 @@ export class DaemonSupervisor {
 			worker.intentionalStop = false;
 			this.workers.set(workerId, worker);
 		} catch (error) {
-			if (startupGate instanceof Writable) {
-				startupGate.destroy();
-			}
+			startupGate.destroy();
 			await childClosed;
 			child.unref();
 			try {
@@ -2265,7 +2437,15 @@ export class DaemonSupervisor {
 			worker.descriptor.consecutiveFailures = 0;
 			worker.descriptor.lastError = undefined;
 			this.persistWorker(worker);
-			await this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
+			// Best-effort peer broadcast: a busy sibling worker can stall it for seconds,
+			// and the caller's create must not wait on that.
+			void this.syncAgentPeers().catch((error) => this.log(`Could not synchronize agent peers: ${String(error)}`));
+			// Sessions arrive in runs — a chat is opened, then another beside it — so
+			// the process for the next one starts now, in the window where the caller
+			// is reading what it just opened.
+			if (existing === undefined && launchEnv === undefined) {
+				this.primeSpareWorker(spawnCwd);
+			}
 			this.broadcastHeartbeatsChanged();
 			return worker;
 		} catch (error) {
@@ -3061,9 +3241,17 @@ export class DaemonSupervisor {
 	}
 
 	private syncAgentPeers(): Promise<void> {
+		// A sync already waiting its turn will observe the same worker set we would,
+		// so reuse it instead of chaining another round of 5s-per-busy-worker requests.
+		if (this.queuedAgentPeerSync) {
+			return this.queuedAgentPeerSync;
+		}
 		const sync = this.agentPeerSyncQueue
 			.catch(() => undefined)
 			.then(async () => {
+				if (this.queuedAgentPeerSync === sync) {
+					this.queuedAgentPeerSync = undefined;
+				}
 				const readyWorkers = [...this.workers.values()].filter(
 					(worker): worker is ResidentWorker & { client: DaemonWorkerClient } =>
 						this.isVisibleWorker(worker) &&
@@ -3088,6 +3276,7 @@ export class DaemonSupervisor {
 				);
 			});
 		this.agentPeerSyncQueue = sync;
+		this.queuedAgentPeerSync = sync;
 		return sync;
 	}
 
@@ -4318,6 +4507,9 @@ export class DaemonSupervisor {
 
 	private async prepareUpdateRestart(): Promise<DaemonUpdateRestartManifest> {
 		if (this.updateRestartPhase !== undefined) throw new Error("Daemon is already preparing an update restart");
+		// The spare is running the binary being replaced; adopting it after the
+		// restart would put a session on the old code.
+		void this.discardSpareWorker();
 		this.updateRestartPhase = "draining";
 		try {
 			const deadline = Date.now() + UPDATE_RESTART_PREPARE_DEADLINE_MS;
@@ -4717,6 +4909,7 @@ export class DaemonSupervisor {
 
 	private async cleanupSupervisorResourcesOnce(): Promise<void> {
 		this.shuttingDown = true;
+		await this.discardSpareWorker();
 		this.clearIdleEvictionTimer();
 		await this.idleEvictionSweep?.catch(() => undefined);
 		for (const cleanup of this.signalCleanupHandlers.splice(0)) {
@@ -4816,6 +5009,7 @@ export class DaemonSupervisor {
 			process.exit(exitCode);
 		}
 		this.shuttingDown = true;
+		await this.discardSpareWorker();
 		this.clearIdleEvictionTimer();
 		await this.idleEvictionSweep?.catch(() => undefined);
 		if (closingReason) {

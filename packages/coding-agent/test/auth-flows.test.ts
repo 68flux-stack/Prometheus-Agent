@@ -219,7 +219,7 @@ describe("ProviderAuthFlows", () => {
 
 		expect(overlays).toHaveLength(1);
 		const output = stripAnsi(overlays[0]?.render(80).join("\n") ?? "");
-		expect(output).toContain("Serper (web search)");
+		expect(output).toContain("Exa (web search)");
 		expect(output).not.toContain("Anthropic");
 		overlays[0]?.handleInput?.("\x1b");
 		await expect(loginResult).resolves.toEqual({ status: "cancelled" });

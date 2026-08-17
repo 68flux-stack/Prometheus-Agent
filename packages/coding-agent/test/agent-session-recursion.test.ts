@@ -3203,14 +3203,14 @@ describe("AgentSession RLM session dir", () => {
 	function createSession(
 		sessionManager: SessionManager,
 		agentDir?: string,
-		serperKey?: string,
+		exaKey?: string,
 		loadWebsearchSkill = false,
 		rlmSessionDir?: string,
 	): AgentSession {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		if (serperKey !== undefined) {
-			authStorage.set("serper", { type: "api_key", key: serperKey });
+		if (exaKey !== undefined) {
+			authStorage.set("exa", { type: "api_key", key: exaKey });
 		}
 		const agent = new Agent({
 			convertToLlm,
@@ -3359,51 +3359,51 @@ describe("AgentSession RLM session dir", () => {
 		const root = createSession(SessionManager.inMemory(tempDir), agentDir, "stored-key", false);
 		const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
 		expect(env.PROMETHEUS_CODING_AGENT_DIR).toBe(agentDir);
-		expect(env.SERPER_API_KEY).toBeUndefined();
+		expect(env.EXA_API_KEY).toBeUndefined();
 	});
 
 	it("injects the key for a custom websearch skill even when bundled is off", () => {
-		const previous = process.env.SERPER_API_KEY;
-		delete process.env.SERPER_API_KEY;
+		const previous = process.env.EXA_API_KEY;
+		delete process.env.EXA_API_KEY;
 		try {
 			// loadWebsearchSkill=true models a --skill/project websearch; the bundled
 			// setting is irrelevant because the gate checks the loaded skill, not settings.
 			const root = createSession(SessionManager.inMemory(tempDir), undefined, "custom-key", true);
 			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("custom-key");
+			expect(env.EXA_API_KEY).toBe("custom-key");
 		} finally {
-			if (previous === undefined) delete process.env.SERPER_API_KEY;
-			else process.env.SERPER_API_KEY = previous;
+			if (previous === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previous;
 		}
 	});
 
-	it("injects a literal stored Serper key into the kernel", () => {
-		const previous = process.env.SERPER_API_KEY;
-		delete process.env.SERPER_API_KEY;
+	it("injects a literal stored Exa key into the kernel", () => {
+		const previous = process.env.EXA_API_KEY;
+		delete process.env.EXA_API_KEY;
 		try {
-			const root = createSession(SessionManager.inMemory(tempDir), undefined, "literal-serper-key", true);
+			const root = createSession(SessionManager.inMemory(tempDir), undefined, "literal-exa-key", true);
 			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("literal-serper-key");
+			expect(env.EXA_API_KEY).toBe("literal-exa-key");
 		} finally {
-			if (previous === undefined) delete process.env.SERPER_API_KEY;
-			else process.env.SERPER_API_KEY = previous;
+			if (previous === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previous;
 		}
 	});
 
-	it("resolves an env-var-reference Serper key before injecting it", () => {
-		const previousKey = process.env.SERPER_API_KEY;
-		const previousRef = process.env.MY_SERPER_REF;
-		delete process.env.SERPER_API_KEY;
-		process.env.MY_SERPER_REF = "resolved-secret";
+	it("resolves an env-var-reference Exa key before injecting it", () => {
+		const previousKey = process.env.EXA_API_KEY;
+		const previousRef = process.env.MY_EXA_REF;
+		delete process.env.EXA_API_KEY;
+		process.env.MY_EXA_REF = "resolved-secret";
 		try {
-			const root = createSession(SessionManager.inMemory(tempDir), undefined, "MY_SERPER_REF", true);
+			const root = createSession(SessionManager.inMemory(tempDir), undefined, "MY_EXA_REF", true);
 			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("resolved-secret");
+			expect(env.EXA_API_KEY).toBe("resolved-secret");
 		} finally {
-			if (previousKey === undefined) delete process.env.SERPER_API_KEY;
-			else process.env.SERPER_API_KEY = previousKey;
-			if (previousRef === undefined) delete process.env.MY_SERPER_REF;
-			else process.env.MY_SERPER_REF = previousRef;
+			if (previousKey === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previousKey;
+			if (previousRef === undefined) delete process.env.MY_EXA_REF;
+			else process.env.MY_EXA_REF = previousRef;
 		}
 	});
 });
