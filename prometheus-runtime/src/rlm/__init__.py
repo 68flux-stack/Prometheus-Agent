@@ -236,16 +236,18 @@ async def list_subagents() -> list[RLMSubagent]:
     return [_subagent_from_payload(entry) for entry in entries]
 
 
-async def delete_subagent(target: str | RLMSubagent) -> RLMSubagent:
+async def delete_subagent(target: str | RLMSubagent | RLMSpawnHandle) -> RLMSubagent:
     """Delete one running or retained direct child from the current parent session."""
-    if isinstance(target, RLMSubagent):
+    if isinstance(target, (RLMSubagent, RLMSpawnHandle)):
         selector = target.rlm_child_id
     elif isinstance(target, str):
         selector = target.strip()
         if not selector:
             raise ValueError("target must not be empty")
     else:
-        raise TypeError(f"target must be str or RLMSubagent, got {type(target).__name__}")
+        raise TypeError(
+            f"target must be str, RLMSubagent, or RLMSpawnHandle, got {type(target).__name__}"
+        )
     payload = await host_request("rlm.delete_subagent", {"target": selector})
     return _subagent_from_payload(payload.get("subagent"), "rlm.delete_subagent")
 

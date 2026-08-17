@@ -1008,6 +1008,38 @@ kbd {
 .message-row.user .message-body {
 	width: auto;
 	max-width: 78%;
+	display: flex;
+	align-items: flex-end;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.message-images {
+	display: flex;
+	align-items: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+	max-width: 100%;
+}
+
+.message-image {
+	display: block;
+	max-width: min(420px, 100%);
+	max-height: 360px;
+	border: 1px solid #3d3d3d;
+	border-radius: 8px;
+	object-fit: contain;
+}
+
+.message-row.user .message-images {
+	justify-content: flex-end;
+}
+
+.message-row.user .message-image {
+	width: 52px;
+	height: 52px;
+	flex: 0 0 52px;
+	object-fit: cover;
 }
 
 .message-content {
@@ -2584,10 +2616,15 @@ kbd {
 	font-size: 11px;
 }
 
-.stop-button:hover {
+.stop-button:hover:not(:disabled) {
 	border-color: #696969;
 	color: #f0efed;
 	background: #2b2b2b;
+}
+
+.stop-button:disabled {
+	cursor: wait;
+	opacity: .45;
 }
 
 .stop-button[hidden] {
@@ -2636,8 +2673,9 @@ kbd {
 }
 
 .provider-dialog {
-	width: min(520px, calc(100vw - 40px));
+	width: min(780px, calc(100vw - 40px));
 	max-width: calc(100vw - 40px);
+	max-height: calc(100vh - 40px);
 	padding: 0;
 	border: 1px solid #4a4a4a;
 	border-radius: 10px;
@@ -2655,7 +2693,9 @@ kbd {
 }
 
 .provider-dialog-surface {
+	max-height: calc(100vh - 40px);
 	padding: 24px;
+	overflow-y: auto;
 }
 
 .provider-dialog-header {
@@ -2680,6 +2720,115 @@ kbd {
 	color: #999691;
 	font-size: 12px;
 	line-height: 1.5;
+}
+
+.provider-picker {
+	margin-top: 2px;
+}
+
+.provider-picker-heading {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 9px;
+}
+
+.provider-picker-heading > span,
+.provider-field > span {
+	color: #bdbab5;
+	font-size: 11px;
+	font-weight: 650;
+}
+
+.provider-picker-heading small {
+	color: #77736e;
+	font-size: 10px;
+}
+
+.provider-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 7px;
+	max-height: 286px;
+	padding: 1px;
+	overflow-y: auto;
+}
+
+.provider-option {
+	display: flex;
+	min-width: 0;
+	min-height: 58px;
+	align-items: center;
+	gap: 9px;
+	padding: 9px;
+	border: 1px solid #393939;
+	border-radius: 7px;
+	color: #d6d2cc;
+	background: #252525;
+	cursor: pointer;
+	font: inherit;
+	text-align: left;
+	transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.provider-option:hover {
+	border-color: #5a554f;
+	color: #f0efed;
+	background: #2b2b2b;
+}
+
+.provider-option:focus-visible {
+	outline: 2px solid rgba(233, 130, 98, .7);
+	outline-offset: 1px;
+}
+
+.provider-option[aria-checked="true"] {
+	border-color: rgba(233, 130, 98, .7);
+	color: #f3d3c8;
+	background: rgba(233, 130, 98, .1);
+	box-shadow: inset 0 0 0 1px rgba(233, 130, 98, .12);
+}
+
+.provider-mark {
+	display: grid;
+	width: 34px;
+	height: 34px;
+	flex: 0 0 34px;
+	place-items: center;
+	border-radius: 7px;
+	color: var(--provider-color);
+	background: color-mix(in srgb, var(--provider-color) 15%, #202020);
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: -.04em;
+}
+
+.provider-mark img {
+	width: 22px;
+	height: 22px;
+	object-fit: contain;
+	filter: brightness(1.18);
+}
+
+.provider-option-name {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 11px;
+	font-weight: 650;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.provider-option-subscription {
+	align-self: flex-start;
+	margin: 1px 0 0 auto;
+	color: #dca18e;
+	font-size: 8px;
+	font-weight: 700;
+	letter-spacing: .03em;
+	text-transform: uppercase;
 }
 
 .provider-dialog-close {
@@ -3298,6 +3447,34 @@ kbd {
 	.setup-panel {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+}
+
+@media (max-width: 620px) {
+	.provider-dialog {
+		width: min(100% - 24px, 780px);
+		max-width: min(100% - 24px, 780px);
+	}
+
+	.provider-dialog-surface {
+		padding: 18px;
+	}
+
+	.provider-dialog-header {
+		margin-bottom: 18px;
+	}
+
+	.provider-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		max-height: 272px;
+	}
+
+	.provider-dialog-actions {
+		flex-wrap: wrap;
+	}
+
+	.provider-dialog-actions .dialog-connect-button {
+		margin-left: auto;
 	}
 }
 

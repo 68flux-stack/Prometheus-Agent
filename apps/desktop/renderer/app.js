@@ -22,6 +22,13 @@ const state = {
 	// The workspace a switch was made for, checked against the cwd the engine
 	// reports once it attaches.
 	openedWorkspace: undefined,
+	// A conversation shown from disk that the engine has not been asked for yet.
+	// Attaching is what costs a session worker, so it waits until something needs
+	// the engine on this chat.
+	deferredSwitch: undefined,
+	// A switch that does want the engine now, made before the engine was up. It
+	// runs as soon as the handshake lands rather than being dropped on the floor.
+	pendingAttach: undefined,
 	queuedPrompt: undefined,
 	pending: new Map(),
 	runtimeFeatures: undefined,
@@ -34,6 +41,7 @@ const state = {
 	approval: undefined,
 	subagentView: undefined,
 	attachments: [],
+	preparingPrompt: false,
 	workspaceChanges: [],
 	changeReviewExpanded: true,
 	changeReviewPending: false,
@@ -60,7 +68,7 @@ const stopButton = $("stop-button");
 const connectProviderButton = $("connect-provider-button");
 const providerDialog = $("provider-dialog");
 const providerForm = $("provider-form");
-const providerSelect = $("provider-select");
+const providerGrid = $("provider-grid");
 const providerKeyHelp = $("provider-key-help");
 const providerApiKey = $("provider-api-key");
 const providerConnect = $("provider-connect");
@@ -85,6 +93,7 @@ const changeReviewToggle = $("change-review-toggle");
 const acceptAllChanges = $("accept-all-changes");
 const rejectAllChanges = $("reject-all-changes");
 let handshakeTimer;
+let sessionSwitchTail = Promise.resolve();
 // The cwd the engine was silently started in when no workspace was saved yet;
 // applyState uses this to avoid turning that fast-start default into a real
 // workspace card the moment the engine reports its own cwd.
@@ -287,30 +296,32 @@ function rememberWorkspace(workspace) {
 }
 
 const API_KEY_PROVIDERS = [
-	{ id: "prime-inference", name: "Prime Inference", description: "Use a Prime API key for Prime Inference models." },
-	{ id: "openai", name: "OpenAI", description: "Use an OpenAI API key for GPT models.", oauthProvider: "openai-codex" },
-	{ id: "anthropic", name: "Anthropic", description: "Use an Anthropic API key for Claude models.", oauthProvider: "anthropic" },
-	{ id: "google", name: "Google Gemini", description: "Use a Gemini API key for Google models." },
-	{ id: "openrouter", name: "OpenRouter", description: "Use an OpenRouter API key for its model catalog." },
-	{ id: "deepseek", name: "DeepSeek", description: "Use a DeepSeek API key for DeepSeek models." },
-	{ id: "mistral", name: "Mistral", description: "Use a Mistral API key for Mistral models." },
-	{ id: "xai", name: "xAI", description: "Use an xAI API key for Grok models." },
-	{ id: "groq", name: "Groq", description: "Use a Groq API key for Groq-hosted models." },
-	{ id: "zai", name: "ZAI", description: "Use a ZAI API key for GLM models." },
-	{ id: "cerebras", name: "Cerebras", description: "Use a Cerebras API key for Cerebras-hosted models." },
-	{ id: "minimax", name: "MiniMax", description: "Use a MiniMax API key for MiniMax models." },
-	{ id: "moonshotai", name: "Moonshot AI", description: "Use a Moonshot API key for Kimi models." },
-	{ id: "huggingface", name: "Hugging Face", description: "Use a Hugging Face token for hosted models." },
-	{ id: "fireworks", name: "Fireworks", description: "Use a Fireworks API key for hosted models." },
-	{ id: "opencode", name: "OpenCode Zen", description: "Use an OpenCode API key for OpenCode Zen models." },
-	{ id: "opencode-go", name: "OpenCode Go", description: "Use an OpenCode API key for OpenCode Go models." },
-	{ id: "kimi-coding", name: "Kimi For Coding", description: "Use a Kimi API key for coding models." },
-	{ id: "azure-openai-responses", name: "Azure OpenAI", description: "Use an Azure OpenAI API key for your configured resource." },
-	{ id: "vercel-ai-gateway", name: "Vercel AI Gateway", description: "Use an AI Gateway API key for routed models." },
-	{ id: "cloudflare-workers-ai", name: "Cloudflare Workers AI", description: "Use a Cloudflare API key with an account ID." },
-	{ id: "cloudflare-ai-gateway", name: "Cloudflare AI Gateway", description: "Use a Cloudflare API key with account and gateway settings." },
-	{ id: "xiaomi", name: "Xiaomi MiMo", description: "Use a Xiaomi MiMo API key for MiMo models." },
+	{ id: "prime-inference", name: "Prime Inference", description: "Use a Prime API key for Prime Inference models.", mark: "PI", color: "#e98262" },
+	{ id: "openai", name: "OpenAI", description: "Use an OpenAI API key for GPT models.", oauthProvider: "openai-codex", mark: "O", color: "#74aa9c" },
+	{ id: "anthropic", name: "Anthropic", description: "Use an Anthropic API key for Claude models.", oauthProvider: "anthropic", mark: "A", color: "#d5a786" },
+	{ id: "google", name: "Google Gemini", description: "Use a Gemini API key for Google models.", mark: "G", color: "#8e75b2" },
+	{ id: "openrouter", name: "OpenRouter", description: "Use an OpenRouter API key for its model catalog.", mark: "OR", color: "#94a3b8" },
+	{ id: "deepseek", name: "DeepSeek", description: "Use a DeepSeek API key for DeepSeek models.", mark: "DS", color: "#5786fe" },
+	{ id: "mistral", name: "Mistral", description: "Use a Mistral API key for Mistral models.", mark: "M", color: "#f7a823" },
+	{ id: "xai", name: "xAI", description: "Use an xAI API key for Grok models.", mark: "x", color: "#e7e7e7" },
+	{ id: "groq", name: "Groq", description: "Use a Groq API key for Groq-hosted models.", mark: "G", color: "#f55036" },
+	{ id: "zai", name: "ZAI", description: "Use a ZAI API key for GLM models.", mark: "Z", color: "#5d8fdb" },
+	{ id: "cerebras", name: "Cerebras", description: "Use a Cerebras API key for Cerebras-hosted models.", mark: "C", color: "#ee5d45" },
+	{ id: "minimax", name: "MiniMax", description: "Use a MiniMax API key for MiniMax models.", mark: "MM", color: "#e73562" },
+	{ id: "moonshotai", name: "Moonshot AI", description: "Use a Moonshot API key for Kimi models.", mark: "K", color: "#f5a52b" },
+	{ id: "huggingface", name: "Hugging Face", description: "Use a Hugging Face token for hosted models.", mark: "HF", color: "#ffd21e" },
+	{ id: "fireworks", name: "Fireworks", description: "Use a Fireworks API key for hosted models.", mark: "FW", color: "#f19943" },
+	{ id: "opencode", name: "OpenCode Zen", description: "Use an OpenCode API key for OpenCode Zen models.", mark: "OZ", color: "#62b2a6" },
+	{ id: "opencode-go", name: "OpenCode Go", description: "Use an OpenCode API key for OpenCode Go models.", mark: "OG", color: "#85a8f1" },
+	{ id: "kimi-coding", name: "Kimi For Coding", description: "Use a Kimi API key for coding models.", mark: "K", color: "#6aa9ff" },
+	{ id: "azure-openai-responses", name: "Azure OpenAI", description: "Use an Azure OpenAI API key for your configured resource.", mark: "AZ", color: "#58a8ed" },
+	{ id: "vercel-ai-gateway", name: "Vercel AI Gateway", description: "Use an AI Gateway API key for routed models.", mark: "V", color: "#eeeeee" },
+	{ id: "cloudflare-workers-ai", name: "Cloudflare Workers AI", description: "Use a Cloudflare API key with an account ID.", mark: "CF", color: "#f38020" },
+	{ id: "cloudflare-ai-gateway", name: "Cloudflare AI Gateway", description: "Use a Cloudflare API key with account and gateway settings.", mark: "CF", color: "#f38020" },
+	{ id: "xiaomi", name: "Xiaomi MiMo", description: "Use a Xiaomi MiMo API key for MiMo models.", mark: "MI", color: "#ff6900" },
 ];
+
+let selectedProviderId = API_KEY_PROVIDERS[0]?.id || "";
 
 function showToast(message) {
 	const toast = $("toast");
@@ -330,23 +341,75 @@ function revealScrollbar(target) {
 }
 
 function getSelectedProvider() {
-	return API_KEY_PROVIDERS.find((provider) => provider.id === providerSelect.value) || API_KEY_PROVIDERS[0];
+	return API_KEY_PROVIDERS.find((provider) => provider.id === selectedProviderId) || API_KEY_PROVIDERS[0];
 }
 
 function updateProviderKeyHelp() {
 	const provider = getSelectedProvider();
 	providerKeyHelp.textContent = provider?.description || "Paste the API key for the selected provider.";
+	providerApiKey.placeholder = provider ? `Paste your ${provider.name} API key` : "Paste your API key";
+	if (!providerConnect.disabled) providerConnectLabel.textContent = provider ? `Connect ${provider.name}` : "Connect provider";
 	subscriptionLoginButton.disabled = !provider?.oauthProvider;
-	subscriptionLoginButton.title = provider?.oauthProvider ? "" : "Subscription sign-in is not available for this provider.";
+	subscriptionLoginButton.hidden = !provider?.oauthProvider;
+	subscriptionLoginButton.textContent = provider?.oauthProvider ? `Use ${provider.name} subscription` : "Use subscription sign-in";
+	subscriptionLoginButton.title = provider?.oauthProvider ? `Use ${provider.name} subscription sign-in` : "";
+	for (const button of providerGrid.querySelectorAll("[data-provider-id]")) {
+		const selected = button.dataset.providerId === provider?.id;
+		button.setAttribute("aria-checked", String(selected));
+		button.tabIndex = selected ? 0 : -1;
+	}
+}
+
+function renderProviderMark(provider) {
+	const mark = document.createElement("span");
+	mark.className = "provider-mark";
+	mark.style.setProperty("--provider-color", provider.color);
+	mark.setAttribute("aria-hidden", "true");
+	const image = document.createElement("img");
+	image.src = window.PROVIDER_LOGOS?.[provider.id] || "";
+	image.alt = "";
+	image.addEventListener("error", () => {
+		image.remove();
+		mark.textContent = provider.mark;
+	});
+	mark.appendChild(image);
+	return mark;
+}
+
+function renderProviderGrid() {
+	providerGrid.replaceChildren();
+	for (const provider of API_KEY_PROVIDERS) {
+		const button = document.createElement("button");
+		button.className = "provider-option";
+		button.type = "button";
+		button.dataset.providerId = provider.id;
+		button.setAttribute("role", "radio");
+		button.setAttribute("aria-checked", String(provider.id === selectedProviderId));
+		button.tabIndex = provider.id === selectedProviderId ? 0 : -1;
+		button.appendChild(renderProviderMark(provider));
+		const name = document.createElement("span");
+		name.className = "provider-option-name";
+		name.textContent = provider.name;
+		button.appendChild(name);
+		if (provider.oauthProvider) {
+			const subscription = document.createElement("span");
+			subscription.className = "provider-option-subscription";
+			subscription.textContent = "Subscription";
+			button.appendChild(subscription);
+		}
+		providerGrid.appendChild(button);
+	}
+	updateProviderKeyHelp();
+}
+
+function selectProvider(providerId) {
+	if (!API_KEY_PROVIDERS.some((provider) => provider.id === providerId)) return;
+	selectedProviderId = providerId;
+	updateProviderKeyHelp();
 }
 
 function populateProviderOptions() {
-	providerSelect.replaceChildren();
-	for (const provider of API_KEY_PROVIDERS) {
-		providerSelect.add(new Option(provider.name, provider.id));
-	}
-	providerSelect.value = API_KEY_PROVIDERS[0]?.id || "";
-	updateProviderKeyHelp();
+	renderProviderGrid();
 }
 
 function closeProviderDialog() {
@@ -365,9 +428,9 @@ function openProviderDialog() {
 	secretToggle.textContent = "Show";
 	secretToggle.setAttribute("aria-pressed", "false");
 	providerConnect.disabled = false;
-	providerConnectLabel.textContent = "Connect provider";
+	updateProviderKeyHelp();
 	providerDialog.showModal();
-	requestAnimationFrame(() => providerApiKey.focus());
+	requestAnimationFrame(() => providerGrid.querySelector(`[data-provider-id="${selectedProviderId}"]`)?.focus());
 }
 
 async function connectSelectedProvider() {
@@ -403,7 +466,7 @@ async function connectSelectedProvider() {
 		showToast(error instanceof Error ? error.message : String(error));
 	} finally {
 		providerConnect.disabled = false;
-		providerConnectLabel.textContent = "Connect provider";
+		updateProviderKeyHelp();
 	}
 }
 
@@ -606,7 +669,7 @@ function isEngineConnecting() {
 function syncComposer() {
 	const canPrompt = !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
 	input.disabled = !canPrompt;
-	sendButton.disabled = !canPrompt || (!input.value.trim() && state.attachments.length === 0);
+	sendButton.disabled = state.preparingPrompt || !canPrompt || (!input.value.trim() && state.attachments.length === 0);
 	$("attach-button").disabled = !canPrompt;
 	$("dictate-button").disabled = !canPrompt;
 	stopButton.hidden = !state.busy;
@@ -642,6 +705,9 @@ function setDisconnected(label) {
 	state.ready = false;
 	state.busy = false;
 	state.switchingSession = false;
+	state.deferredSwitch = undefined;
+	state.pendingAttach = undefined;
+	sessionSwitchTail = Promise.resolve();
 	returnQueuedPromptToComposer();
 	state.busySessions = new Set();
 	conversation.setAttribute("aria-busy", "false");
@@ -650,7 +716,27 @@ function setDisconnected(label) {
 	setStatus("Stopped", "error");
 }
 
+// Commands that read engine-wide state or are already dropped while a switch is
+// in flight. Everything else acts on the attached session, so a conversation
+// opened for reading has to attach before it can be sent.
+const SESSION_AGNOSTIC_COMMANDS = new Set([
+	"get_state",
+	"get_messages",
+	"get_available_models",
+	"get_commands",
+	"get_runtime_features",
+	"list_busy_sessions",
+]);
+
 function sendCommand(type, payload = {}, context = {}) {
+	if (state.deferredSwitch && !SESSION_AGNOSTIC_COMMANDS.has(type)) {
+		// A failed attach reports itself; the command is dropped rather than run
+		// against the conversation the engine is still on.
+		return flushDeferredSwitch().then(
+			() => sendCommand(type, payload, context),
+			() => undefined,
+		);
+	}
 	const id = `desktop_${++state.requestId}`;
 	state.pending.set(id, { type, ...context });
 	return window.desktopAgent.send({ id, type, ...payload }).catch((error) => {
@@ -659,9 +745,24 @@ function sendCommand(type, payload = {}, context = {}) {
 	});
 }
 
+// Session navigation still uses the normal response handler for reconciliation,
+// but also needs a completion signal so open_session commands can be serialized.
+function sendTrackedCommand(type, payload = {}, context = {}) {
+	const id = `desktop_${++state.requestId}`;
+	return new Promise((resolve, reject) => {
+		state.pending.set(id, { type, ...context, complete: resolve });
+		window.desktopAgent.send({ id, type, ...payload }).catch((error) => {
+			state.pending.delete(id);
+			reject(error);
+		});
+	});
+}
+
 // Unlike sendCommand, this resolves with the matching response instead of firing
 // side effects through handleResponse — for callers that need the result inline.
-function sendCommandAwait(type, payload = {}) {
+async function sendCommandAwait(type, payload = {}) {
+	// Same rule as sendCommand: these all act on the attached session.
+	if (state.deferredSwitch && !SESSION_AGNOSTIC_COMMANDS.has(type)) await flushDeferredSwitch();
 	const id = `desktop_${++state.requestId}`;
 	return new Promise((resolve, reject) => {
 		state.pending.set(id, { type, resolve, reject });
@@ -1067,7 +1168,10 @@ function renderMessageRow(row, message, display = {}) {
 			: formatRelativeTime(message._finishedAt ?? message.timestamp);
 	// Streaming emits one message_update per token and every update re-rendered every
 	// row, re-parsing markdown from scratch. Skip rows whose visible content is identical.
-	const signature = `${message.role} ${readOnly} ${images.length} ${isThinking} ${visibleThinking} ${text} ${actionsLabel}`;
+	const imageSignature = images
+		.map((image) => `${image.mimeType || "image/png"}:${image.data.length}:${image.data.slice(0, 32)}`)
+		.join(" ");
+	const signature = `${message.role} ${readOnly} ${imageSignature} ${isThinking} ${visibleThinking} ${text} ${actionsLabel}`;
 	if (row._signature === signature) return;
 	row._signature = signature;
 
@@ -1088,14 +1192,18 @@ function renderMessageRow(row, message, display = {}) {
 		body.querySelector(":scope > .message-content")?.remove();
 	}
 
-	const rendered = body.querySelectorAll(":scope > img").length;
-	for (const image of images.slice(rendered)) {
-		const imageNode = document.createElement("img");
-		imageNode.src = `data:${image.mimeType || "image/png"};base64,${image.data}`;
-		imageNode.alt = "Attached image";
-		imageNode.style.maxWidth = "420px";
-		imageNode.style.borderRadius = "8px";
-		body.appendChild(imageNode);
+	if (images.length) {
+		const imageList = ensureChild(body, "message-images", "div", true);
+		imageList.replaceChildren();
+		for (const image of images) {
+			const imageNode = document.createElement("img");
+			imageNode.className = "message-image";
+			imageNode.src = `data:${image.mimeType || "image/png"};base64,${image.data}`;
+			imageNode.alt = "Attached image";
+			imageList.appendChild(imageNode);
+		}
+	} else {
+		body.querySelector(":scope > .message-images")?.remove();
 	}
 
 	if (!showActions) {
@@ -1175,8 +1283,14 @@ function ipythonSummary(tool) {
 }
 
 function toolSummary(tool) {
-	if (tool.toolName !== "ipython") return tool.toolName;
-	return ipythonSummary(tool);
+	if (tool.toolName === "ipython") return ipythonSummary(tool);
+	if (tool.toolName === "WebSearch" && typeof tool.args?.query === "string") {
+		return `Web Search ${tool.args.query}`;
+	}
+	if (tool.toolName === "WebFetch" && typeof tool.args?.url === "string") {
+		return `Web Fetch ${tool.args.url}`;
+	}
+	return tool.toolName;
 }
 
 // ponytail: O(oldLines * newLines) LCS diff, fine for edit-sized snippets; swap for a real
@@ -1718,11 +1832,15 @@ function buildTranscriptRows() {
 			pushWorkRow({ key: `a:${index}`, render: (row) => renderAgentMessageRow(row, agentMessage) });
 			continue;
 		}
-		// A background-job-finished message carries a raw envelope for the model; the
-		// reader gets the sub-agent-style summary pill instead.
+		// A completed background job starts the turn it wakes. Its status is a
+		// standalone visual; only the assistant work that follows is summarized.
 		const jobFinished = backgroundJobFinishedDetails(message);
 		if (jobFinished) {
-			pushWorkRow({ key: `bg:${index}`, render: (row) => renderBackgroundJobFinishedRow(row, jobFinished, message) });
+			if (turnStartIndex < 0) {
+				turnStartedAt = message.timestamp;
+				turnStartIndex = index;
+			}
+			rows.push({ key: `bg:${index}`, render: (row) => renderBackgroundJobFinishedRow(row, jobFinished, message) });
 			continue;
 		}
 		const calls = Array.isArray(message.content) ? message.content.filter((block) => block?.type === "toolCall") : [];
@@ -2478,6 +2596,7 @@ function handleResponse(event) {
 	}
 	const pendingType = pending?.type;
 	if (event.id) state.pending.delete(event.id);
+	pending?.complete?.(event);
 	if (!event.success) {
 		if (pending?.optimisticKey) {
 			state.messages = state.messages.filter((message) => message._key !== pending.optimisticKey);
@@ -2522,6 +2641,8 @@ function handleResponse(event) {
 		refreshBusySessions();
 		void restoreSubagents(state.activeSessionPath);
 		void refreshWorkspaceChats(state.workspace);
+		// A conversation clicked while this handshake was in flight is opened now.
+		flushPendingAttach();
 		flushQueuedPrompt();
 	}
 	if (event.command === "get_available_models") {
@@ -2537,6 +2658,9 @@ function handleResponse(event) {
 	// /permissions changes the mode inside the engine without notifying the UI.
 	if (["prompt", "steer", "follow_up"].includes(pendingType || event.command)) refreshRuntimeFeatures();
 	if (["get_runtime_features", "set_execution_mode", "start_background_job", "write_background_job", "cancel_background_job", "apply_subagent_worktree", "discard_subagent_worktree"].includes(event.command)) {
+		// Mid-switch these describe the conversation we are leaving, and adopting
+		// them would start job polls against the wrong session.
+		if (state.switchingSession) return;
 		state.runtimeFeatures = event.data;
 		state.runtimeAvailable = true;
 		renderRuntimeFeatures();
@@ -2566,6 +2690,11 @@ function handleResponse(event) {
 		const changed =
 			busySessions.size !== state.busySessions.size || [...busySessions].some((key) => !state.busySessions.has(key));
 		state.busySessions = busySessions;
+		// A chat opened for reading that turns out to be streaming needs the engine
+		// after all, or its live output would never reach the transcript on screen.
+		if (state.deferredSwitch && busySessions.has(sessionPathKey(state.deferredSwitch.sessionPath))) {
+			void flushDeferredSwitch();
+		}
 		if (changed) renderWorkspaceList();
 	}
 	if (event.command === "open_session") {
@@ -2694,7 +2823,10 @@ function handleAgentEvent(event) {
 		}
 		if (event.type === "message_end") {
 			state.streamIndex = -1;
-			if (message.role === "assistant") state.messages[index]._finishedAt = Date.now();
+			if (message.role === "assistant") {
+				state.messages[index]._finishedAt = Date.now();
+				if (assistantHasFinalAnswer(state.messages[index])) setBusy(false, "Ready");
+			}
 		} else {
 			state.streamIndex = index;
 		}
@@ -2728,10 +2860,14 @@ function handleAgentEvent(event) {
 			state.subagents.delete(child.id);
 		} else {
 			const previous = state.subagents.get(child.id);
-			// Anchor to the tool call that was running when the subagent first
-			// appeared — the cell that spawned it — and never move it after that.
+			// Anchor to the tool call that spawned the subagent and never move it.
+			// Event forwarding can deliver the child update just after that tool's
+			// completion, so fall back to the latest call instead of leaving the row
+			// unanchored at the bottom of the growing transcript.
 			const anchorToolCallId =
-				previous?.anchorToolCallId ?? state.tools.filter((tool) => !tool.done).at(-1)?.toolCallId;
+				previous?.anchorToolCallId ??
+				state.tools.filter((tool) => !tool.done).at(-1)?.toolCallId ??
+				state.tools.at(-1)?.toolCallId;
 			state.subagents.set(child.id, { ...previous, ...child, anchorToolCallId });
 		}
 		renderMessages();
@@ -2791,11 +2927,25 @@ async function submitPrompt(message, allowWithoutModel = false) {
 	const fromComposer = message === undefined;
 	const composerText = fromComposer ? input.value.trim() : "";
 	const attachments = fromComposer ? [...state.attachments] : [];
-	if (fromComposer) message = composePromptMessage(composerText, attachments);
-	if (!message) return;
+	let images = [];
+	if (fromComposer) {
+		if (state.preparingPrompt) return;
+		state.preparingPrompt = true;
+		syncComposer();
+		try {
+			({ message, images } = await preparePrompt(composerText, attachments));
+		} catch (error) {
+			showToast(error instanceof Error ? error.message : String(error));
+			return;
+		} finally {
+			state.preparingPrompt = false;
+			syncComposer();
+		}
+	}
+	if (!message && images.length === 0) return;
 	// Selecting a command from the menu runs it immediately via applyCommand; this covers
 	// typing the full "/name args" line by hand and hitting Enter before the menu is open.
-	const typedCommand = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(message);
+	const typedCommand = images.length === 0 && /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(message);
 	const clientCommand = typedCommand && findClientCommand(typedCommand[1]);
 	if (clientCommand) {
 		input.value = "";
@@ -2813,21 +2963,25 @@ async function submitPrompt(message, allowWithoutModel = false) {
 	input.style.height = "auto";
 	if (fromComposer) clearAttachments();
 	closeCommandMenu();
-	const optimisticMessage = normalizeMessage({ role: "user", content: message, timestamp: Date.now(), _optimistic: true });
+	const optimisticContent = images.length ? [{ type: "text", text: message }, ...images] : message;
+	const optimisticMessage = normalizeMessage({ role: "user", content: optimisticContent, timestamp: Date.now(), _optimistic: true });
 	state.messages.push(optimisticMessage);
 	renderMessages();
 	if (connecting) {
 		// Hold the prompt rather than the composer: the engine is either still
 		// starting or still attaching to the chat on screen, and sending now would
 		// deliver it to the conversation we just left.
-		state.queuedPrompt = { message, optimisticMessage, composerText, attachments };
+		state.queuedPrompt = { message, images, optimisticMessage, composerText, attachments };
 		setBusy(false, state.switchingSession ? "Opening conversation" : "Connecting…");
+		// A conversation opened for reading has no engine on it yet; this is the
+		// moment it needs one, and the held prompt flushes when it lands.
+		void flushDeferredSwitch();
 		return;
 	}
 	setBusy(true, wasBusy ? "Steering current turn…" : "Working");
 	await sendCommand(
 		"prompt",
-		{ message, ...(wasBusy ? { streamingBehavior: "steer" } : {}) },
+		{ message, ...(images.length ? { images } : {}), ...(wasBusy ? { streamingBehavior: "steer" } : {}) },
 		{ message, optimisticKey: optimisticMessage._key },
 	);
 }
@@ -2848,7 +3002,11 @@ function flushQueuedPrompt() {
 	const queued = state.queuedPrompt;
 	state.queuedPrompt = undefined;
 	setBusy(true, "Working");
-	void sendCommand("prompt", { message: queued.message }, { message: queued.message, optimisticKey: queued.optimisticMessage._key });
+	void sendCommand(
+		"prompt",
+		{ message: queued.message, ...(queued.images?.length ? { images: queued.images } : {}) },
+		{ message: queued.message, optimisticKey: queued.optimisticMessage._key },
+	);
 }
 
 // Undo a held prompt: drop its optimistic row and hand the text back rather than
@@ -2939,6 +3097,9 @@ async function deleteConversation(workspace, sessionPath) {
 	if (confirmed !== true) return;
 	try {
 		if (active) {
+			// The chat being trashed may only be on screen, never attached. Drop that
+			// pending attach rather than spawning a worker for a session we delete.
+			state.deferredSwitch = undefined;
 			const { sessionPath: replacementPath } = await window.desktopAgent.createWorkspaceSession({ workspace });
 			state.tools = [];
 			state.queuedPrompt = undefined;
@@ -3075,21 +3236,20 @@ async function forkAtEntry(entryId, position) {
 }
 
 async function editFromMessage(message) {
-	// The text to edit is already on the client - don't make the user wait on a
-	// round trip (entry id lookup, then the actual fork/branch) just to see it in
-	// the composer. Put it there immediately and rewind the session underneath in
-	// the background; the reader is virtually always still editing by the time
-	// that finishes, so it never races a Send.
-	input.value = contentText(message);
-	input.dispatchEvent(new Event("input"));
-	input.focus();
+	const text = contentText(message);
 	try {
 		const entryId = await forkEntryIdForMessage(message);
 		if (!entryId) {
 			showToast("Could not find that message to edit.");
 			return;
 		}
-		await forkAtEntry(entryId, "before");
+		const result = await forkAtEntry(entryId, "before");
+		if (result.cancelled) return;
+		// Do not enable resending until the session is rewound. Otherwise a fast
+		// Send submits the replacement to the conversation being edited instead.
+		input.value = text;
+		input.dispatchEvent(new Event("input"));
+		input.focus();
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
 	}
@@ -3491,8 +3651,21 @@ function composePromptMessage(text, attachments) {
 	return [text, paths].filter(Boolean).join(" ");
 }
 
-// Attachments are handed to the agent as file paths; the cards keep those paths
-// out of the editable prompt while preserving the existing prompt payload.
+async function preparePrompt(text, attachments) {
+	const images = [];
+	const filePaths = [];
+	for (const path of attachments) {
+		if (!IMAGE_ATTACHMENT_EXTENSIONS.has(attachmentExtension(path))) {
+			filePaths.push(path);
+			continue;
+		}
+		images.push(await window.desktopAgent.getImageAttachment(path));
+	}
+	return { message: composePromptMessage(text, filePaths), images };
+}
+
+// Supported images become provider image blocks. Other files remain paths so
+// the agent can decide how to inspect them without putting paths in the editor.
 function addAttachments(paths) {
 	if (!paths?.length) return;
 	const knownPaths = new Set(state.attachments.map((path) => path.toLocaleLowerCase()));
@@ -3565,7 +3738,25 @@ for (const button of document.querySelectorAll("[data-prompt]")) {
 
 connectProviderButton.addEventListener("click", openProviderDialog);
 $("welcome-connect-provider-button").addEventListener("click", openProviderDialog);
-providerSelect.addEventListener("change", updateProviderKeyHelp);
+providerGrid.addEventListener("click", (event) => {
+	const button = event.target.closest("[data-provider-id]");
+	if (button instanceof HTMLButtonElement) selectProvider(button.dataset.providerId);
+});
+providerGrid.addEventListener("keydown", (event) => {
+	const buttons = [...providerGrid.querySelectorAll("[data-provider-id]")];
+	const currentIndex = buttons.indexOf(event.target);
+	if (currentIndex === -1) return;
+	let nextIndex;
+	if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % buttons.length;
+	if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+	if (event.key === "Home") nextIndex = 0;
+	if (event.key === "End") nextIndex = buttons.length - 1;
+	if (nextIndex === undefined) return;
+	event.preventDefault();
+	const nextButton = buttons[nextIndex];
+	selectProvider(nextButton.dataset.providerId);
+	nextButton.focus();
+});
 providerForm.addEventListener("submit", (event) => {
 	event.preventDefault();
 	void connectSelectedProvider();
@@ -3651,16 +3842,81 @@ function showSessionLocally(sessionPath, sessionName) {
 }
 
 function requestSessionSwitch(sessionPath, options = {}) {
-	if (!state.ready || !sessionPath) return;
+	if (!sessionPath) return;
 	state.switchingSession = true;
+	state.deferredSwitch = undefined;
+	state.pendingAttach = undefined;
 	// Callers point the sidebar at the target workspace before switching, so this
 	// is the workspace the opened conversation is expected to run in.
 	state.openedWorkspace = state.workspace;
+	// Read before showSessionLocally: it makes this session the active one, and
+	// isSessionWorking then reports the outgoing chat's live state instead.
+	const targetIsWorking = state.busySessions.has(sessionPathKey(sessionPath));
 	const switchToken = showSessionLocally(sessionPath, options.sessionName);
 	setBusy(false, "Opening conversation");
-	// open_session, not switch_session: switching replaces the agent's session in
-	// place, which stops whatever the conversation we are leaving was doing.
-	sendCommand("open_session", { sessionPath }, { sessionPath, switchToken });
+	// Attaching to a conversation the daemon has no worker for costs a process
+	// spawn of a few seconds, and those attaches are serialized, so a chat opened
+	// only to read it makes the next one wait behind its spawn. An idle
+	// conversation emits nothing to miss and its transcript is already on screen
+	// from disk, so the engine is asked for it when something actually needs it:
+	// a prompt, a session-scoped command, or the poll reporting it busy.
+	if (!options.immediate && !targetIsWorking) {
+		state.deferredSwitch = { sessionPath, switchToken };
+		renderWorkspaceList();
+		return;
+	}
+	// Clicking during startup used to be dropped silently — the conversation never
+	// opened and the click had to be repeated, which is most of what "it took ten
+	// seconds" was. The chat is on screen either way; only the attach waits.
+	if (!state.ready) {
+		state.pendingAttach = { sessionPath, switchToken };
+		renderWorkspaceList();
+		return;
+	}
+	attachSession(sessionPath, switchToken);
+}
+
+function attachSession(sessionPath, switchToken) {
+	// DaemonAgentConnection mutates its active-session identity while reattaching.
+	// Keep navigation commands ordered so rapid old-chat -> new-chat clicks cannot
+	// race those mutations and leave the prompt attached to the wrong conversation.
+	// A switch the user has already navigated away from is dropped rather than run.
+	const open = () =>
+		switchToken === state.switchToken
+			? sendTrackedCommand("open_session", { sessionPath }, { sessionPath, switchToken })
+			: Promise.resolve();
+	const queued = sessionSwitchTail.then(open, open);
+	sessionSwitchTail = queued.catch(() => undefined);
+	void queued.catch((error) => {
+		if (switchToken !== state.switchToken) return;
+		state.switchingSession = false;
+		returnQueuedPromptToComposer();
+		renderWorkspaceList();
+		sendCommand("get_state");
+		sendCommand("get_messages");
+		showToast(error instanceof Error ? error.message : String(error));
+	});
+	return queued;
+}
+
+// Run a switch that was made before the engine finished starting.
+function flushPendingAttach() {
+	const pending = state.pendingAttach;
+	if (!pending || !state.ready) return;
+	state.pendingAttach = undefined;
+	if (pending.switchToken !== state.switchToken) return;
+	void attachSession(pending.sessionPath, pending.switchToken);
+}
+
+// Attach the engine to a conversation that was opened for reading. Returns once
+// the engine is on it, so a command held for this chat can follow.
+function flushDeferredSwitch() {
+	const deferred = state.deferredSwitch;
+	if (!deferred) return Promise.resolve();
+	state.deferredSwitch = undefined;
+	// Superseded by a newer click, which owns the transcript and its own attach.
+	if (deferred.switchToken !== state.switchToken) return Promise.resolve();
+	return attachSession(deferred.sessionPath, deferred.switchToken);
 }
 
 async function openConversation(workspace, sessionPath) {
@@ -3678,8 +3934,9 @@ async function openConversation(workspace, sessionPath) {
 	requestSessionSwitch(sessionPath);
 }
 
+// Minting the transcript is a file write in the main process, so this works
+// before the engine is up; requestSessionSwitch holds the attach until it is.
 async function createNewSession() {
-	if (!state.ready) return;
 	openWorkspace(state.workspace);
 	state.tools = [];
 	state.queuedPrompt = undefined;
@@ -3695,7 +3952,9 @@ async function createNewSession() {
 	// agent opens alongside the running one, rather than one that replaces it.
 	try {
 		const { sessionPath } = await window.desktopAgent.createWorkspaceSession({ workspace: state.workspace });
-		requestSessionSwitch(sessionPath);
+		// Clicking "new chat" is an intent to work here, so this one attaches now
+		// and the spawn overlaps with typing rather than following the first send.
+		requestSessionSwitch(sessionPath, { immediate: true });
 	} catch (error) {
 		state.switchingSession = false;
 		state.queuedPrompt = undefined;
@@ -3730,7 +3989,7 @@ async function switchWorkspace(workspace) {
 		showToast(error instanceof Error ? error.message : String(error));
 		return;
 	}
-	requestSessionSwitch(sessionPath, { sessionName: "New conversation" });
+	requestSessionSwitch(sessionPath, { sessionName: "New conversation", immediate: true });
 }
 
 $("workspace-add-button").addEventListener("click", async () => {
@@ -4108,11 +4367,22 @@ runtimeDrawer.addEventListener("click", async (event) => {
 		if (confirmed === true) sendCommand("discard_subagent_worktree", { worktreeId: button.dataset.worktreeId });
 	}
 });
-stopButton.addEventListener("click", () => {
+stopButton.addEventListener("click", async () => {
 	stopButton.disabled = true;
-	sendCommand("abort").finally(() => {
+	try {
+		await sendCommandAwait("abort");
+		// The abort response confirms that the session and its active subagents were
+		// stopped. Update immediately instead of waiting for agent_end, which may
+		// arrive after stream cleanup.
+		state.busySessions.delete(sessionPathKey(state.activeSessionPath));
+		setBusy(false, "Ready");
+		sendCommand("get_messages");
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : String(error));
+		sendCommand("get_state");
+	} finally {
 		stopButton.disabled = false;
-	});
+	}
 });
 document.addEventListener("keydown", (event) => {
 	if (event.key === "Escape" && state.subagentView && runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open) {

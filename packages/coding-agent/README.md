@@ -311,7 +311,7 @@ Skills can also be Python-backed. A Python skill is a normal skill directory wit
 
 Place in `~/.prometheus/agent/skills/`, `~/.agents/skills/`, `.prometheus/agent/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [Prometheus package](#prometheus-packages) to share with others. See [docs/skills.md](docs/skills.md).
 
-Prometheus ships with a built-in `websearch` skill (Google search via the [Serper](https://serper.dev) API). It loads by default; run `/login`, switch to **MCP Connections**, and choose "Serper (web search)" to add your key. Disable it with `bundledSkills.websearch: false`, or override it with your own `websearch` skill in any location above. See [docs/skills.md#built-in-skills](docs/skills.md#built-in-skills).
+Prometheus ships with a built-in `websearch` skill (web search via [Exa](https://exa.ai)'s MCP server). It loads by default and works anonymously with no setup; if you hit its rate limit, run `/login`, switch to **MCP Connections**, and choose "Exa (web search)" to add a key. Disable it with `bundledSkills.websearch: false`, or override it with your own `websearch` skill in any location above. See [docs/skills.md#built-in-skills](docs/skills.md#built-in-skills).
 
 ### MCP Integrations
 

@@ -196,7 +196,7 @@ test_review = await rlm("review the tests", name="test-reviewer")
 audit = await rlm("slow independent audit", name="audit-reviewer")
 ```
 
-End the turn instead of waiting for completion. Children send requested answers with `await agent_message.send(message, receiver_role="parent")`, and replies arrive as ordinary agent messages over later turns. A child may instead write results to files for the parent to read. The host runs each admitted child as an independent `AgentSession`; daemon-backed children can be retained as independently addressable session workers.
+End the turn instead of waiting for completion. Each child's final response arrives automatically as an ordinary agent message over a later turn; children must not send that response explicitly with `agent_message`. A child may instead write results to files for the parent to read. The host runs each admitted child as an independent `AgentSession`; daemon-backed children can be retained as independently addressable session workers.
 
 ## Parent-Scoped Sub-Agent Registry
 

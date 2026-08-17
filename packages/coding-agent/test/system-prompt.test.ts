@@ -629,7 +629,9 @@ describe("buildSystemPrompt", () => {
 		});
 
 		expect(prompt).toContain("You are a child agent spawned by orchestrator");
-		expect(prompt).toContain('await agent_message.send(message, receiver_role="parent")');
+		expect(prompt).toContain("End your final turn with the answer itself");
+		expect(prompt).toContain("Never use agent messaging to send your final answer");
+		expect(prompt).not.toContain('agent_message.send(message, receiver_role="parent")');
 		expect(prompt).not.toContain("You are a general purpose agent that uses code to solve tasks.");
 	});
 

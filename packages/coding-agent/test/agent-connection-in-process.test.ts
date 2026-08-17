@@ -239,6 +239,19 @@ describe("InProcessAgentConnection", () => {
 		await expect(connection.cancelRlmChild("finished-child")).resolves.toBe(false);
 	});
 
+	it("fully aborts the session so active rlm children are cancelled", async () => {
+		const session = createFakeSession("abort", []);
+		const abort = vi.fn(async () => {});
+		const requestAbort = vi.fn();
+		Object.assign(session.session, { abort, requestAbort });
+		const connection = new InProcessAgentConnection(asRuntime(new FakeRuntime(session.session)));
+
+		await connection.abort();
+
+		expect(abort).toHaveBeenCalledOnce();
+		expect(requestAbort).not.toHaveBeenCalled();
+	});
+
 	it("loads session context through the connection boundary", async () => {
 		const session = createFakeSession("ctx", [userMessage("context", 1)]);
 		const runtime = new FakeRuntime(session.session);

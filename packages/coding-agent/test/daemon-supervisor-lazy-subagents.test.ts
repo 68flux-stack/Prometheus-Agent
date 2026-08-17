@@ -698,4 +698,45 @@ describe("daemon supervisor passive subagent topology", () => {
 			}),
 		]);
 	});
+
+	it("coalesces peer syncs queued behind a stalled worker instead of chaining them", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "prime-supervisor-peer-coalesce-"));
+		tempDirs.push(directory);
+		const supervisor = new DaemonSupervisor(join(directory, "daemon.sock"), {
+			defaultSessionConfig: { agentDir: directory, cwd: directory },
+			descriptorDir: join(directory, "workers"),
+		}) as unknown as SupervisorInternals;
+
+		const first = worker("first", [
+			summary({ id: "first-root-active", activeSessionId: "first-root-active", sessionId: "first-root-session" }),
+		]);
+		const second = worker("second", [
+			summary({ id: "second-root-active", activeSessionId: "second-root-active", sessionId: "second-root-session" }),
+		]);
+		let releaseStall = () => {};
+		const stalled = new Promise<void>((resolveStall) => {
+			releaseStall = resolveStall;
+		});
+		let stallOnce = true;
+		second.client.requestWorker.mockImplementation(async () => {
+			if (stallOnce) {
+				stallOnce = false;
+				await stalled;
+			}
+			return { type: "response", command: "worker_sync_agent_peers", success: true };
+		});
+		supervisor.workers.set("first", first);
+		supervisor.workers.set("second", second);
+
+		const inFlight = supervisor.syncAgentPeers();
+		await new Promise((tick) => setTimeout(tick, 0)); // let the round start and stall on the busy worker
+		const queuedA = supervisor.syncAgentPeers();
+		const queuedB = supervisor.syncAgentPeers();
+		expect(queuedA).toBe(queuedB);
+		releaseStall();
+		await Promise.all([inFlight, queuedA, queuedB]);
+
+		// One in-flight round plus a single coalesced follow-up, not one per caller.
+		expect(second.client.requestWorker).toHaveBeenCalledTimes(2);
+	});
 });

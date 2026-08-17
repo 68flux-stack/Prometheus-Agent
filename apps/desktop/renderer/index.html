@@ -184,15 +184,18 @@
 				<div class="provider-dialog-header">
 					<div>
 						<h2 id="provider-dialog-title">Connect a provider</h2>
-						<p>Paste an API key once. Prometheus will save it locally and refresh your models.</p>
+						<p>Choose a provider, then connect with an API key or supported subscription.</p>
 					</div>
 					<button class="provider-dialog-close" id="provider-dialog-close" type="button" aria-label="Close provider dialog">×</button>
 				</div>
-				<label class="provider-field">
-					<span>Provider</span>
-					<select id="provider-select"></select>
-				</label>
-				<p class="provider-key-help" id="provider-key-help"></p>
+				<section class="provider-picker" aria-labelledby="provider-picker-title">
+					<div class="provider-picker-heading">
+						<span id="provider-picker-title">Choose a provider</span>
+						<small>Choose one to see its sign-in options.</small>
+					</div>
+					<div class="provider-grid" id="provider-grid" role="radiogroup" aria-label="Available model providers"></div>
+				</section>
+				<p class="provider-key-help" id="provider-key-help" aria-live="polite"></p>
 				<label class="provider-field">
 					<span>API key</span>
 					<div class="secret-input">
@@ -218,6 +221,7 @@
 		</dialog>
 		<div class="toast" id="toast" role="status"></div>
 		<script src="./tool-summary.js"></script>
+		<script src="./provider-logos.js"></script>
 		<script src="./app.js"></script>
 	</body>
 </html>

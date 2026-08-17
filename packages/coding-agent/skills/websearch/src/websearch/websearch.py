@@ -1,12 +1,15 @@
-"""Websearch skill implementation."""
+"""Websearch skill implementation: search via Exa's remote MCP server."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
 
-import httpx
+from rlm import McpIntegration
+
+EXA_MCP_URL = "https://mcp.exa.ai/mcp"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -27,23 +30,6 @@ def _agent_dir() -> Path:
     return Path(raw).expanduser()
 
 
-def _resolve_api_key() -> str:
-    # Read auth.json on each call (not just the injected env var) so a key added
-    # via /login after the kernel started is still picked up. Env var wins.
-    env_key = os.environ.get("SERPER_API_KEY", "").strip()
-    if env_key:
-        return env_key
-
-    try:
-        auth = json.loads((_agent_dir() / "auth.json").read_text())
-        cred = auth.get("serper") if isinstance(auth, dict) else None
-        if isinstance(cred, dict) and cred.get("type") == "api_key":
-            return _resolve_config_value(str(cred.get("key") or ""))
-    except (OSError, ValueError):
-        pass
-    return ""
-
-
 def _resolve_config_value(value: str) -> str:
     # Stored keys may be a literal or an env-var name; "!command" refs can't be run
     # safely here, so skip them (the agent injects those resolved at build time).
@@ -53,61 +39,94 @@ def _resolve_config_value(value: str) -> str:
     return (os.environ.get(value) or value).strip()
 
 
-def _format_serper_results(data: dict, query: str, num_results: int = 5) -> str:
-    """Format a Serper API response into readable text."""
-    sections: list[str] = []
+def _resolve_api_key() -> str:
+    # Optional: Exa's MCP server works anonymously (rate-limited). A key only
+    # raises that limit. Read auth.json on each call (not just the injected env
+    # var) so a key added via /login after the kernel started is still picked up.
+    env_key = os.environ.get("EXA_API_KEY", "").strip()
+    if env_key:
+        return env_key
 
-    kg = data.get("knowledgeGraph")
-    if kg:
-        kg_lines: list[str] = []
-        title = (kg.get("title") or "").strip()
-        if title:
-            kg_lines.append(f"Knowledge Graph: {title}")
-        description = (kg.get("description") or "").strip()
-        if description:
-            kg_lines.append(description)
-        for key, value in (kg.get("attributes") or {}).items():
-            text = str(value).strip()
-            if text:
-                kg_lines.append(f"{key}: {text}")
-        if kg_lines:
-            sections.append("\n".join(kg_lines))
-
-    for i, result in enumerate((data.get("organic") or [])[:num_results]):
-        title = (result.get("title") or "").strip() or "Untitled"
-        lines = [f"Result {i}: {title}"]
-        link = (result.get("link") or "").strip()
-        if link:
-            lines.append(f"URL: {link}")
-        snippet = (result.get("snippet") or "").strip()
-        if snippet:
-            lines.append(snippet)
-        sections.append("\n".join(lines))
-
-    people_also_ask = data.get("peopleAlsoAsk") or []
-    if people_also_ask:
-        max_q = max(1, min(3, len(people_also_ask)))
-        questions: list[str] = []
-        for item in people_also_ask[:max_q]:
-            question = (item.get("question") or "").strip()
-            if not question:
-                continue
-            entry = f"Q: {question}"
-            answer = (item.get("snippet") or "").strip()
-            if answer:
-                entry += f"\nA: {answer}"
-            questions.append(entry)
-        if questions:
-            sections.append("People Also Ask:\n" + "\n".join(questions))
-
-    if not sections:
-        return f"No results returned for query: {query}"
-
-    return "\n\n---\n\n".join(sections)
+    try:
+        auth = json.loads((_agent_dir() / "auth.json").read_text())
+        cred = auth.get("exa") if isinstance(auth, dict) else None
+        if isinstance(cred, dict) and cred.get("type") == "api_key":
+            return _resolve_config_value(str(cred.get("key") or ""))
+    except (OSError, ValueError):
+        pass
+    return ""
 
 
-async def _fetch_serper(query: str, api_key: str, timeout: int = 45, num_results: int = 5) -> str:
-    """Execute a single Serper API search."""
+class _Exa(McpIntegration):
+    server = "exa"
+    url = EXA_MCP_URL
+
+    def __init__(self) -> None:
+        super().__init__()
+        # The TCP+TLS handshake dominates per-call latency (the MCP session
+        # itself, one per call, is cheap once connected). Keep one pooled
+        # httpx client alive across calls so repeat searches reuse the open
+        # connection. A ClientSession isn't reused the same way: ipykernel may
+        # run each cell as its own asyncio task, and anyio's task groups
+        # (which the MCP session's stream machinery relies on) aren't safe to
+        # use across tasks — a plain httpx connection pool is.
+        self._http_client = None
+        self._http_client_key: tuple[tuple[str, str], ...] | None = None
+
+    async def _get_http_client(self, headers: dict[str, str]):
+        import httpx
+
+        key = tuple(sorted(headers.items()))
+        if self._http_client is not None and self._http_client_key == key:
+            return self._http_client
+        if self._http_client is not None:
+            await self._http_client.aclose()
+        self._http_client = httpx.AsyncClient(headers=headers)
+        self._http_client_key = key
+        return self._http_client
+
+    async def _open_session(self, stack):
+        from mcp import ClientSession
+
+        url, extra_headers = await self._resolve_config()
+        api_key = _resolve_api_key()
+        headers = {**extra_headers, "x-api-key": api_key} if api_key else dict(extra_headers)
+
+        try:
+            from mcp.client.streamable_http import streamable_http_client
+
+            client = await self._get_http_client(headers)
+            cm = streamable_http_client(url, http_client=client)
+        except ImportError:
+            # Older `mcp` SDKs only expose the deprecated wrapper, which always
+            # owns (and closes) its own client — correct, just unpooled.
+            import inspect
+
+            from rlm.mcp_base import _resolve_streamable_http
+
+            transport = _resolve_streamable_http()
+            params = inspect.signature(transport).parameters
+            if "headers" in params:
+                cm = transport(url, headers=headers or None)
+            elif "http_client" in params:
+                import httpx
+
+                client = await stack.enter_async_context(httpx.AsyncClient(headers=headers))
+                cm = transport(url, http_client=client)
+            else:
+                raise RuntimeError(f"unsupported mcp streamable-HTTP client signature: {tuple(params)}")
+
+        read, write, *_ = await stack.enter_async_context(cm)
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        return session
+
+
+_exa = _Exa()
+
+
+async def _fetch_exa(query: str, timeout: int, num_results: int) -> str:
+    """Search via Exa's MCP server (the ``web_search_exa`` tool)."""
     if os.environ.get("PROMETHEUS_WINDOWS_PLAN_MODE") == "1":
         from rlm import host_request
 
@@ -115,27 +134,18 @@ async def _fetch_serper(query: str, api_key: str, timeout: int = 45, num_results
             "websearch.search",
             {"query": query, "timeout": timeout, "num_results": num_results},
         )
-        data = payload.get("data")
-        if not isinstance(data, dict):
+        text = payload.get("text")
+        if not isinstance(text, str):
             raise RuntimeError("Prometheus returned an invalid web search response")
-        return _format_serper_results(data, query, num_results=num_results)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                "https://google.serper.dev/search",
-                json={"q": query},
-                headers={
-                    "X-API-KEY": api_key,
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as e:
-        body = e.response.text if e.response is not None else ""
-        raise RuntimeError(f"Serper search error ({e.response.status_code}): {body}") from e
+        return text or f"No results returned for query: {query}"
 
-    return _format_serper_results(data, query, num_results=num_results)
+    result = await asyncio.wait_for(
+        _exa.call_tool("web_search_exa", {"query": query, "numResults": num_results}),
+        timeout=timeout,
+    )
+    if not isinstance(result, str):
+        result = json.dumps(result)
+    return result or f"No results returned for query: {query}"
 
 
 async def run(
@@ -145,34 +155,24 @@ async def run(
     timeout: int | None = None,
     num_results: int | None = None,
 ) -> str:
-    """Run a Google search via Serper and return formatted results.
+    """Run a web search via Exa's MCP server and return formatted results.
 
     Args:
-        query: Google search query.
+        query: Natural-language search query.
         max_output: Truncate output to this many chars.
-        timeout: HTTP timeout in seconds.
-        num_results: Organic results to return.
+        timeout: Request timeout in seconds.
+        num_results: Number of results to return.
 
     Returns:
         Formatted search results.
     """
-    api_key = _resolve_api_key()
-    if not api_key:
-        return (
-            "Web search is not set up yet: no Serper API key is configured.\n"
-            "Tell the user how to enable it:\n"
-            "  1. Get a free API key at https://serper.dev (sign up, copy the key).\n"
-            "  2. In Prometheus, run /login, switch to MCP Connections, choose \"Serper (web search)\", and paste the key.\n"
-            "Do not ask the user to set environment variables. Once the key is saved, web search works automatically."
-        )
-
     if timeout is None:
         timeout = _env_int("PROMETHEUS_WEBSEARCH_TIMEOUT", 45)
     if num_results is None:
         num_results = _env_int("PROMETHEUS_WEBSEARCH_NUM_RESULTS", 5)
 
     try:
-        result = await _fetch_serper(query, api_key, timeout=timeout, num_results=num_results)
+        result = await _fetch_exa(query, timeout=timeout, num_results=num_results)
     except Exception as e:
         result = f"Error searching for '{query}': {e}"
     output = f'Results for query "{query}":\n\n{result}'

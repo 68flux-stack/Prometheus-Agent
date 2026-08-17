@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+- Changed the built-in `websearch` skill from the Serper API to Exa's remote MCP server; it now works anonymously out of the box, with an optional API key (via `/login`) to raise the rate limit.
+- Fixed `websearch` paying a fresh TCP+TLS handshake on every call by reusing a pooled connection across searches.
+- Fixed the desktop stop control and conversation activity indicator remaining visually active after an abort.
+- Fixed the desktop stop control leaving active subagents running after the main agent was aborted.
 - Changed desktop thinking summaries to use a lighter, non-italic style.
-- Changed subagents to relay their final response to the parent automatically while keeping explicit agent messages available for progress updates.
+- Changed subagents to relay their final response to the parent automatically without also sending a duplicate explicit agent message.
 - Fixed kernel runtime upgrades deleting and recreating the whole kernel venv: stale packages are now reinstalled in place, so an upgrade no longer fails on Windows when another session's kernel holds `Scripts/python.exe` (which previously left the venv half-deleted).
 
 - Added a preloaded ripgrep-backed `search()` to the kernel namespace, and pointed the system prompt and ipython tool description at it, so content search no longer wedges the kernel on hand-rolled `rglob` scans.
@@ -28,6 +32,7 @@
 - Fixed new sessions waiting for opt-in trace uploads to finish before becoming usable.
 - Fixed desktop conversation switching on Windows by recognizing lease collisions and reattaching to active sessions through the shared daemon.
 - Fixed execution modes being unavailable on Windows; plan mode now provides read-only IPython and web search while workspace mode uses Prime's permission boundary.
+- Changed plain `%%bash` cells to run in independent processes so commands from the agent and its subagents can execute concurrently.
 
 ## [0.7.1] - 2026-08-07
 

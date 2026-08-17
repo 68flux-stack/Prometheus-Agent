@@ -1,10 +1,18 @@
 // TODO: reconsider whether the persistent kernel is needed once RLM-1 weights land.
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
+import { waitForChildProcess } from "../../utils/child-process.js";
 import { IMAGE_MIME_TYPES } from "../../utils/mime.js";
-import { getShellConfig } from "../../utils/shell.js";
+import {
+	getShellConfig,
+	getShellEnv,
+	killProcessTree,
+	trackDetachedChildPid,
+	untrackDetachedChildPid,
+} from "../../utils/shell.js";
 import type { PermissionAction, ProcessWrapper } from "../execution-policy.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 import { withKernelBootPermit } from "../kernel/boot-gate.js";
@@ -499,6 +507,85 @@ function applyShellSettingsToBashMagicCell(
 }
 
 /**
+ * Run a plain %%bash cell outside the persistent kernel. Each call owns its own
+ * child process, so sibling tool calls can execute concurrently. Bash magics
+ * with arguments still use IPython because options such as --out mutate the
+ * kernel namespace.
+ */
+async function executeConcurrentBashCell(
+	cwd: string,
+	body: string,
+	options: IpythonToolOptions | undefined,
+	signal: AbortSignal | undefined,
+	onStream: (chunk: string, name: "stdout" | "stderr") => void,
+): Promise<ExecuteResult> {
+	const startedAt = Date.now();
+	if (signal?.aborted) {
+		return { stdout: "", stderr: "", status: "aborted", durationMs: 0 };
+	}
+
+	const command = options?.commandPrefix ? `${options.commandPrefix}${body ? `\n${body}` : ""}` : body;
+	const shellConfig = getShellConfig(options?.shellPath?.trim() || defaultShellPath());
+	const wrapped = options?.processWrapper?.(shellConfig.shell, [...shellConfig.args, command]) ?? {
+		command: shellConfig.shell,
+		args: [...shellConfig.args, command],
+	};
+	const child = spawn(wrapped.command, wrapped.args, {
+		cwd,
+		detached: process.platform !== "win32",
+		env: { ...getShellEnv(), ...options?.env },
+		stdio: ["ignore", "pipe", "pipe"],
+		windowsHide: true,
+	});
+	if (child.pid) trackDetachedChildPid(child.pid);
+
+	let stdout = "";
+	let stderr = "";
+	const append = (chunk: Buffer, name: "stdout" | "stderr") => {
+		const text = chunk.toString();
+		if (name === "stdout") stdout += text;
+		else stderr += text;
+		onStream(text, name);
+	};
+	child.stdout?.on("data", (chunk: Buffer) => append(chunk, "stdout"));
+	child.stderr?.on("data", (chunk: Buffer) => append(chunk, "stderr"));
+
+	const abort = () => {
+		if (child.pid) killProcessTree(child.pid);
+	};
+	signal?.addEventListener("abort", abort, { once: true });
+	try {
+		const exitCode = await waitForChildProcess(child);
+		if (signal?.aborted) {
+			return { stdout, stderr, status: "aborted", durationMs: Date.now() - startedAt };
+		}
+		if (exitCode !== 0) {
+			const message = `Command exited with code ${exitCode ?? "unknown"}`;
+			return {
+				stdout,
+				stderr,
+				status: "error",
+				error: { ename: "ShellError", evalue: message, traceback: [message] },
+				durationMs: Date.now() - startedAt,
+			};
+		}
+		return { stdout, stderr, status: "ok", durationMs: Date.now() - startedAt };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			stdout,
+			stderr,
+			status: signal?.aborted ? "aborted" : "error",
+			...(signal?.aborted ? {} : { error: { ename: "ShellError", evalue: message, traceback: [message] } }),
+			durationMs: Date.now() - startedAt,
+		};
+	} finally {
+		signal?.removeEventListener("abort", abort);
+		if (child.pid) untrackDetachedChildPid(child.pid);
+	}
+}
+
+/**
  * Owns the lazy create+start+runtime-bootstrap of one session's IPython kernel.
  *
  * Concurrent ensure() calls await the same in-flight startup, a failed startup
@@ -806,11 +893,12 @@ export function createIpythonToolDefinition(
 		name: "ipython",
 		label: "ipython",
 		description:
-			"Execute Python scratchpad code and `%%bash` shell cells in a persistent IPython kernel. Variables, imports, and loaded data persist across calls, and are revived on a best-effort basis when a session is resumed (objects that cannot be serialized are dropped and reported). Project imports, tests, scripts, CLIs, and dependency checks should run through the target project's own environment. To find code, call the preloaded `search(pattern, path='.', glob=..., ignore_case=..., files_only=...)` (ripgrep-backed, gitignore-aware, bounded) instead of walking the tree with `rglob`/`os.walk` and reading files — a hand-rolled scan descends into dependency and build directories and can wedge the kernel for minutes.",
+			"Execute Python scratchpad code and `%%bash` shell cells. Plain `%%bash` calls run in independent processes so sibling calls can execute concurrently; Python calls share a persistent IPython namespace and serialize. Variables, imports, and loaded data persist across Python calls, and are revived on a best-effort basis when a session is resumed (objects that cannot be serialized are dropped and reported). Project imports, tests, scripts, CLIs, and dependency checks should run through the target project's own environment. To find code, call the preloaded `search(pattern, path='.', glob=..., ignore_case=..., files_only=...)` (ripgrep-backed, gitignore-aware, bounded) instead of walking the tree with `rglob`/`os.walk` and reading files — a hand-rolled scan descends into dependency and build directories and can wedge the kernel for minutes.",
 		promptSnippet:
 			"ipython - persistent agent notebook for Python scratchpad code and %%bash orchestration; preloaded `search()` for ripgrep-backed content search",
-		// The kernel is single-threaded — pi must not run two ipython calls in parallel within a batch.
-		executionMode: "sequential",
+		// Plain %%bash cells own independent child processes. Python cells still serialize
+		// inside KernelManager because the persistent Jupyter namespace is single-threaded.
+		executionMode: "parallel",
 		parameters: ipythonSchema,
 		execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 			let hasWorkingMessage = false;
@@ -840,23 +928,29 @@ export function createIpythonToolDefinition(
 						if (!approved) throw new Error("Command approval was rejected or unavailable");
 					}
 				}
-				const code = applyShellSettingsToBashMagicCell(params.code, options);
-				const { result: r, kernelRestarted } = await executeWithBusyKernelChoice(
-					provisioner,
-					reportStartupProgress,
-					toolCallId,
-					code,
-					signal,
-					(chunk) => {
-						onUpdate?.({
-							content: [{ type: "text", text: chunk }],
-							details: { status: "ok" },
-						});
-					},
-					setToolWorkingMessage,
-					options?.onLateSentAgentMessage,
-					ctx,
-				);
+				const onStream = (chunk: string) => {
+					onUpdate?.({
+						content: [{ type: "text", text: chunk }],
+						details: { status: "ok" },
+					});
+				};
+				const concurrentBash = bashCell && bashCell.magicArguments.trim().length === 0;
+				const { result: r, kernelRestarted } = concurrentBash
+					? {
+							result: await executeConcurrentBashCell(cwd, bashCell.body, options, signal, onStream),
+							kernelRestarted: false,
+						}
+					: await executeWithBusyKernelChoice(
+							provisioner,
+							reportStartupProgress,
+							toolCallId,
+							applyShellSettingsToBashMagicCell(params.code, options),
+							signal,
+							onStream,
+							setToolWorkingMessage,
+							options?.onLateSentAgentMessage,
+							ctx,
+						);
 
 				let text = r.stdout;
 				if (r.stderr) text += (text ? "\n" : "") + r.stderr;

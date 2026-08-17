@@ -59,6 +59,51 @@ describe("daemon mode helpers", () => {
 		expect(client.id).toBe("public-client");
 	});
 
+	it("fully aborts a session before acknowledging an abort command", async () => {
+		const daemon = new AgentDaemon("/tmp/unused-daemon.sock", {
+			defaultSessionConfig: { agentDir: "/tmp", cwd: "/tmp" },
+			createRuntime: vi.fn(),
+		});
+		const state = makeState("active");
+		let releaseAbort = () => {};
+		const abortGate = new Promise<void>((resolve) => {
+			releaseAbort = resolve;
+		});
+		const abort = vi.fn(() => abortGate);
+		const requestAbort = vi.fn();
+		state.runtime = {
+			...state.runtime,
+			session: { abort, requestAbort },
+		} as unknown as ActiveSessionState["runtime"];
+		const internals = daemon as unknown as {
+			sessions: Map<string, ActiveSessionState>;
+			handleCommand(client: DaemonSocketClient, command: DaemonCommand): Promise<DaemonOutbound>;
+		};
+		internals.sessions.set(state.activeSessionId, state);
+
+		let settled = false;
+		const response = internals
+			.handleCommand(makeClient("client", state.activeSessionId), {
+				id: "abort-request",
+				type: "abort",
+				activeSessionId: state.activeSessionId,
+			})
+			.finally(() => {
+				settled = true;
+			});
+		await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+		expect(settled).toBe(false);
+		expect(requestAbort).not.toHaveBeenCalled();
+
+		releaseAbort();
+		await expect(response).resolves.toMatchObject({
+			id: "abort-request",
+			type: "response",
+			command: "abort",
+			success: true,
+		});
+	});
+
 	it("normalizes daemon session names before validation and persistence", async () => {
 		const daemon = new AgentDaemon("/tmp/unused-daemon.sock", {
 			defaultSessionConfig: { agentDir: "/tmp", cwd: "/tmp" },

@@ -16,23 +16,23 @@ describe("DefaultResourceLoader", () => {
 	let tempDir: string;
 	let agentDir: string;
 	let cwd: string;
-	let previousSerperApiKey: string | undefined;
+	let previousExaApiKey: string | undefined;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `rl-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		cwd = join(tempDir, "project");
-		previousSerperApiKey = process.env.SERPER_API_KEY;
-		delete process.env.SERPER_API_KEY;
+		previousExaApiKey = process.env.EXA_API_KEY;
+		delete process.env.EXA_API_KEY;
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(cwd, { recursive: true });
 	});
 
 	afterEach(() => {
-		if (previousSerperApiKey === undefined) {
-			delete process.env.SERPER_API_KEY;
+		if (previousExaApiKey === undefined) {
+			delete process.env.EXA_API_KEY;
 		} else {
-			process.env.SERPER_API_KEY = previousSerperApiKey;
+			process.env.EXA_API_KEY = previousExaApiKey;
 		}
 		rmSync(tempDir, { recursive: true, force: true });
 	});
@@ -471,7 +471,7 @@ Content`,
 			expect(websearch).toBeDefined();
 			expect(websearch?.description).toContain("/login");
 			expect(websearch?.description).toContain("MCP Connections");
-			expect(websearch?.description).toContain("Serper (web search)");
+			expect(websearch?.description).toContain("Exa (web search)");
 			expect(websearch?.kind).toBe("python");
 			if (websearch?.kind === "python") {
 				expect(websearch.python.importName).toBe("websearch");
@@ -479,12 +479,12 @@ Content`,
 			}
 		});
 
-		it("should not emit a SERPER_API_KEY warning when the key is unset", async () => {
+		it("should not emit an EXA_API_KEY warning when the key is unset", async () => {
 			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { diagnostics } = loader.getSkills();
-			expect(diagnostics.some((d) => d.type === "warning" && d.message.includes("SERPER_API_KEY"))).toBe(false);
+			expect(diagnostics.some((d) => d.type === "warning" && d.message.includes("EXA_API_KEY"))).toBe(false);
 		});
 
 		it("should not load the bundled websearch skill when disabled in settings", async () => {
@@ -494,7 +494,7 @@ Content`,
 
 			const { skills, diagnostics } = loader.getSkills();
 			expect(skills.some((s) => s.name === "websearch")).toBe(false);
-			expect(diagnostics.some((d) => d.type === "warning" && d.message.includes("SERPER_API_KEY is not set"))).toBe(
+			expect(diagnostics.some((d) => d.type === "warning" && d.message.includes("EXA_API_KEY is not set"))).toBe(
 				false,
 			);
 		});

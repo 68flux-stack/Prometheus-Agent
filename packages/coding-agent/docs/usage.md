@@ -108,15 +108,14 @@ Within a session, the model can delegate through the `rlm` callable already avai
 # Spawn independent children. Each call returns at admission with a child handle,
 # never the child's answer.
 review = await rlm(
-    "Review authentication and reply to the parent with findings.",
+    "Review authentication and identify any issues.",
     name="auth-reviewer",
 )
-tests = await rlm("Find missing regression tests and reply to the parent.", name="test-reviewer")
-docs = await rlm("Find stale public documentation and reply to the parent.", name="docs-reviewer")
+tests = await rlm("Find missing regression tests.", name="test-reviewer")
+docs = await rlm("Find stale public documentation.", name="docs-reviewer")
 
-# Children reply from their own sessions with:
-# await agent_message.send(message, receiver_role="parent")
-# Their replies arrive here as ordinary agent messages.
+# Each child's final response is relayed here automatically as an ordinary
+# agent message. Children do not send that response with agent_message.
 
 # Recover handles and follow up with a retained child.
 children = await rlm.list_subagents()

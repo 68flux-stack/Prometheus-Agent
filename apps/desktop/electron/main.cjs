@@ -46,6 +46,7 @@ const { attachJsonlLineReader } = require(path.join(distDir, "modes", "rpc", "js
 const OAUTH_PROVIDER_IDS = new Set(["anthropic", "openai-codex", "github-copilot"]);
 const MAX_RPC_LINE_LENGTH = 128 * 1024 * 1024;
 const MAX_ATTACHMENT_PREVIEW_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 
 function isWritableDirectory(directory) {
 	try {
@@ -794,6 +795,12 @@ function createWindow() {
 	mainWindow.setTitle("Prometheus");
 	Menu.setApplicationMenu(null);
 
+	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+		void shell.openExternal(url).catch((error) => {
+			console.error(`Could not open external link: ${error.message}`);
+		});
+		return { action: "deny" };
+	});
 	mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
 		if (level >= 2) console.error(`Renderer ${sourceId}:${line}: ${message}`);
 	});
@@ -848,7 +855,7 @@ function serveRenderer() {
 }
 
 // Pasted images have no path on disk, so park them in a session-scoped temp
-// folder and hand the agent the path like any other attachment.
+// folder until the renderer turns them into provider image blocks.
 function savePastedImage({ data, extension } = {}) {
 	if (!data) throw new Error("No image data was pasted.");
 	const dir = path.join(os.tmpdir(), "prometheus-pasted");
@@ -876,6 +883,49 @@ async function createImagePreview({ filePath } = {}) {
 		preview = nativeImage.createFromPath(resolved);
 	}
 	return preview?.isEmpty() ? undefined : preview.toDataURL();
+}
+
+function detectImageMimeType(buffer) {
+	if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+		return "image/png";
+	}
+	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+	if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) return "image/gif";
+	if (
+		buffer.length >= 12 &&
+		buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+		buffer.subarray(8, 12).toString("ascii") === "WEBP"
+	) {
+		return "image/webp";
+	}
+	return undefined;
+}
+
+function readImageAttachment({ filePath } = {}) {
+	if (typeof filePath !== "string" || !filePath.trim()) throw new Error("Choose an image to attach.");
+	const resolved = path.resolve(filePath);
+	let stats;
+	try {
+		stats = statSync(resolved);
+	} catch {
+		throw new Error(`Could not read image: ${path.basename(resolved)}`);
+	}
+	if (!stats.isFile() || stats.size === 0) throw new Error(`Could not read image: ${path.basename(resolved)}`);
+	if (stats.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+		throw new Error(`${path.basename(resolved)} is too large to attach. Keep images under 32 MB.`);
+	}
+	let buffer = readFileSync(resolved);
+	let mimeType = detectImageMimeType(buffer);
+	if (!mimeType) {
+		const image = nativeImage.createFromPath(resolved);
+		if (image.isEmpty()) throw new Error(`${path.basename(resolved)} is not a supported image.`);
+		buffer = image.toPNG();
+		mimeType = "image/png";
+	}
+	if (buffer.length > MAX_IMAGE_ATTACHMENT_BYTES) {
+		throw new Error(`${path.basename(resolved)} is too large to attach. Keep images under 32 MB.`);
+	}
+	return { type: "image", data: buffer.toString("base64"), mimeType };
 }
 
 // Windows dictation is a system toggle on Win+H; there is no API for it, so
@@ -944,6 +994,7 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("files:save-pasted-image", (_event, payload) => savePastedImage(payload));
 	ipcMain.handle("files:image-preview", (_event, payload) => createImagePreview(payload));
+	ipcMain.handle("files:image-attachment", (_event, payload) => readImageAttachment(payload));
 	ipcMain.handle("dictation:start", () => startWindowsDictation());
 	ipcMain.handle("shell:open-path", (_event, target) => shell.openPath(target));
 	ipcMain.handle("shell:show-item", (_event, target) => shell.showItemInFolder(target));
@@ -963,4 +1014,4 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => stopAgent({ graceMs: 1000 }));
 
 // Exported for the registry-reader check; the app itself goes through IPC.
-module.exports = { listSessionSubagents, readSessionMessages };
+module.exports = { detectImageMimeType, listSessionSubagents, readImageAttachment, readSessionMessages };

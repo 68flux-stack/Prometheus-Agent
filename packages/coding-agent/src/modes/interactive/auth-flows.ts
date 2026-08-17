@@ -27,7 +27,7 @@ import {
 	resolvePrometheusTracesBaseUrl,
 } from "../../core/prime-inference-auth.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
-import { SERPER_CREDENTIAL_ID, SERPER_CREDENTIAL_NAME } from "../../core/websearch-credential.js";
+import { EXA_CREDENTIAL_ID, EXA_CREDENTIAL_NAME } from "../../core/websearch-credential.js";
 import { showFullPaneOverlay } from "./components/centered-overlay.js";
 import { ExtensionSelectorComponent } from "./components/extension-selector.js";
 import { LoginDialogComponent } from "./components/login-dialog.js";
@@ -268,10 +268,11 @@ export class ProviderAuthFlows {
 			});
 		}
 
-		// Serper is a skill credential, not a model provider, so add it manually.
+		// Exa is a skill credential, not a model provider, so add it manually. The
+		// websearch skill works anonymously without it; this only raises its rate limit.
 		options.push({
-			id: SERPER_CREDENTIAL_ID,
-			name: SERPER_CREDENTIAL_NAME,
+			id: EXA_CREDENTIAL_ID,
+			name: EXA_CREDENTIAL_NAME,
 			authType: "api_key",
 			category: "service",
 		});
@@ -290,10 +291,10 @@ export class ProviderAuthFlows {
 			if (!credential) {
 				continue;
 			}
-			const isSerper = providerId === SERPER_CREDENTIAL_ID;
+			const isExa = providerId === EXA_CREDENTIAL_ID;
 			const isMcp = providerId.startsWith("mcp:");
-			const name = isSerper
-				? SERPER_CREDENTIAL_NAME
+			const name = isExa
+				? EXA_CREDENTIAL_NAME
 				: isMcp
 					? (oauthProvidersById.get(providerId)?.name ?? providerId.slice("mcp:".length))
 					: this.host.modelRegistry.getProviderDisplayName(providerId);
@@ -301,7 +302,7 @@ export class ProviderAuthFlows {
 				id: providerId,
 				name,
 				authType: credential.type,
-				category: isSerper || isMcp ? "service" : "provider",
+				category: isExa || isMcp ? "service" : "provider",
 			});
 		}
 

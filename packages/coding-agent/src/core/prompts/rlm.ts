@@ -55,7 +55,7 @@ export function buildChildAgentDoctrine(options: ChildAgentDoctrineOptions): str
 	];
 	if (hasAgentMessage && hasIpython) {
 		lines.push(
-			'Your final response is relayed to your parent automatically. Use `await agent_message.send(message, receiver_role="parent")` only for useful progress updates or intermediate findings; do not send your final response through the command.',
+			"End your final turn with the answer itself; the runtime relays it to your parent automatically. Never use agent messaging to send your final answer, a completion report, or a duplicate of either. Agent messaging is only for information your parent needs before you finish, such as a progress update, question, or intermediate finding.",
 		);
 	}
 	return lines.join("\n");
@@ -182,7 +182,22 @@ export function buildSubagentGuidance(
 	const lines = [
 		"# Delegating to sub-agents",
 		"",
-		"Spawn independent, self-contained work with `handle = await rlm('task', name='worker')`. This returns at admission, not completion; keep the handle to stop or inspect the child later.",
+		"Doing the work yourself is the default. Delegation is an exception you justify, not a reflex: a child pays for a fresh context, its own token budget, and a slower round trip, and it cannot see anything you have already loaded into your kernel.",
+		"",
+		"Spawn only when all three hold:",
+		"- Self-contained: you can state the child's deliverable in one sentence, and it needs no state that exists only in your kernel.",
+		"- Parallel: you have other work to do while it runs, or several such sub-tasks run at once.",
+		"- Heavy: broad search, multi-file reading, or long independent implementation whose intermediate output would otherwise flood your context.",
+		"",
+		"Do it inline instead when one file read, edit, search, or command answers it; when you already know where to look; when it is a few cells of work; or when its result is the prerequisite for your very next step. A single lookup or a one-sentence answer never justifies a child.",
+		"",
+		"Delegation is a handoff, not a hedge. Once a sub-task is delegated it belongs to that child: do not start it, redo it, or race it in your own kernel. Duplicating a child's work burns both budgets and produces conflicting edits to the same files. If you notice yourself doing what you just spawned, you should not have spawned it — either stop your own copy, or cancel the child with `await rlm.delete_subagent(handle)` and finish inline.",
+		"",
+		"After spawning, end your turn unless you hold work that is disjoint from every running child. Do not poll, tail, or await a child just to learn that it finished; its final response is relayed to you automatically and may arrive over later turns. When it arrives, verify and integrate it — do not re-derive it.",
+		"",
+		"Spawn with `handle = await rlm('task', name='worker')`. This returns at admission, not completion; keep the handle to inspect, follow up on, or stop the child later.",
+		"",
+		"A child starts from an empty conversation: it cannot see your history, your kernel variables, or anything you already read. Its task prompt is the only context it gets, so write it as a contract — the working directory, the goal, the files or entry points to start from, the output format you expect, and the boundary of what it must not touch. `await rlm('fix the error')` is a wasted child. If you cannot write that contract in a few sentences, the task is not separable yet: do it inline. The boundary is also what keeps you from redoing its work, so state it before you spawn, not after.",
 	];
 	if (options.hasAgentMessage) {
 		lines.push(
@@ -193,10 +208,7 @@ export function buildSubagentGuidance(
 	if (options.hasAgentObserve) {
 		lines.push("Use `agent_observe` for bounded transcript inspection.");
 	}
-	lines.push(
-		"Have children write files and read those files for fan-in.",
-		"Delegate parallel context-heavy research or independent implementation; do a single known lookup, edit, or command inline.",
-	);
+	lines.push("Have children write files and read those files for fan-in.");
 	if (options.includeRefineExamples ?? true) {
 		lines.push("Persist genuinely reusable delegation patterns with `await refine.run()`.");
 	}

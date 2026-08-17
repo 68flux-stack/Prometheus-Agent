@@ -639,6 +639,19 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(runtime.session.sessionFile).toBeUndefined();
 	});
 
+	it("preserves the workspace when forking before the first persisted prompt", async () => {
+		const workspace = join(tmpdir(), `pi-runtime-first-fork-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const { runtime } = await createRuntimeForTest(() => {}, { cwd: workspace });
+		await runtime.session.prompt("Say one");
+		const userMessages = runtime.session.getUserMessagesForForking();
+
+		const result = await runtime.fork(userMessages[0]!.entryId);
+
+		expect(result).toEqual({ cancelled: false, selectedText: "Say one" });
+		expect(runtime.session.sessionManager.getCwd()).toBe(workspace);
+		expect(runtime.session.messages).toEqual([]);
+	});
+
 	it("duplicates the current active branch when forking at the current position", async () => {
 		const { runtime } = await createRuntimeForTest(() => {});
 		await runtime.session.prompt("hello");

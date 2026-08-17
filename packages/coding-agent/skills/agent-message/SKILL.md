@@ -1,6 +1,6 @@
 ---
 name: agent-message
-description: Message an agent's parent, siblings, or direct children through the daemon. Use the family roster to discover reachable agents and send direct text without spoofing sender identity.
+description: Send non-terminal messages to an agent's parent, siblings, or direct children. A child agent's final response is relayed automatically and must not be sent with this skill.
 ---
 
 # Agent Message
@@ -8,7 +8,10 @@ description: Message an agent's parent, siblings, or direct children through the
 Send direct messages within the current agent's nuclear family through the
 local daemon: parent, siblings, and direct children only. Roots are siblings.
 The daemon derives your sender identity from the current session; do not try
-to include a `from` field.
+to include a `from` field. A child agent must end its final turn normally: the
+runtime automatically relays that response to its parent. Do not use this skill
+to send a final answer, completion report, or duplicate of the final response.
+Use it only when the recipient needs the message before your work is finished.
 
 Call directly from the kernel:
 

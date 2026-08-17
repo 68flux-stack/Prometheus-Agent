@@ -1,9 +1,9 @@
 [project]
 name = "prometheus-skill-websearch"
 version = "0.1.0"
-description = "Web search skill for Prometheus (Google search via Serper API)."
+description = "Web search skill for Prometheus (Exa's remote MCP server)."
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.27,<1", "prometheus-runtime"]
+dependencies = ["mcp", "httpx>=0.27,<1", "prometheus-runtime"]
 
 [project.scripts]
 websearch = "rlm.skill:cli"
