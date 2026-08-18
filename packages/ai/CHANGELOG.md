@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Fixed Bedrock prompt caching to cover Claude 5.x models, which previously never received cache points.
+- Fixed Bedrock cache points being dropped when a conversation ends in an assistant message; the cache point now lands on the last message regardless of role.
+- Fixed the Anthropic OAuth path emitting two cache breakpoints that split the cached prefix; the single marker now lands on the last system block.
+- Fixed synthetic empty tool results stamped with `Date.now()` timestamps, which made replayed message bytes non-deterministic and invalidated the prefix cache.
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05

@@ -167,7 +167,7 @@ export function transformMessages<TApi extends Api>(
 						toolName: tc.name,
 						content: [{ type: "text", text: "No result provided" }],
 						isError: true,
-						timestamp: Date.now(),
+						timestamp: 0,
 					} as ToolResultMessage);
 				}
 			}

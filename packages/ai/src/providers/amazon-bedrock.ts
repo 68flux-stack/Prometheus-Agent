@@ -581,7 +581,7 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
 
 /**
  * Check if the model supports prompt caching.
- * Supported: Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4.x models
+ * Supported: Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4.x and 5.x models
  *
  * For base models and system-defined inference profiles the model ID / ARN
  * contains the model name, so we can decide locally.
@@ -601,6 +601,8 @@ function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean
 		if (typeof process !== "undefined" && process.env.AWS_BEDROCK_FORCE_CACHE === "1") return true;
 		return false;
 	}
+	// Claude 5.x models (opus-5, sonnet-5, haiku-5)
+	if (candidates.some((s) => /claude-(opus|sonnet|haiku)-5/.test(s))) return true;
 	// Claude 4.x models (opus-4, sonnet-4, haiku-4)
 	if (candidates.some((s) => s.includes("-4-"))) return true;
 	// Claude 3.7 Sonnet
@@ -789,10 +791,13 @@ function convertMessages(
 		}
 	}
 
-	// Add cache point to the last user message for supported Claude models when caching is enabled
+	// Add cache point to the last message for supported Claude models when caching is enabled.
+	// The point lands on the last message regardless of role: messages are rebuilt locally
+	// per request, so pointing at an assistant message is safe and keeps the cached prefix
+	// as far as possible for the next turn.
 	if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
 		const lastMessage = result[result.length - 1];
-		if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
+		if (lastMessage.content) {
 			(lastMessage.content as ContentBlock[]).push({
 				cachePoint: {
 					type: CachePointType.DEFAULT,

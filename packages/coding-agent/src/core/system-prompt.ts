@@ -33,6 +33,9 @@ export interface BuildSystemPromptOptions {
 	rlmParentAgent?: string;
 	/** Global harness state to inject as compact persistent context. */
 	harnessState?: HarnessState;
+	/** Session-fixed date (YYYY-MM-DD). Rebuilds must reuse the same value so the
+	 *  prompt byte-prefix stays identical and the LLM prefix cache stays warm. */
+	date?: string;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -56,7 +59,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const year = now.getFullYear();
 	const month = String(now.getMonth() + 1).padStart(2, "0");
 	const day = String(now.getDate()).padStart(2, "0");
-	const date = `${year}-${month}-${day}`;
+	const computedDate = `${year}-${month}-${day}`;
+	const date = options.date ?? computedDate;
 
 	const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
 

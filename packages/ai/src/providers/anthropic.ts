@@ -966,21 +966,28 @@ function buildParams(
 		stream: true,
 	};
 
-	// For OAuth tokens, we MUST include Claude Code identity
+	// For OAuth tokens, we MUST include Claude Code identity. The cache breakpoint
+	// must land on the LAST system block — putting it on the identity prefix would
+	// split the cached region and defeat prefix reuse against non-OAuth requests.
 	if (isOAuthToken) {
-		params.system = [
-			{
-				type: "text",
-				text: "You are Claude Code, Anthropic's official CLI for Claude.",
-				...(cacheControl ? { cache_control: cacheControl } : {}),
-			},
-		];
+		const identityText = "You are Claude Code, Anthropic's official CLI for Claude.";
 		if (context.systemPrompt) {
-			params.system.push({
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				...(cacheControl ? { cache_control: cacheControl } : {}),
-			});
+			params.system = [
+				{ type: "text", text: identityText },
+				{
+					type: "text",
+					text: sanitizeSurrogates(context.systemPrompt),
+					...(cacheControl ? { cache_control: cacheControl } : {}),
+				},
+			];
+		} else {
+			params.system = [
+				{
+					type: "text",
+					text: identityText,
+					...(cacheControl ? { cache_control: cacheControl } : {}),
+				},
+			];
 		}
 	} else if (context.systemPrompt) {
 		// Add cache control to system prompt for non-OAuth tokens

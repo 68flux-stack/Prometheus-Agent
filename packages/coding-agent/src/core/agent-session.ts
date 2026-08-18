@@ -1423,6 +1423,12 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+	// Date injected into the system prompt, frozen at first build so rebuilds
+	// keep the byte-exact prefix the LLM cache depends on.
+	private _systemPromptDate: string | undefined;
+	// Serialized options of the last rendered system prompt, used to skip
+	// byte-identical rebuilds.
+	private _lastSystemPromptOptionsJson: string | undefined;
 	private _assistantTurnsSinceAutoRefine = 0;
 	private _lastAutoRefineReviewAt = 0;
 	private _autoRefineInProgress = false;
@@ -4779,7 +4785,23 @@ export class AgentSession {
 		const loadedSkills = this._modelVisibleSkills();
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 
-		this._baseSystemPromptOptions = {
+		// Freeze the date at the first build. The prompt is rebuilt on harness-state
+		// reloads, tool re-registration, and lifecycle events; any date drift between
+		// rebuilds would change the bytes of the cached prefix and waste the cache.
+		if (!this._systemPromptDate) {
+			const now = new Date();
+			const year = now.getFullYear();
+			const month = String(now.getMonth() + 1).padStart(2, "0");
+			const day = String(now.getDate()).padStart(2, "0");
+			this._systemPromptDate = `${year}-${month}-${day}`;
+		}
+
+		// Frozen input snapshot of the last rendered options. Rebuilds fire even
+		// when every input is byte-identical (harness state reload, tool
+		// re-registration, lifecycle events); comparing the serialized options
+		// lets us skip the render entirely so the emitted prompt bytes never
+		// change and the LLM prefix cache stays warm across duplicate rebuilds.
+		const options: BuildSystemPromptOptions = {
 			cwd: this._cwd,
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
@@ -4793,8 +4815,17 @@ export class AgentSession {
 			rlmDepth: this._rlmDepth,
 			rlmParentAgent: this._rlmParentAgent,
 			harnessState: this._loadMergedHarnessState(),
+			date: this._systemPromptDate,
 		};
-		return buildSystemPrompt(this._baseSystemPromptOptions);
+		const optionsJson = JSON.stringify(options);
+		if (optionsJson === this._lastSystemPromptOptionsJson) {
+			return this._baseSystemPrompt;
+		}
+
+		this._baseSystemPromptOptions = options;
+		this._lastSystemPromptOptionsJson = optionsJson;
+		this._baseSystemPrompt = buildSystemPrompt(options);
+		return this._baseSystemPrompt;
 	}
 
 	// =========================================================================
