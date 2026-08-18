@@ -10,6 +10,7 @@ and the host ships it as a managed binary — so the kernel just drives it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -70,10 +71,13 @@ def search(
 
     ``pattern`` is a regex unless ``fixed=True``. ``glob`` filters paths the way
     ``rg --glob`` does ("*.ts", "!test/**"). ``files_only=True`` returns matching
-    paths instead of matches. Results stop at ``limit``; rg is killed at that
+    paths instead of matches, and also includes files whose *name* matches
+    ``pattern`` even when their content does not (so ``search("memory.md", ...,
+    files_only=True)`` finds a file named ``memory.md`` as well as files that
+    merely mention that string). Results stop at ``limit``; rg is killed at that
     point, so a broad pattern over a huge tree still returns promptly.
 
-    >>> search("BrowserWindow", glob="*.cjs")[:1]
+search("BrowserWindow", glob="*.cjs")[:1]
     """
     if not isinstance(pattern, str) or not pattern:
         raise ValueError("pattern must be a non-empty str")
@@ -145,4 +149,92 @@ def search(
     # failure with nothing collected is worth raising on.
     if code not in (0, 1, 2) and not results:
         raise RuntimeError(f"ripgrep failed ({code}): {stderr.strip() or 'no output'}")
+
+    if files_only and len(results) < limit:
+        results = _add_filename_matches(
+            results,  # type: ignore[arg-type]
+            pattern,
+            path,
+            glob=glob,
+            ignore_case=ignore_case,
+            fixed=fixed,
+            hidden=hidden,
+            no_ignore=no_ignore,
+            limit=limit,
+        )
+
     return results
+
+
+def _add_filename_matches(
+    content_matches: list[str],
+    pattern: str,
+    path: str | os.PathLike[str],
+    *,
+    glob: str | list[str] | None,
+    ignore_case: bool,
+    fixed: bool,
+    hidden: bool,
+    no_ignore: bool,
+    limit: int,
+) -> list[str]:
+    """Append files whose *name* matches ``pattern`` to content-match results.
+
+    ``rg --files-with-matches`` only reports files whose contents match. A
+    caller who passes a filename (or a fragment of one) as ``pattern``
+    reasonably expects a name match too, so this lists candidate paths with
+    ``rg --files`` and filters them by name using the same regex/fixed-string
+    and case-sensitivity semantics as the content search.
+    """
+    try:
+        name_pattern = re.compile(
+            re.escape(pattern) if fixed else pattern,
+            re.IGNORECASE if ignore_case else 0,
+        )
+    except re.error:
+        return content_matches
+
+    argv = [ripgrep_path(), "--color", "never", "--no-require-git", "--files"]
+    if hidden:
+        argv.append("--hidden")
+    if no_ignore:
+        argv.append("--no-ignore")
+    for pattern_glob in [glob] if isinstance(glob, str) else (glob or []):
+        argv += ["--glob", pattern_glob]
+    argv += ["--", os.fspath(path)]
+
+    seen = set(content_matches)
+    merged = list(content_matches)
+    # stderr=DEVNULL would make Popen os.open(os.devnull) itself on Windows,
+    # which trips the workspace-mode write-audit hook (os.devnull resolves
+    # outside the workspace) and raises PermissionError. Pipe and drain it
+    # instead, same as the content-search branch above.
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        assert process.stdout is not None
+        for raw in process.stdout:
+            candidate = raw.rstrip("\n")
+            if not candidate or candidate in seen:
+                continue
+            if name_pattern.search(Path(candidate).name):
+                seen.add(candidate)
+                merged.append(candidate)
+                if len(merged) >= limit:
+                    process.terminate()
+                    break
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.read()
+            process.stderr.close()
+        process.wait()
+
+    return merged

@@ -260,6 +260,15 @@ describe("builtin skills", () => {
 			expect(skills.map((skill) => skill.name)).not.toContain("orchestration-heartbeat");
 		});
 
+		it("ships the research skill as a python skill importable as `research`", () => {
+			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
+
+			const research = skills.find((s) => s.name === "research");
+			expect(research).toBeDefined();
+			expect(research?.kind).toBe("python");
+			expect(research?.kind === "python" && research.python.importName).toBe("research");
+		});
+
 		it("ships the edit skill as a python skill importable as `edit`", () => {
 			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
 
@@ -267,6 +276,15 @@ describe("builtin skills", () => {
 			expect(edit).toBeDefined();
 			expect(edit?.kind).toBe("python");
 			expect(edit?.kind === "python" && edit.python.importName).toBe("edit");
+		});
+
+		it("ships the todo skill as a python skill importable as `todo`", () => {
+			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
+
+			const todo = skills.find((s) => s.name === "todo");
+			expect(todo).toBeDefined();
+			expect(todo?.kind).toBe("python");
+			expect(todo?.kind === "python" && todo.python.importName).toBe("todo");
 		});
 
 		it("loads the skill-creator python template as a valid python skill", () => {

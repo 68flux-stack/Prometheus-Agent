@@ -250,6 +250,21 @@ function withLeaseGuard<T>(directory: string, action: () => T): T {
 	}
 }
 
+const LEASE_ACQUIRE_ATTEMPTS = 6;
+const LEASE_RETRY_DELAY_MS = 25;
+
+function isTransientRenameError(code: string | undefined): boolean {
+	return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+/**
+ * Lease acquisition runs inside a synchronous guard held across the rename, so
+ * the retry backoff cannot yield to the event loop.
+ */
+function sleepSync(milliseconds: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function reclaimStaleLease(directory: string): boolean {
 	const stalePath = `${directory}.stale-${process.pid}-${randomUUID()}`;
 	try {
@@ -278,7 +293,7 @@ export function acquireSessionLease(
 	const directory = leaseDirectory(agentDir, canonicalPath);
 
 	return withLeaseGuard(directory, () => {
-		for (let attempt = 0; attempt < 3; attempt++) {
+		for (let attempt = 0; attempt < LEASE_ACQUIRE_ATTEMPTS; attempt++) {
 			const token = randomUUID();
 			const candidateDirectory = `${directory}.candidate-${process.pid}-${token}`;
 			const owner: SessionLeaseOwner = {
@@ -303,7 +318,15 @@ export function acquireSessionLease(
 				const leaseExists =
 					code === "EEXIST" || code === "ENOTEMPTY" || (code === "EPERM" && existsSync(directory));
 				if (!leaseExists) {
-					throw error;
+					// Windows fails the directory rename with EPERM/EACCES/EBUSY while
+					// something else (indexer, antivirus, a just-closed handle) still
+					// holds the freshly created candidate. Nothing owns the lease in
+					// that case, so retry instead of failing the session switch.
+					if (!isTransientRenameError(code) || attempt === LEASE_ACQUIRE_ATTEMPTS - 1) {
+						throw error;
+					}
+					sleepSync(LEASE_RETRY_DELAY_MS);
+					continue;
 				}
 				const existingOwner = readLeaseOwner(directory);
 				if (existingOwner && isLeaseOwnerAlive(existingOwner)) {

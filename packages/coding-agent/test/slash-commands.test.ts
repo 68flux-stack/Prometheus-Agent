@@ -30,6 +30,14 @@ describe("built-in slash commands", () => {
 		});
 	});
 
+	// /research is the bundled research skill; it is expanded on the prompt path
+	// by name (see _expandSkillCommand), not listed as a builtin command.
+	test("does not list /research as a builtin command", () => {
+		expect(BUILTIN_SLASH_COMMANDS.find((command) => command.name === "research")).toBeUndefined();
+		expect(isSessionSlashCommandName("research")).toBe(false);
+		expect(parseSessionSlashCommand("/research why is the sky blue")).toBeUndefined();
+	});
+
 	test("exposes heartbeat syntax guidance", () => {
 		expect(BUILTIN_SLASH_COMMANDS.find((command) => command.name === "heartbeat")).toMatchObject({
 			description:

@@ -1473,6 +1473,8 @@ class DaemonAttachTerminal {
 			case "goal_update":
 				this.writeLine(chalk.dim(`Goal: ${event.goal.status}`));
 				return;
+			case "todo_update":
+				return;
 			case "refine_failed":
 				this.writeLine(chalk.red(`Refinement failed: ${event.error}`));
 				return;

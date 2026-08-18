@@ -101,6 +101,68 @@ function getIdleWorkspaceDir() {
 	return dir;
 }
 
+
+function getSettingsPath() {
+	return path.join(getAgentDataDir(), "settings.json");
+}
+
+function readSettingsFile() {
+	try {
+		const raw = readFileSync(getSettingsPath(), "utf8");
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+// Only "mcpServers" is a map keyed by arbitrary user-chosen names rather than a
+// fixed set of settings fields, so it is replaced wholesale instead of merged
+// key-by-key like every other nested settings object.
+const SETTINGS_WHOLESALE_KEYS = new Set(["mcpServers"]);
+
+// `null` at any depth means "delete this key and fall back to the built-in
+// default"; objects merge recursively so unrelated sibling fields (written by
+// the CLI or a future settings version) are left untouched.
+function deepMergeSettingsWithDeletion(target, source, wholesale = false) {
+	for (const key of Object.keys(source)) {
+		const value = source[key];
+		if (value === null) {
+			delete target[key];
+			continue;
+		}
+		if (Array.isArray(value)) {
+			target[key] = value;
+			continue;
+		}
+		if (value && typeof value === "object") {
+			if (wholesale || SETTINGS_WHOLESALE_KEYS.has(key)) {
+				target[key] = value;
+				continue;
+			}
+			if (!target[key] || typeof target[key] !== "object" || Array.isArray(target[key])) {
+				target[key] = {};
+			}
+			deepMergeSettingsWithDeletion(target[key], value);
+			if (Object.keys(target[key]).length === 0) delete target[key];
+			continue;
+		}
+		target[key] = value;
+	}
+	return target;
+}
+
+function saveSettingsPatch(patch) {
+	if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+		throw new Error("Settings patch must be an object.");
+	}
+	const current = readSettingsFile();
+	const merged = deepMergeSettingsWithDeletion(current, patch);
+	mkdirSync(path.dirname(getSettingsPath()), { recursive: true });
+	writeFileSync(getSettingsPath(), JSON.stringify(merged, null, 2));
+	return merged;
+}
+
 function getWorkspacesPath() {
 	return path.join(app.getPath("userData"), "workspaces.json");
 }
@@ -963,6 +1025,8 @@ app.whenReady().then(() => {
 	ipcMain.handle("workspace-changes:apply", (_event, payload) => applyWorkspaceChanges(payload));
 	ipcMain.handle("context-menu:show", (event, payload) => showContextMenu(event, payload));
 	ipcMain.handle("theme:get", () => getTheme());
+	ipcMain.handle("settings:get", () => ({ settings: readSettingsFile(), path: getSettingsPath() }));
+	ipcMain.handle("settings:save", (_event, patch) => ({ settings: saveSettingsPatch(patch), path: getSettingsPath() }));
 	ipcMain.handle("agent:paths", () => ({
 		agentDataDir: getAgentDataDir(),
 		sessionsDir: getSessionsDir(),

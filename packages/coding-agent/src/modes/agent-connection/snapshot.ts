@@ -50,6 +50,7 @@ export function createAgentConnectionState(
 		sessionActions: session.getSessionActionSnapshot(),
 		compactionCount: sessionManager.getEntries().filter((entry) => entry.type === "compaction").length,
 		goal: session.goalState,
+		todo: session.todoListState,
 		scopedModels: session.scopedModels.map((scoped) => ({
 			model: toConnectionModel(scoped.model),
 			thinkingLevel: scoped.thinkingLevel,
@@ -80,38 +81,48 @@ export function createAgentConnectionSnapshot(
 }
 
 export function createAgentConnectionCommands(session: AgentSession): AgentConnectionSlashCommand[] {
-	return [
-		...session.extensionRunner.getRegisteredCommands().map((entry) => ({
-			name: entry.invocationName,
-			registeredName: entry.name,
-			description: entry.description,
-			source: "extension" as const,
-			sourceInfo: entry.sourceInfo,
-		})),
-		...session.promptTemplates.map((entry) => ({
-			name: entry.name,
-			description: entry.description,
-			argumentHint: entry.argumentHint,
-			source: "prompt" as const,
-			sourceInfo: entry.sourceInfo,
-		})),
-		...session.resourceLoader.getSkills().skills.map((entry) => ({
-			name: `skill:${entry.name}`,
-			description: entry.description,
-			source: "skill" as const,
-			sourceInfo: entry.sourceInfo,
-		})),
-		// Only "session" builtins run the same for every client (they parse the raw
-		// prompt text in agent-session, e.g. _parseGoalSlashCommand). The rest (e.g.
-		// /model, /settings) open interactive-mode-only selector UI with no
-		// RPC-client equivalent, so they'd be dead entries here.
-		...BUILTIN_SLASH_COMMANDS.filter((command) => command.execution === "session").map((command) => ({
+	const extensionCommands = session.extensionRunner.getRegisteredCommands().map((entry) => ({
+		name: entry.invocationName,
+		registeredName: entry.name,
+		description: entry.description,
+		source: "extension" as const,
+		sourceInfo: entry.sourceInfo,
+	}));
+	const promptCommands = session.promptTemplates.map((entry) => ({
+		name: entry.name,
+		description: entry.description,
+		argumentHint: entry.argumentHint,
+		source: "prompt" as const,
+		sourceInfo: entry.sourceInfo,
+	}));
+	// Only "session" builtins run the same for every client (they parse the raw
+	// prompt text in agent-session, e.g. _parseGoalSlashCommand). The rest (e.g.
+	// /model, /settings) open interactive-mode-only selector UI with no
+	// RPC-client equivalent, so they'd be dead entries here.
+	const builtinCommands = BUILTIN_SLASH_COMMANDS.filter((command) => command.execution === "session").map(
+		(command) => ({
 			name: command.name,
 			description: command.description,
 			source: "builtin" as const,
 			sourceInfo: createSyntheticSourceInfo(`<builtin:${command.name}>`, { source: "builtin" }),
-		})),
-	];
+		}),
+	);
+
+	// Skills are advertised as plain `/name` commands (the description column already
+	// says "skill"), never `/skill:name`. A skill whose name collides with an extension,
+	// prompt, or builtin command is dropped so the same name doesn't show up twice.
+	const reservedNames = new Set([...extensionCommands, ...promptCommands, ...builtinCommands].map((c) => c.name));
+	const skillCommands = session.resourceLoader
+		.getSkills()
+		.skills.filter((entry) => !reservedNames.has(entry.name))
+		.map((entry) => ({
+			name: entry.name,
+			description: entry.description,
+			source: "skill" as const,
+			sourceInfo: entry.sourceInfo,
+		}));
+
+	return [...extensionCommands, ...promptCommands, ...builtinCommands, ...skillCommands];
 }
 
 export function createAgentConnectionResourceSnapshot(session: AgentSession): AgentConnectionResourceSnapshot {

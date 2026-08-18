@@ -343,6 +343,20 @@ const UPDATE_RESTART_MARKER =
 	"<prometheus_update_interrupted>\n" +
 	"Prometheus was updated and intentionally interrupted this session. Continue from the saved transcript and restored tool/kernel state. Any running model, tool, bash, or child-agent work may have been partially completed.\n" +
 	"</prometheus_update_interrupted>";
+// Terminal events: the work they end is still unwinding when they fire, so the
+// checkpoint taken there needs a follow-up once the session has settled.
+const RECOVERY_SETTLE_EVENTS: ReadonlySet<string> = new Set([
+	"agent_end",
+	"turn_end",
+	"message_end",
+	"tool_execution_end",
+	"compaction_end",
+	"auto_retry_end",
+	"bash_end",
+	"session_action_update",
+	"rlm_child_update",
+]);
+const WORKER_RECOVERY_SETTLE_MS = 1000;
 const RECOVERY_CHECKPOINT_EVENTS: ReadonlySet<string> = new Set([
 	"agent_start",
 	"agent_end",
@@ -522,6 +536,8 @@ export class AgentDaemon {
 		},
 	);
 	private readonly recoveryJournal?: WorkerRecoveryJournal;
+	/** Pending settle re-checks, keyed by active session id. */
+	private readonly recoverySettleTimers = new Map<string, NodeJS.Timeout>();
 
 	constructor(
 		private readonly socketPath: string,
@@ -6200,6 +6216,9 @@ export class AgentDaemon {
 			}
 			if (RECOVERY_CHECKPOINT_EVENTS.has(eventType)) {
 				this.recordWorkerRecoveryState(state, eventType);
+				if (RECOVERY_SETTLE_EVENTS.has(eventType)) {
+					this.scheduleWorkerRecoverySettleCheck(state);
+				}
 			}
 		}
 		this.stampRlmChildActiveSessionId(message);
@@ -6336,8 +6355,7 @@ export class AgentDaemon {
 			return;
 		}
 		const session = state.runtime.session;
-		const busy =
-			busyOverride ?? (isActiveSessionBusy(state) || session.isRetrying || session.hasAcceptedPromptInFlight);
+		const busy = busyOverride ?? this.isSessionRecoveryBusy(state);
 		try {
 			this.recoveryJournal.record({
 				activeSessionId: state.activeSessionId,
@@ -6349,6 +6367,52 @@ export class AgentDaemon {
 		} catch (error) {
 			this.log(`could not checkpoint worker operation state: ${String(error)}`);
 		}
+		if (!busy) {
+			this.clearWorkerRecoverySettleCheck(state.activeSessionId);
+		}
+	}
+
+	private isSessionRecoveryBusy(state: ActiveSessionState): boolean {
+		const session = state.runtime.session;
+		return isActiveSessionBusy(state) || session.isRetrying || session.hasAcceptedPromptInFlight;
+	}
+
+	/**
+	 * A run's own end events fire while its teardown is still in progress, so the
+	 * checkpoint taken there records the session as busy and nothing later
+	 * corrects it: an idle session then looks like interrupted work to the
+	 * supervisor and gets a spurious recovery marker on the next worker restart.
+	 * Re-check shortly after a terminal event and record the settled state.
+	 */
+	private scheduleWorkerRecoverySettleCheck(state: ActiveSessionState): void {
+		if (!this.recoveryJournal) {
+			return;
+		}
+		this.clearWorkerRecoverySettleCheck(state.activeSessionId);
+		const timer = setTimeout(() => {
+			this.recoverySettleTimers.delete(state.activeSessionId);
+			if (this.sessions.get(state.activeSessionId) !== state) {
+				return;
+			}
+			if (this.isSessionRecoveryBusy(state)) {
+				// Still working (a queued turn, a subagent, a bash): the settled
+				// checkpoint is owed once that work ends, not now.
+				this.scheduleWorkerRecoverySettleCheck(state);
+				return;
+			}
+			this.recordWorkerRecoveryState(state, "settled", false);
+		}, WORKER_RECOVERY_SETTLE_MS);
+		timer.unref();
+		this.recoverySettleTimers.set(state.activeSessionId, timer);
+	}
+
+	private clearWorkerRecoverySettleCheck(activeSessionId: string): void {
+		const timer = this.recoverySettleTimers.get(activeSessionId);
+		if (!timer) {
+			return;
+		}
+		clearTimeout(timer);
+		this.recoverySettleTimers.delete(activeSessionId);
 	}
 
 	private catchUpBackpressuredClient(client: DaemonSocketClient): Promise<void> {

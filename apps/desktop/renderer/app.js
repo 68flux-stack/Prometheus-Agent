@@ -12,6 +12,7 @@ const state = {
 	commands: [],
 	model: undefined,
 	thinkingLevel: "off",
+	hideThinkingBlock: true,
 	requestId: 0,
 	streamIndex: -1,
 	activeSessionPath: "",
@@ -30,6 +31,16 @@ const state = {
 	// runs as soon as the handshake lands rather than being dropped on the floor.
 	pendingAttach: undefined,
 	queuedPrompt: undefined,
+	// A model/thinking-level change picked while the engine was connecting;
+	// replayed by flushPendingSessionSettings once it is actually attached to
+	// the conversation on screen so it cannot land on the one being left.
+	pendingModel: undefined,
+	pendingThinkingLevel: undefined,
+	pendingExecutionMode: undefined,
+	// Monotonic tag for get_runtime_features/set_execution_mode sends, used to
+	// drop a stale response that arrives after a newer one; see handleResponse.
+	runtimeFeaturesSeq: 0,
+	runtimeFeaturesAppliedSeq: 0,
 	pending: new Map(),
 	runtimeFeatures: undefined,
 	runtimeAvailable: true,
@@ -42,11 +53,35 @@ const state = {
 	subagentView: undefined,
 	attachments: [],
 	preparingPrompt: false,
+	// The user message currently shown as an inline editable card, keyed by _key
+	// rather than index so a re-render (e.g. a background poll) cannot lose track
+	// of which row it belongs to.
+	editingKey: undefined,
+	// True from the moment an edit/fork/retry is clicked until forkAtEntry either
+	// takes over (via state.switchingSession) or bails; closes the race where a
+	// second click before that handoff could fire a second "fork" RPC.
+	sessionActionPending: false,
 	workspaceChanges: [],
 	changeReviewExpanded: true,
 	changeReviewPending: false,
 	changeReviewRequest: 0,
+	todo: undefined,
+	todoExpanded: true,
+	contextUsage: undefined,
+	sessionStartedAt: Date.now(),
+	// Milestones reached during the current handshake, used to show a real
+	// progress percentage instead of an indefinite "Connecting…" label.
+	connectSteps: new Set(),
 };
+
+// The engine attach + the four bootstrap requests get_state gates readiness on.
+const CONNECT_STEPS = ["start", "get_commands", "get_available_models", "get_messages", "get_state"];
+
+function connectionPercent() {
+	if (state.ready) return 100;
+	const done = CONNECT_STEPS.filter((step) => state.connectSteps.has(step)).length;
+	return Math.round((done / CONNECT_STEPS.length) * 100);
+}
 
 const $ = (id) => document.getElementById(id);
 const conversation = $("conversation");
@@ -87,6 +122,17 @@ const jobBanner = $("job-banner");
 const jobBannerToggle = $("job-banner-toggle");
 const jobBannerList = $("job-banner-list");
 const jobBannerLabel = $("job-banner-label");
+const todoCard = $("todo-card");
+const todoCardTitle = $("todo-card-title");
+const todoCardCounter = $("todo-card-counter");
+const todoCardToggle = $("todo-card-toggle");
+const todoCardList = $("todo-card-list");
+const composerMetrics = $("composer-metrics");
+const composerMetricContext = $("composer-metric-context");
+const composerMetricTokens = $("composer-metric-tokens");
+const composerMetricBarFill = $("composer-metric-bar-fill");
+const composerMetricPercent = $("composer-metric-percent");
+const composerMetricSession = $("composer-metric-session");
 const changeReview = $("change-review");
 const changeReviewFiles = $("change-review-files");
 const changeReviewToggle = $("change-review-toggle");
@@ -634,6 +680,7 @@ async function handleExtensionUIRequest(event) {
 }
 
 function setStatus(label, tone = "") {
+	state.statusTone = tone;
 	const connected = state.ready && tone !== "error";
 	const connectionTone = connected ? "ready" : tone === "error" ? "error" : "busy";
 	connectionDot.className = `connection-dot ${connectionTone}`.trim();
@@ -641,7 +688,13 @@ function setStatus(label, tone = "") {
 		? "Engine connected"
 		: tone === "error"
 			? "Engine unavailable"
-			: "Connecting…";
+			: `Connecting… ${connectionPercent()}%`;
+}
+
+// Re-renders the connection label against the last known tone. Needed when a
+// handshake step lands without a setBusy/setReady call to trigger setStatus.
+function refreshConnectionLabel() {
+	setStatus(undefined, state.statusTone);
 }
 
 function hasConfiguredModel() {
@@ -699,6 +752,55 @@ function setReady(ready) {
 	state.ready = ready;
 	syncComposer();
 	setStatus(ready ? "" : "Connecting", ready ? "ready" : "busy");
+	renderComposerMetrics();
+}
+
+const METRICS_TICK_MS = 1000;
+const CONTEXT_POLL_TICKS = 10;
+
+function formatMetricTokens(count) {
+	if (!Number.isFinite(count) || count <= 0) return "0";
+	if (count < 1000) return String(Math.round(count));
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+function formatSessionElapsed(elapsedMs) {
+	const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+	const minutes = Math.floor(seconds / 60);
+	const hours = Math.floor(minutes / 60);
+	const pad = (value) => String(value).padStart(2, "0");
+	return hours > 0 ? `${hours}:${pad(minutes % 60)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
+}
+
+function renderComposerMetrics() {
+	composerMetrics.hidden = !state.ready;
+	composerMetricSession.textContent = `Session ${formatSessionElapsed(Date.now() - state.sessionStartedAt)}`;
+	const usage = state.contextUsage;
+	// tokens is null right after a compaction, until the next assistant reply prices the new context.
+	const known = Boolean(usage) && usage.contextWindow > 0 && typeof usage.tokens === "number" && typeof usage.percent === "number";
+	composerMetricContext.hidden = !known;
+	if (!known) return;
+	const percent = Math.min(100, Math.max(0, usage.percent));
+	composerMetricTokens.textContent = `${formatMetricTokens(usage.tokens)}/${formatMetricTokens(usage.contextWindow)}`;
+	composerMetricPercent.textContent = `${Math.round(percent)}%`;
+	composerMetricBarFill.style.width = `${percent}%`;
+	composerMetrics.dataset.level = percent >= 90 ? "critical" : percent >= 75 ? "high" : "normal";
+}
+
+// Context usage is derived from the whole message list, so it is read from the
+// engine instead of being tracked per streamed token. Never pulled while a
+// conversation is only open for reading: that would attach a session worker.
+async function refreshContextUsage() {
+	if (!state.ready || state.switchingSession || state.deferredSwitch) return;
+	try {
+		const response = await sendCommandAwait("get_session_stats");
+		state.contextUsage = response?.data?.contextUsage;
+	} catch {
+		return;
+	}
+	renderComposerMetrics();
 }
 
 function setDisconnected(label) {
@@ -786,17 +888,30 @@ function formatModel(model) {
 
 function applyState(data) {
 	if (!data) return;
-	state.model = data.model;
-	state.thinkingLevel = data.thinkingLevel || "off";
+	// A model or thinking-level change made while the engine was still connecting
+	// (starting up, or attaching to a different conversation) is held rather than
+	// sent; see flushPendingSessionSettings. Applying the engine-reported state
+	// here while that change is pending would stomp the user's choice back to
+	// whatever the previous conversation had before the change had a chance to
+	// reach the newly attached one.
+	if (!state.pendingModel) state.model = data.model;
+	if (state.pendingThinkingLevel === undefined) state.thinkingLevel = data.thinkingLevel || "off";
 	// Mid-switch the engine still reports the conversation we are leaving, so the
 	// sidebar, title and workspace follow the click until the handshake catches up.
 	if (state.switchingSession) {
-		thinkingSelect.value = state.thinkingLevel;
+		thinkingSelect.value = state.pendingThinkingLevel ?? state.thinkingLevel;
 		setBusy(false, "Opening conversation");
 		return;
 	}
 	state.sessionName = data.sessionName || "New conversation";
-	state.activeSessionPath = data.sessionFile || "";
+	const sessionFile = data.sessionFile || "";
+	// A different conversation restarts the session clock and drops the previous
+	// context reading, which belongs to the chat we just left.
+	if (sessionFile !== state.activeSessionPath) {
+		state.sessionStartedAt = Date.now();
+		state.contextUsage = undefined;
+	}
+	state.activeSessionPath = sessionFile;
 	// The sidebar selection is optimistic; the agent's own cwd is the truth about
 	// which workspace the next prompt will act on. Never show a workspace we are
 	// not actually running in.
@@ -819,11 +934,19 @@ function applyState(data) {
 		}
 	}
 	state.openedWorkspace = undefined;
-	thinkingSelect.value = state.thinkingLevel;
+	thinkingSelect.value = state.pendingThinkingLevel ?? state.thinkingLevel;
 	$("header-title").textContent = data.sessionName || "Untitled session";
 	renderWorkspaceList();
-	setBusy(Boolean(data.isStreaming), data.isStreaming ? "Working · send a message to steer" : "Ready");
+	if (!data.isStreaming) {
+		setBusy(false, "Ready");
+	} else if (!state.ready || state.switchingSession || state.busy) {
+		setBusy(true, "Working · send a message to steer");
+	}
+	renderComposerMetrics();
+	state.todo = data.todo;
+	renderTodoCard();
 	void refreshWorkspaceChanges();
+	void refreshContextUsage();
 }
 
 function contentText(message) {
@@ -873,7 +996,11 @@ function finalAnswerText(message) {
 }
 
 function workText(message) {
-	if (!hasTextPhase(message, "final_answer")) return contentText(message);
+	// Without an explicit final_answer phase marker, the whole message content *is* the
+	// final answer (see assistantHasFinalAnswer's fallback branch below) and finalAnswerText()
+	// will render it separately outside the collapsed group. Falling back to contentText()
+	// here would render that same text a second time, inside the "work" group.
+	if (!hasTextPhase(message, "final_answer")) return "";
 	return message.content
 		.filter((block) => block?.type === "text" && textBlockPhase(block) !== "final_answer")
 		.map((block) => block.text || "")
@@ -1134,7 +1261,7 @@ const MSG_ACTION_ICONS = {
 // change - the button silently stops resolving to any message. The click handler
 // instead reads the row's position (m:${index}), which buildTranscriptRows recomputes
 // fresh on every render and which row reconciliation already relies on being correct.
-function createMsgActionButton(action, label) {
+function createMsgActionButton(action, label, disabled = false) {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = "msg-action-btn";
@@ -1142,7 +1269,54 @@ function createMsgActionButton(action, label) {
 	button.title = label;
 	button.setAttribute("aria-label", label);
 	button.innerHTML = MSG_ACTION_ICONS[action];
+	button.disabled = disabled;
 	return button;
+}
+
+// The edit card owns its own textarea node across renders (see the dataset.built
+// guard) so keystrokes never get wiped by a re-render triggered by something
+// unrelated, such as another row streaming or a background poll landing.
+function renderMessageEditCard(body, message, initialText) {
+	const card = ensureChild(body, "message-edit-card");
+	if (card.dataset.built) return;
+	card.dataset.built = "1";
+	const textarea = document.createElement("textarea");
+	textarea.className = "message-edit-textarea";
+	textarea.value = initialText;
+	textarea.rows = 1;
+	const autosize = () => {
+		textarea.style.height = "auto";
+		textarea.style.height = `${textarea.scrollHeight}px`;
+	};
+	textarea.addEventListener("input", autosize);
+	textarea.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			cancelEditMessage();
+		} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+			event.preventDefault();
+			void saveAndResendEdit(message, textarea.value);
+		}
+	});
+	const actions = document.createElement("div");
+	actions.className = "message-edit-actions";
+	const cancelButton = document.createElement("button");
+	cancelButton.type = "button";
+	cancelButton.className = "message-edit-cancel";
+	cancelButton.dataset.msgAction = "cancel-edit";
+	cancelButton.textContent = "Cancel";
+	const saveButton = document.createElement("button");
+	saveButton.type = "button";
+	saveButton.className = "message-edit-save";
+	saveButton.dataset.msgAction = "save-edit";
+	saveButton.textContent = "Save & Resend";
+	actions.append(cancelButton, saveButton);
+	card.append(textarea, actions);
+	requestAnimationFrame(() => {
+		autosize();
+		textarea.focus();
+		textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+	});
 }
 
 function renderMessageRow(row, message, display = {}) {
@@ -1151,8 +1325,10 @@ function renderMessageRow(row, message, display = {}) {
 	const text = display.text ?? contentText(message);
 	const images = (display.images ?? contentImages(message)).filter((image) => image.data);
 	const streaming = display.streaming ?? message._streaming;
-	const isThinking = message.role === "assistant" && streaming && state.thinkingLevel !== "off" && Boolean(thinking) && !text;
-	const visibleThinking = isThinking ? "Thinking..." : formatThinkingSummary(thinking);
+	const hasThinking = Boolean(thinking);
+	const isThinking = message.role === "assistant" && streaming && state.thinkingLevel !== "off" && hasThinking && !text;
+	const thinkingLabel = isThinking ? "Thinking..." : "Thinking";
+	const thinkingText = formatThinkingSummary(thinking);
 	// A message still in flight has no finished state to act on yet, and an optimistic
 	// user row has no server-side entry id for edit/fork to target. Notifications and
 	// other custom rows aren't part of the fork-able user/assistant turn sequence.
@@ -1161,6 +1337,12 @@ function renderMessageRow(row, message, display = {}) {
 		(message.role === "user" || message.role === "assistant") &&
 		!message._streaming &&
 		!message._optimistic;
+	const isEditing = !readOnly && message.role === "user" && Boolean(message._key) && message._key === state.editingKey;
+	// Editing/forking/retrying while the engine is still connecting (or another
+	// fork is already landing) is what raced state.messages against the anchor
+	// message lookup and produced duplicate branches; disable those actions
+	// until the engine is actually attached and idle.
+	const sessionActionsDisabled = isEngineConnecting();
 	const actionsLabel = !showActions
 		? ""
 		: message.role === "user"
@@ -1171,16 +1353,38 @@ function renderMessageRow(row, message, display = {}) {
 	const imageSignature = images
 		.map((image) => `${image.mimeType || "image/png"}:${image.data.length}:${image.data.slice(0, 32)}`)
 		.join(" ");
-	const signature = `${message.role} ${readOnly} ${imageSignature} ${isThinking} ${visibleThinking} ${text} ${actionsLabel}`;
+	const signature = `${message.role} ${readOnly} ${imageSignature} ${isThinking} ${hasThinking} ${thinkingLabel} ${thinkingText} ${text} ${actionsLabel} ${isEditing} ${sessionActionsDisabled}`;
 	if (row._signature === signature) return;
 	row._signature = signature;
 
-	row.className = `message-row ${message.role === "user" ? "user" : "assistant"}`;
+	row.className = `message-row ${message.role === "user" ? "user" : "assistant"}${isEditing ? " editing" : ""}`;
 	const body = ensureChild(row, "message-body");
-	if (visibleThinking) {
-		const thinkingBlock = ensureChild(body, "thinking-block", "div", true);
+
+	// Edited in the chat itself, not the composer: swap the bubble for an inline
+	// editable card instead of the normal content/actions below.
+	if (isEditing) {
+		body.querySelector(":scope > .thinking-block")?.remove();
+		body.querySelector(":scope > .message-content")?.remove();
+		body.querySelector(":scope > .message-images")?.remove();
+		renderMessageEditCard(body, message, text);
+		row.querySelector(":scope > .message-actions")?.remove();
+		return;
+	}
+	body.querySelector(":scope > .message-edit-card")?.remove();
+
+	if (hasThinking) {
+		// Collapsed by default per settings.hideThinkingBlock ("collapse thinking by
+		// default"); the reader can still expand it, same as a tool card. Only the first
+		// render of a given row sets the initial open state, so a manual toggle sticks
+		// through the rest of the stream instead of snapping back every re-render.
+		const thinkingBlock = ensureChild(body, "thinking-block", "details", true);
 		thinkingBlock.dataset.state = isThinking ? "thinking" : "summary";
-		setText(thinkingBlock, visibleThinking);
+		if (!thinkingBlock.dataset.opened) {
+			thinkingBlock.open = !state.hideThinkingBlock;
+			thinkingBlock.dataset.opened = "1";
+		}
+		setText(ensureChild(thinkingBlock, "thinking-summary", "summary"), thinkingLabel);
+		setText(ensureChild(thinkingBlock, "thinking-body"), thinkingText);
 	}
 	else body.querySelector(":scope > .thinking-block")?.remove();
 
@@ -1220,12 +1424,15 @@ function renderMessageRow(row, message, display = {}) {
 		actions.append(createMsgActionButton("copy", "Copy"));
 	} else if (message.role === "user") {
 		actions.append(
-			createMsgActionButton("edit", "Edit and resend"),
-			createMsgActionButton("fork", "Fork from here"),
+			createMsgActionButton("edit", "Edit and resend", sessionActionsDisabled),
+			createMsgActionButton("fork", "Fork from here", sessionActionsDisabled),
 			createMsgActionButton("copy", "Copy"),
 		);
 	} else {
-		actions.append(createMsgActionButton("retry", "Retry"), createMsgActionButton("copy", "Copy"));
+		actions.append(
+			createMsgActionButton("retry", "Retry", sessionActionsDisabled),
+			createMsgActionButton("copy", "Copy"),
+		);
 	}
 }
 
@@ -1587,6 +1794,11 @@ function renderDiffToolCard(row, tool, diffs) {
 		card.open = true;
 		card.dataset.opened = "1";
 	}
+	// Before diffs resolve, renderToolCard() renders this same <details> generically, with a
+	// bare (non-collapsible) <pre class="tool-output"> holding the raw code. That element is
+	// never revisited once diffs arrive and this function takes over, so it survives as a
+	// stray, always-visible sibling sitting above the collapsed "Command" box below.
+	card.querySelector(":scope > .tool-output")?.remove();
 
 	// <summary> must land in the DOM before the body content: `details` only ever treats its
 	// first <summary> child as the label, and non-open state hides everything after it in
@@ -1704,7 +1916,7 @@ function isTurnPending() {
 }
 
 function renderPendingRow(row) {
-	const caption = state.queuedPrompt ? "Connecting…" : "Working…";
+	const caption = state.queuedPrompt ? `Connecting… ${connectionPercent()}%` : "Working…";
 	if (row._signature === `pending ${caption}`) return;
 	row._signature = `pending ${caption}`;
 	row.className = "message-row assistant pending-row";
@@ -2288,7 +2500,11 @@ function updateModelOptions() {
 			group.appendChild(option);
 		}
 	}
-	if (state.model) modelSelect.value = `${state.model.provider}:${state.model.id}`;
+	// A model change picked while the engine was still connecting has not landed
+	// yet (see flushPendingSessionSettings); keep showing it rather than the
+	// engine-reported model it is about to replace.
+	if (state.pendingModel) modelSelect.value = `${state.pendingModel.provider}:${state.pendingModel.modelId}`;
+	else if (state.model) modelSelect.value = `${state.model.provider}:${state.model.id}`;
 	syncComposer();
 }
 
@@ -2300,16 +2516,20 @@ function formatElapsed(milliseconds) {
 
 function renderRuntimeFeatures() {
 	const features = state.runtimeFeatures;
-	const mode = features?.executionMode;
+	// A mode picked while the engine was still starting or attaching to a
+	// conversation (see requestExecutionMode) has not been sent yet; show it
+	// rather than the last-known/loading server mode so the picker reflects the
+	// user's choice instead of looking stuck until the connection finishes.
+	const mode = state.pendingExecutionMode ?? features?.executionMode;
 	$("job-command").disabled = !state.runtimeAvailable || !features;
 	$("job-form").querySelector("button").disabled = !state.runtimeAvailable || !features;
 	for (const button of document.querySelectorAll("[data-execution-mode]")) {
 		button.setAttribute("aria-checked", String(button.dataset.executionMode === mode));
-		button.disabled = !state.runtimeAvailable || !features;
+		button.disabled = !state.runtimeAvailable;
 	}
 	$("execution-status").textContent = state.runtimeAvailable ? mode || "Loading" : "Unavailable";
 	const composerMode = $("composer-mode");
-	composerMode.disabled = !state.runtimeAvailable || !features;
+	composerMode.disabled = !state.runtimeAvailable;
 	if (mode) {
 		$("composer-mode-label").textContent = mode[0].toUpperCase() + mode.slice(1);
 		for (const option of document.querySelectorAll("[data-composer-execution-mode]")) {
@@ -2465,6 +2685,67 @@ function renderJobBanner(jobs) {
 	}
 }
 
+function renderTodoCard() {
+	if (!todoCard) return;
+	const todo = state.todo;
+	const hasItems = todo && Array.isArray(todo.items) && (todo.items.length > 0 || Boolean(todo.title));
+	if (!hasItems) {
+		todoCard.hidden = true;
+		return;
+	}
+	todoCard.hidden = false;
+	todoCard.dataset.expanded = String(state.todoExpanded ?? true);
+	if (todoCardToggle) {
+		todoCardToggle.setAttribute("aria-expanded", String(state.todoExpanded ?? true));
+	}
+
+	const title = (todo.title || "Todo List").trim();
+	if (todoCardTitle) {
+		todoCardTitle.textContent = title;
+	}
+
+	const total = todo.items.length;
+	const completed = todo.items.filter((item) => item.status === "completed").length;
+	if (todoCardCounter) {
+		todoCardCounter.textContent = `${completed} of ${total} todos completed`;
+	}
+
+	if (!todoCardList) return;
+	todoCardList.replaceChildren();
+
+	for (const item of todo.items) {
+		const row = document.createElement("div");
+		row.className = "todo-item-row";
+		row.dataset.status = item.status || "pending";
+		row.dataset.id = item.id;
+
+		const checkbox = document.createElement("input");
+		checkbox.type = "checkbox";
+		checkbox.className = "todo-item-checkbox";
+		checkbox.checked = item.status === "completed";
+		checkbox.setAttribute("aria-label", item.text || "Todo item");
+
+		checkbox.addEventListener("change", (e) => {
+			e.stopPropagation();
+			const newStatus = checkbox.checked ? "completed" : "pending";
+			item.status = newStatus;
+			row.dataset.status = newStatus;
+			const newCompleted = todo.items.filter((i) => i.status === "completed").length;
+			if (todoCardCounter) {
+				todoCardCounter.textContent = `${newCompleted} of ${total} todos completed`;
+			}
+		});
+
+		const textSpan = document.createElement("span");
+		textSpan.className = "todo-item-text";
+		textSpan.textContent = item.text || "";
+
+		row.appendChild(checkbox);
+		row.appendChild(textSpan);
+		todoCardList.appendChild(row);
+	}
+}
+
 function workspaceChangeName(filePath) {
 	return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
 }
@@ -2568,22 +2849,18 @@ function watchRunningJobs(jobs) {
 function refreshRuntimeFeatures() {
 	// The composer's mode chip needs these even while the runtime drawer is shut.
 	if (!state.runtimeAvailable) return;
-	sendCommand("get_runtime_features");
+	// Tagged so a slow read that was sent before a faster set_execution_mode
+	// write cannot land after it and clobber the write with stale data; see the
+	// runtimeSeq check in handleResponse.
+	sendCommand("get_runtime_features", {}, { runtimeSeq: ++state.runtimeFeaturesSeq });
 }
 
 function startsBackgroundJob(event) {
 	return event.toolName === "ipython" && typeof event.args?.code === "string" && /\brlm\.jobs\.start\s*\(/.test(event.args.code);
 }
 
-function openRuntimeDrawer() {
-	runtimeDrawer.hidden = false;
-	$("runtime-button").setAttribute("aria-pressed", "true");
-	refreshRuntimeFeatures();
-}
-
 function closeRuntimeDrawer() {
 	runtimeDrawer.hidden = true;
-	$("runtime-button").setAttribute("aria-pressed", "false");
 }
 
 function handleResponse(event) {
@@ -2636,6 +2913,7 @@ function handleResponse(event) {
 	}
 	if (event.command === "get_state") {
 		clearTimeout(handshakeTimer);
+		state.connectSteps.add("get_state");
 		applyState(event.data);
 		setReady(true);
 		refreshBusySessions();
@@ -2644,15 +2922,21 @@ function handleResponse(event) {
 		// A conversation clicked while this handshake was in flight is opened now.
 		flushPendingAttach();
 		flushQueuedPrompt();
+		flushPendingSessionSettings();
 	}
 	if (event.command === "get_available_models") {
+		state.connectSteps.add("get_available_models");
+		refreshConnectionLabel();
 		state.models = event.data?.models || [];
 		updateModelOptions();
 		modelSelect.disabled = !state.ready || state.models.length === 0;
 		// A prompt typed before the model list landed can go now.
 		flushQueuedPrompt();
+		flushPendingSessionSettings();
 	}
 	if (event.command === "get_commands") {
+		state.connectSteps.add("get_commands");
+		refreshConnectionLabel();
 		state.commands = event.data?.commands || [];
 	}
 	// /permissions changes the mode inside the engine without notifying the UI.
@@ -2661,6 +2945,17 @@ function handleResponse(event) {
 		// Mid-switch these describe the conversation we are leaving, and adopting
 		// them would start job polls against the wrong session.
 		if (state.switchingSession) return;
+		// get_runtime_features and set_execution_mode responses are not
+		// guaranteed to arrive in the order they were sent (a read started just
+		// before a write can finish just after it). runtimeSeq is assigned in
+		// send order, so a response tagged with an older sequence number than
+		// one already applied is a stale read racing a newer write and must be
+		// dropped instead of clobbering it back.
+		const runtimeSeq = pending?.runtimeSeq;
+		if (runtimeSeq !== undefined) {
+			if (runtimeSeq < state.runtimeFeaturesAppliedSeq) return;
+			state.runtimeFeaturesAppliedSeq = runtimeSeq;
+		}
 		state.runtimeFeatures = event.data;
 		state.runtimeAvailable = true;
 		renderRuntimeFeatures();
@@ -2674,6 +2969,8 @@ function handleResponse(event) {
 		refreshRuntimeFeatures();
 	}
 	if (event.command === "get_messages") {
+		state.connectSteps.add("get_messages");
+		refreshConnectionLabel();
 		// Mid-switch the engine still answers for the conversation we are leaving.
 		// The open_session handshake re-asks once it has attached to the new one.
 		if (state.switchingSession) return;
@@ -2685,6 +2982,9 @@ function handleResponse(event) {
 	}
 	if (event.command === "list_busy_sessions") {
 		const busySessions = new Set((event.data?.sessionFiles || []).map(sessionPathKey));
+		if (!state.busy) {
+			busySessions.delete(sessionPathKey(state.activeSessionPath));
+		}
 		// Re-render only on a real change: the sidebar rebuilds every row, which
 		// would restart the indicator animation on every poll.
 		const changed =
@@ -2717,6 +3017,7 @@ function handleResponse(event) {
 		sendCommand("get_available_models");
 		refreshRuntimeFeatures();
 		flushQueuedPrompt();
+		flushPendingSessionSettings();
 	}
 	if (event.command === "set_model") {
 		state.model = event.data;
@@ -2766,13 +3067,20 @@ function handleAgentEvent(event) {
 		}
 		return;
 	}
+	if (event.type === "todo_update") {
+		state.todo = event.todo;
+		renderTodoCard();
+		return;
+	}
 	if (event.type === "agent_start") {
 		// Tool history belongs to the transcript, not to a single turn.
 		setBusy(true, "Working · send a message to steer");
 		return;
 	}
 	if (event.type === "agent_end") {
+		state.busySessions.delete(sessionPathKey(state.activeSessionPath));
 		setBusy(false, "Ready");
+		renderWorkspaceList();
 		// The streamed transcript is optimistic; the engine's message list is authoritative.
 		sendCommand("get_messages");
 		sendCommand("get_state");
@@ -2825,7 +3133,11 @@ function handleAgentEvent(event) {
 			state.streamIndex = -1;
 			if (message.role === "assistant") {
 				state.messages[index]._finishedAt = Date.now();
-				if (assistantHasFinalAnswer(state.messages[index])) setBusy(false, "Ready");
+				const hasToolCalls = Array.isArray(message.content) && message.content.some((block) => block?.type === "toolCall");
+				if (!hasToolCalls || assistantHasFinalAnswer(state.messages[index])) {
+					state.busySessions.delete(sessionPathKey(state.activeSessionPath));
+					setBusy(false, "Ready");
+				}
 			}
 		} else {
 			state.streamIndex = index;
@@ -2888,7 +3200,7 @@ function bootstrap() {
 	refreshRuntimeFeatures();
 	handshakeTimer = setTimeout(() => {
 		if (!state.ready) {
-			setStatus("Still starting", "busy");
+			connectionLabel.textContent = `Still starting… ${connectionPercent()}%`;
 		}
 	}, 8000);
 }
@@ -2897,12 +3209,19 @@ function bootstrap() {
 // in the running one.
 async function startWorkspace(workspace, { silent = false } = {}) {
 	clearTimeout(handshakeTimer);
+	state.connectSteps = new Set();
 	setReady(false);
 	state.runtimeAvailable = true;
 	state.runtimeFeatures = undefined;
 	state.jobOutputs.clear();
 	state.waitingJobs.clear();
 	state.subagents.clear();
+	// The execution-mode picker only re-enables itself once a runtime-features
+	// response arrives; without this it stays stuck in whatever disabled state
+	// the previous conversation left it in until the new one finishes
+	// connecting. Rendering now lets it accept a choice immediately, held as
+	// state.pendingExecutionMode until requestExecutionMode can actually send it.
+	renderRuntimeFeatures();
 	setBusy(false, "Starting Prometheus…");
 	if (!silent) {
 		displayWorkspace(workspace);
@@ -2911,6 +3230,8 @@ async function startWorkspace(workspace, { silent = false } = {}) {
 	}
 	try {
 		await window.desktopAgent.start({ cwd: workspace });
+		state.connectSteps.add("start");
+		refreshConnectionLabel();
 		// Give the child process a turn to attach its RPC reader before the
 		// first request. The agent:started event is also a useful lifecycle
 		// boundary, but this fallback keeps startup deterministic if that event
@@ -3007,6 +3328,32 @@ function flushQueuedPrompt() {
 		{ message: queued.message, ...(queued.images?.length ? { images: queued.images } : {}) },
 		{ message: queued.message, optimisticKey: queued.optimisticMessage._key },
 	);
+}
+
+// A model or thinking-level change picked while the engine was starting up or
+// switching conversations (see the modelSelect/thinkingSelect handlers) is
+// held rather than sent, so it cannot land on the conversation being left.
+// This replays it once the engine is actually attached to the conversation
+// the user is looking at.
+function flushPendingSessionSettings() {
+	if (isEngineConnecting()) return;
+	if (state.pendingModel) {
+		const { provider, modelId } = state.pendingModel;
+		state.pendingModel = undefined;
+		sendCommand("set_model", { provider, modelId });
+	}
+	if (state.pendingThinkingLevel !== undefined) {
+		const level = state.pendingThinkingLevel;
+		state.pendingThinkingLevel = undefined;
+		state.thinkingLevel = level;
+		thinkingSelect.value = level;
+		sendCommand("set_thinking_level", { level });
+	}
+	if (state.pendingExecutionMode) {
+		const mode = state.pendingExecutionMode;
+		state.pendingExecutionMode = undefined;
+		sendCommand("set_execution_mode", { mode }, { runtimeSeq: ++state.runtimeFeaturesSeq });
+	}
 }
 
 // Undo a held prompt: drop its optimistic row and hand the text back rather than
@@ -3122,6 +3469,7 @@ async function deleteConversation(workspace, sessionPath) {
 			sendCommand("get_available_models");
 			refreshRuntimeFeatures();
 			flushQueuedPrompt();
+			flushPendingSessionSettings();
 		} else {
 			await window.desktopAgent.trashSession({ sessionPath });
 		}
@@ -3209,7 +3557,39 @@ function resetConversationState() {
 	state.waitingJobs.clear();
 	state.subagents.clear();
 	state.approval = undefined;
+	state.editingKey = undefined;
 	renderMessages();
+	renderRuntimeFeatures();
+}
+
+// Same idea as resetConversationState, but for an edit/retry: those forks land on a
+// session that is the same conversation from the user's point of view, just rewound
+// to before the turn being replaced. Blanking the whole transcript there reads as
+// hopping to a brand new chat for however long the background fork takes; keeping
+// everything before the anchor message on screen (the resend appears right after,
+// via the caller's optimistic/queued prompt) keeps it looking like the same chat the
+// whole time.
+//
+// Matched by _key, not object identity: state.messages can be replaced wholesale by
+// a get_messages response (a fresh readSessionMessages/open_session/get_messages
+// landing) between when the anchor message was captured and when this runs, which
+// would make an identity-based lookup miss even though the same message is still
+// there. A miss falls back to leaving the transcript as-is rather than clearing it,
+// since clearing on a miss is what produced the old blank-flash bug.
+function truncateConversationBefore(anchorMessage) {
+	const key = anchorMessage?._key;
+	const index = key ? state.messages.findIndex((item) => item._key === key) : -1;
+	if (index >= 0) state.messages = state.messages.slice(0, index);
+	state.tools = [];
+	state.streamIndex = -1;
+	state.runtimeFeatures = undefined;
+	state.jobOutputs.clear();
+	state.waitingJobs.clear();
+	state.subagents.clear();
+	state.approval = undefined;
+	state.editingKey = undefined;
+	renderMessages();
+	renderRuntimeFeatures();
 }
 
 // entryId isn't carried on transcript messages, so it's looked up by position: the Nth
@@ -3222,40 +3602,144 @@ async function forkEntryIdForMessage(message) {
 	return response.data?.messages?.[rank]?.entryId;
 }
 
-async function forkAtEntry(entryId, position) {
-	const response = await sendCommandAwait("fork", { entryId, position });
-	const result = response.data || {};
-	if (result.cancelled) return result;
-	resetConversationState();
-	await sendCommand("get_state");
-	await sendCommand("get_messages");
-	sendCommand("get_available_models");
-	refreshRuntimeFeatures();
-	void refreshWorkspaceChats(state.workspace);
-	return result;
+// Forking rebuilds the whole engine runtime server-side (same cost as open_session),
+// which can take seconds. The UI switches to the forked conversation immediately and
+// marks the engine as connecting, same as opening a different chat; a prompt sent
+// before the fork lands is held and replayed once it does (see isEngineConnecting /
+// flushQueuedPrompt). state.switchingSession flips true synchronously here, before the
+// first await, so a caller that fires this without awaiting it can safely queue a
+// prompt right behind it.
+//
+// options.anchorMessage keeps the conversation shown as itself (see
+// truncateConversationBefore) instead of blanking it; pass it for an edit/retry, which
+// stay the same conversation, and omit it for "Fork from here", which genuinely opens
+// a new one.
+async function forkAtEntry(entryId, position, options = {}) {
+	// A second fork/switch fired while one is still landing used to send a second
+	// "fork" RPC on top of the first (a double-click on Save & Resend, or an edit
+	// started while the conversation was still connecting) and could produce two
+	// branched sessions instead of one. isEngineConnecting()-gated buttons and the
+	// isEngineConnecting() guards in the callers below are the first line of
+	// defense; this is the backstop that actually can't be raced past.
+	if (state.switchingSession) {
+		showToast("Still finishing the previous change — try again in a moment.");
+		return { cancelled: true };
+	}
+	state.switchingSession = true;
+	if (options.anchorMessage) truncateConversationBefore(options.anchorMessage);
+	else resetConversationState();
+	setBusy(false, "Forking conversation");
+	const switchToken = ++state.switchToken;
+	try {
+		const response = await sendCommandAwait("fork", { entryId, position });
+		const result = response.data || {};
+		// A newer navigation click already owns the transcript; leave its state alone.
+		if (switchToken !== state.switchToken) return result;
+		state.switchingSession = false;
+		if (result.cancelled) {
+			// Nothing changed server-side: restore the transcript this cleared and
+			// hand any prompt queued in the meantime back to the composer.
+			returnQueuedPromptToComposer();
+			sendCommand("get_messages");
+			setBusy(false, "Ready");
+			return result;
+		}
+		sendCommand("get_state");
+		sendCommand("get_messages");
+		sendCommand("get_available_models");
+		refreshRuntimeFeatures();
+		void refreshWorkspaceChats(state.workspace);
+		flushQueuedPrompt();
+		flushPendingSessionSettings();
+		return result;
+	} catch (error) {
+		if (switchToken === state.switchToken) {
+			state.switchingSession = false;
+			returnQueuedPromptToComposer();
+			setBusy(false, "Ready");
+		}
+		throw error;
+	}
 }
 
-async function editFromMessage(message) {
-	const text = contentText(message);
+// Editing happens inline in the chat, not the composer: clicking "Edit and
+// resend" swaps that message's bubble for an editable card (see the isEditing
+// branch in renderMessageRow) instead of prefilling the input at the bottom.
+function beginEditMessage(message) {
+	if (!message || message.role !== "user" || !message._key) return;
+	// Editing captures this message to fork from later; starting that while the
+	// engine is still connecting/mid-switch, or while another fork/retry is
+	// already landing, is what raced state.messages against the capture and
+	// produced duplicate branches (see forkAtEntry/truncateConversationBefore).
+	// The action buttons are disabled for the same reason; this covers the
+	// context-menu path, which isn't.
+	if (isEngineConnecting() || state.sessionActionPending) {
+		showToast("Still connecting — try again in a moment.");
+		return;
+	}
+	state.editingKey = message._key;
+	renderMessages();
+}
+
+function cancelEditMessage() {
+	if (!state.editingKey) return;
+	state.editingKey = undefined;
+	renderMessages();
+}
+
+// Closes the gap between a click and forkAtEntry actually flipping
+// state.switchingSession (true only once forkEntryIdForMessage's network round
+// trip resolves): without it, a fast double-click on Save & Resend could call
+// saveAndResendEdit/forkFromMessage/retryAssistantMessage a second time while the
+// first was still awaiting get_fork_messages, before forkAtEntry's own guard had
+// anything to check yet — sending two "fork" RPCs and producing two branches.
+function beginSessionAction() {
+	if (state.sessionActionPending || isEngineConnecting()) return false;
+	state.sessionActionPending = true;
+	return true;
+}
+
+function endSessionAction() {
+	state.sessionActionPending = false;
+}
+
+async function saveAndResendEdit(message, rawText) {
+	const text = rawText.trim();
+	state.editingKey = undefined;
+	renderMessages();
+	if (!text) {
+		showToast("Message can't be empty.");
+		return;
+	}
+	if (!beginSessionAction()) {
+		showToast("Still connecting — try again in a moment.");
+		return;
+	}
 	try {
 		const entryId = await forkEntryIdForMessage(message);
 		if (!entryId) {
 			showToast("Could not find that message to edit.");
 			return;
 		}
-		const result = await forkAtEntry(entryId, "before");
-		if (result.cancelled) return;
-		// Do not enable resending until the session is rewound. Otherwise a fast
-		// Send submits the replacement to the conversation being edited instead.
-		input.value = text;
-		input.dispatchEvent(new Event("input"));
-		input.focus();
+		// Not awaited: forkAtEntry marks the engine connecting before it returns
+		// control here, so this resend queues behind the fork like any prompt typed
+		// while it runs, instead of waiting for the fork to finish first.
+		void forkAtEntry(entryId, "before", { anchorMessage: message }).catch((error) =>
+			showToast(error instanceof Error ? error.message : String(error)),
+		);
+		await submitPrompt(text);
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
+	} finally {
+		endSessionAction();
 	}
 }
 
 async function forkFromMessage(message) {
+	if (!beginSessionAction()) {
+		showToast("Still connecting — try again in a moment.");
+		return;
+	}
 	try {
 		const entryId = await forkEntryIdForMessage(message);
 		if (!entryId) {
@@ -3268,6 +3752,8 @@ async function forkFromMessage(message) {
 		if (!result.cancelled) showToast("Forked to a new session");
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
+	} finally {
+		endSessionAction();
 	}
 }
 
@@ -3285,17 +3771,27 @@ async function retryAssistantMessage(message) {
 		showToast("No preceding message to retry from.");
 		return;
 	}
+	if (!beginSessionAction()) {
+		showToast("Still connecting — try again in a moment.");
+		return;
+	}
 	try {
 		const entryId = await forkEntryIdForMessage(userMessage);
 		if (!entryId) {
 			showToast("Could not find that message to retry.");
 			return;
 		}
-		const result = await forkAtEntry(entryId, "before");
-		if (result.cancelled) return;
-		await submitPrompt(result.text || "");
+		// Not awaited: forkAtEntry marks the engine connecting before it returns
+		// control here, so this resend queues behind the fork like any prompt typed
+		// while it runs, instead of waiting for the fork to finish first.
+		void forkAtEntry(entryId, "before", { anchorMessage: userMessage }).catch((error) =>
+			showToast(error instanceof Error ? error.message : String(error)),
+		);
+		await submitPrompt(contentText(userMessage));
 	} catch (error) {
 		showToast(error instanceof Error ? error.message : String(error));
+	} finally {
+		endSessionAction();
 	}
 }
 
@@ -3308,7 +3804,12 @@ conversation.addEventListener("click", (event) => {
 	if (!message) return;
 	const action = button.dataset.msgAction;
 	if (action === "copy") void copyMessageText(message);
-	else if (action === "edit") void editFromMessage(message);
+	else if (action === "edit") beginEditMessage(message);
+	else if (action === "cancel-edit") cancelEditMessage();
+	else if (action === "save-edit") {
+		const textarea = button.closest(".message-edit-card")?.querySelector("textarea");
+		void saveAndResendEdit(message, textarea ? textarea.value : contentText(message));
+	}
 	else if (action === "fork") void forkFromMessage(message);
 	else if (action === "retry") void retryAssistantMessage(message);
 });
@@ -3493,6 +3994,12 @@ function renderCommandMenu() {
 	commandMenu.querySelector(".command-item.active")?.scrollIntoView({ block: "nearest" });
 }
 
+// Skills are shown after every other source (builtin, app, extension, prompt) so the
+// core command set stays on top; ties within a tier keep their original relative order.
+function commandSortWeight(command) {
+	return command.source === "skill" ? 1 : 0;
+}
+
 function updateCommandMenu() {
 	const query = commandQuery();
 	if (query === undefined) {
@@ -3500,7 +4007,11 @@ function updateCommandMenu() {
 		return;
 	}
 	const knownNames = new Set(state.commands.map((command) => command.name));
-	const pool = [...state.commands, ...CLIENT_COMMANDS.filter((command) => !knownNames.has(command.name))];
+	const merged = [...state.commands, ...CLIENT_COMMANDS.filter((command) => !knownNames.has(command.name))];
+	const pool = merged
+		.map((command, index) => ({ command, index }))
+		.sort((a, b) => commandSortWeight(a.command) - commandSortWeight(b.command) || a.index - b.index)
+		.map((entry) => entry.command);
 	commandMatches = pool.filter((command) => command.name.toLowerCase().startsWith(query));
 	commandIndex = 0;
 	renderCommandMenu();
@@ -3817,8 +4328,20 @@ function showSessionLocally(sessionPath, sessionName) {
 	state.waitingJobs.clear();
 	state.subagents.clear();
 	state.approval = undefined;
+	state.editingKey = undefined;
 	state.workspaceChanges = [];
 	renderWorkspaceChanges();
+	// The composer metrics belong to whichever chat is on screen. Reset them here,
+	// synchronously with the local blank, instead of waiting on the engine's
+	// applyState round trip — otherwise the previous chat's session clock and
+	// context usage linger visibly until the new session finishes attaching.
+	state.sessionStartedAt = Date.now();
+	state.contextUsage = undefined;
+	renderComposerMetrics();
+	// See startWorkspace: without this the execution-mode picker stays stuck in
+	// the outgoing conversation's disabled/loading state until the new one
+	// finishes attaching, instead of being ready to take a choice right away.
+	renderRuntimeFeatures();
 	const chat = (state.workspaceChats.get(state.workspace) || []).find((entry) => entry.path === sessionPath);
 	state.sessionName = sessionName || chat?.name || "New conversation";
 	$("header-title").textContent = state.sessionName;
@@ -4059,7 +4582,7 @@ async function handleTranscriptContextMenu(event, row) {
 	const action = await showNativeContextMenu(items, row);
 	if (action === "copy-selection") void copyText(selection);
 	else if (action === "copy") void copyMessageText(message);
-	else if (action === "edit") void editFromMessage(message);
+	else if (action === "edit") beginEditMessage(message);
 	else if (action === "fork") void forkFromMessage(message);
 	else if (action === "retry") void retryAssistantMessage(message);
 }
@@ -4235,26 +4758,43 @@ setupSidebarResize();
 
 modelSelect.addEventListener("change", () => {
 	const [provider, ...idParts] = modelSelect.value.split(":");
-	if (provider && idParts.length) sendCommand("set_model", { provider, modelId: idParts.join(":") });
+	if (!provider || !idParts.length) return;
+	const modelId = idParts.join(":");
+	// While the engine is still starting or attaching to another conversation,
+	// sending set_model now can land on the conversation being left rather than
+	// the one about to become active. Hold it and replay it once connected.
+	if (isEngineConnecting()) {
+		state.pendingModel = { provider, modelId };
+		return;
+	}
+	sendCommand("set_model", { provider, modelId });
 });
 
 thinkingSelect.addEventListener("change", () => {
-	state.thinkingLevel = thinkingSelect.value;
+	const level = thinkingSelect.value;
+	// Same race as the model select above: hold the change until the engine is
+	// actually attached to the conversation it should apply to.
+	if (isEngineConnecting()) {
+		state.pendingThinkingLevel = level;
+		return;
+	}
+	state.thinkingLevel = level;
 	sendCommand("set_thinking_level", { level: state.thinkingLevel });
 });
 
-$("export-button").addEventListener("click", () => sendCommand("export_html"));
-$("stats-button").addEventListener("click", () => sendCommand("get_session_stats"));
-$("runtime-button").addEventListener("click", () => {
-	if (runtimeDrawer.hidden) openRuntimeDrawer();
-	else closeRuntimeDrawer();
-});
 $("runtime-close").addEventListener("click", closeRuntimeDrawer);
 subagentBackButton.addEventListener("click", closeSubagentConversation);
 jobBannerToggle.addEventListener("click", () => {
 	state.jobBannerExpanded = !state.jobBannerExpanded;
 	renderJobBanner(state.runtimeFeatures?.jobs || []);
 });
+if (todoCardToggle) {
+	todoCardToggle.addEventListener("click", () => {
+		state.todoExpanded = !(state.todoExpanded ?? true);
+		if (todoCard) todoCard.dataset.expanded = String(state.todoExpanded);
+		todoCardToggle.setAttribute("aria-expanded", String(state.todoExpanded));
+	});
+}
 changeReviewToggle.addEventListener("click", () => {
 	state.changeReviewExpanded = !state.changeReviewExpanded;
 	renderWorkspaceChanges();
@@ -4269,7 +4809,8 @@ rejectAllChanges.addEventListener("click", async () => {
 	if (confirmed === true) void applyWorkspaceChangeReview("reject-all");
 });
 async function requestExecutionMode(mode) {
-	if (!mode || mode === state.runtimeFeatures?.executionMode) return;
+	const currentMode = state.pendingExecutionMode ?? state.runtimeFeatures?.executionMode;
+	if (!mode || mode === currentMode) return;
 	if (mode === "unrestricted") {
 		const confirmed = await openInteraction({
 			title: "Use unrestricted execution?",
@@ -4281,7 +4822,16 @@ async function requestExecutionMode(mode) {
 			return;
 		}
 	}
-	sendCommand("set_execution_mode", { mode });
+	// The engine is not attached to the conversation on screen yet (still
+	// starting, or mid-switch to a different chat); sending set_execution_mode
+	// now can land on the conversation being left. Hold it and replay it once
+	// connected, same as the model/thinking-level pickers.
+	if (isEngineConnecting()) {
+		state.pendingExecutionMode = mode;
+		renderRuntimeFeatures();
+		return;
+	}
+	sendCommand("set_execution_mode", { mode }, { runtimeSeq: ++state.runtimeFeaturesSeq });
 }
 
 $("mode-picker").addEventListener("click", (event) => {
@@ -4368,12 +4918,12 @@ runtimeDrawer.addEventListener("click", async (event) => {
 	}
 });
 stopButton.addEventListener("click", async () => {
+	state.busySessions.delete(sessionPathKey(state.activeSessionPath));
+	setBusy(false, "Ready");
+	renderWorkspaceList();
 	stopButton.disabled = true;
 	try {
 		await sendCommandAwait("abort");
-		// The abort response confirms that the session and its active subagents were
-		// stopped. Update immediately instead of waiting for agent_end, which may
-		// arrive after stream cleanup.
 		state.busySessions.delete(sessionPathKey(state.activeSessionPath));
 		setBusy(false, "Ready");
 		sendCommand("get_messages");
@@ -4385,11 +4935,11 @@ stopButton.addEventListener("click", async () => {
 	}
 });
 document.addEventListener("keydown", (event) => {
-	if (event.key === "Escape" && state.subagentView && runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open) {
+	if (event.key === "Escape" && state.subagentView && runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open && !settingsDialog.open) {
 		closeSubagentConversation();
 		return;
 	}
-	if (event.key === "Escape" && !runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open) {
+	if (event.key === "Escape" && !runtimeDrawer.hidden && !providerDialog.open && !interactionDialog.open && !settingsDialog.open) {
 		closeRuntimeDrawer();
 		return;
 	}
@@ -4406,6 +4956,15 @@ setInterval(() => {
 	refreshBusySessions();
 	void refreshViewedSubagent();
 }, 2000);
+
+// The session clock ticks locally; context usage is re-read from the engine only
+// while a turn is running, since it cannot change otherwise.
+let metricsTicks = 0;
+setInterval(() => {
+	renderComposerMetrics();
+	metricsTicks += 1;
+	if (state.busy && metricsTicks % CONTEXT_POLL_TICKS === 0) void refreshContextUsage();
+}, METRICS_TICK_MS);
 document.addEventListener("visibilitychange", () => {
 	refreshBusySessions();
 	if (!document.hidden) void refreshWorkspaceChanges();
@@ -4425,9 +4984,20 @@ window.desktopAgent.onExit((payload) => {
 	showToast(payload?.code === 0 ? "Prometheus stopped. Restart the session to reconnect." : "The Prometheus process stopped. Restart the session to reconnect.");
 });
 
+async function loadHideThinkingBlockSetting() {
+	try {
+		const { settings } = await window.desktopAgent.getSettings();
+		state.hideThinkingBlock = settings?.hideThinkingBlock ?? true;
+	} catch {
+		// Keep the default when settings cannot be read.
+	}
+	renderMessages();
+}
+
 (async () => {
 	state.workspaces = await loadStoredWorkspaces();
 	void Promise.all(state.workspaces.map((storedWorkspace) => refreshWorkspaceChats(storedWorkspace)));
+	void loadHideThinkingBlockSetting();
 	if (state.workspaces[0]) {
 		await startWorkspace(state.workspaces[0]);
 	} else {
@@ -4437,3 +5007,572 @@ window.desktopAgent.onExit((payload) => {
 		await startWorkspace(pendingDefaultCwd, { silent: true });
 	}
 })();
+
+
+// ---------------------------------------------------------------------------
+// Settings dialog
+// ---------------------------------------------------------------------------
+
+const settingsDialog = $("settings-dialog");
+const settingsStatus = $("settings-status");
+let settingsLoaded = false;
+let settingsPath = "";
+const settingsChipState = new Map(); // dotted path -> string[]
+let settingsMcpServers = []; // [{ name, type, url, bearerTokenEnvVar, oauth, command, args, env, enabled }]
+let settingsPermissionRules = []; // [{ target, pattern, action }]
+
+function settingsPathGet(obj, dottedPath) {
+	return dottedPath.split(".").reduce((acc, key) => (acc && typeof acc === "object" ? acc[key] : undefined), obj);
+}
+
+function settingsPathSet(obj, dottedPath, value) {
+	const parts = dottedPath.split(".");
+	let cursor = obj;
+	for (let i = 0; i < parts.length - 1; i++) {
+		if (!cursor[parts[i]] || typeof cursor[parts[i]] !== "object") cursor[parts[i]] = {};
+		cursor = cursor[parts[i]];
+	}
+	cursor[parts[parts.length - 1]] = value;
+}
+
+function renderChipList(settingPath) {
+	const container = settingsDialog.querySelector(`[data-chip-container="${settingPath}"]`);
+	if (!container) return;
+	const values = settingsChipState.get(settingPath) || [];
+	container.innerHTML = "";
+	for (const value of values) {
+		const chip = document.createElement("span");
+		chip.className = "chip";
+		const label = document.createElement("span");
+		label.textContent = value;
+		const remove = document.createElement("button");
+		remove.type = "button";
+		remove.className = "chip-remove";
+		remove.setAttribute("aria-label", `Remove ${value}`);
+		remove.textContent = "×";
+		remove.addEventListener("click", () => {
+			settingsChipState.set(
+				settingPath,
+				(settingsChipState.get(settingPath) || []).filter((entry) => entry !== value),
+			);
+			renderChipList(settingPath);
+		});
+		chip.append(label, remove);
+		container.appendChild(chip);
+	}
+}
+
+function addChipValue(settingPath, rawValue) {
+	const value = rawValue.trim();
+	if (!value) return;
+	const existing = settingsChipState.get(settingPath) || [];
+	if (existing.includes(value)) return;
+	settingsChipState.set(settingPath, [...existing, value]);
+	renderChipList(settingPath);
+}
+
+function initChipFields() {
+	settingsDialog.querySelectorAll("[data-chip-list]").forEach((field) => {
+		const settingPath = field.dataset.chipList;
+		const input = field.querySelector(`[data-chip-input="${settingPath}"]`);
+		const addButton = field.querySelector(`[data-chip-add="${settingPath}"]`);
+		addButton.addEventListener("click", () => {
+			addChipValue(settingPath, input.value);
+			input.value = "";
+			input.focus();
+		});
+		input.addEventListener("keydown", (event) => {
+			if (event.key !== "Enter") return;
+			event.preventDefault();
+			addChipValue(settingPath, input.value);
+			input.value = "";
+		});
+	});
+}
+
+const MCP_TARGET_OPTIONS = [
+	["tool", "Tool"],
+	["command", "Command"],
+	["filesystem.read", "Filesystem read"],
+	["filesystem.write", "Filesystem write"],
+	["network", "Network"],
+];
+const MCP_ACTION_OPTIONS = [
+	["allow", "Allow"],
+	["ask", "Ask"],
+	["deny", "Deny"],
+];
+
+function renderPermissionRules() {
+	const list = $("permission-rules-list");
+	list.innerHTML = "";
+	if (settingsPermissionRules.length === 0) {
+		const empty = document.createElement("p");
+		empty.className = "settings-empty-note";
+		empty.textContent = "No custom rules. The execution mode above applies alone.";
+		list.appendChild(empty);
+		return;
+	}
+	settingsPermissionRules.forEach((rule, index) => {
+		const row = document.createElement("div");
+		row.className = "rule-row";
+
+		const targetSelect = document.createElement("select");
+		for (const [value, label] of MCP_TARGET_OPTIONS) {
+			const option = document.createElement("option");
+			option.value = value;
+			option.textContent = label;
+			if (rule.target === value) option.selected = true;
+			targetSelect.appendChild(option);
+		}
+		targetSelect.addEventListener("change", () => (rule.target = targetSelect.value));
+
+		const patternInput = document.createElement("input");
+		patternInput.type = "text";
+		patternInput.spellcheck = false;
+		patternInput.placeholder = "glob pattern, e.g. rm -rf *";
+		patternInput.value = rule.pattern || "";
+		patternInput.addEventListener("input", () => (rule.pattern = patternInput.value));
+
+		const actionSelect = document.createElement("select");
+		for (const [value, label] of MCP_ACTION_OPTIONS) {
+			const option = document.createElement("option");
+			option.value = value;
+			option.textContent = label;
+			if (rule.action === value) option.selected = true;
+			actionSelect.appendChild(option);
+		}
+		actionSelect.addEventListener("change", () => (rule.action = actionSelect.value));
+
+		const removeButton = document.createElement("button");
+		removeButton.type = "button";
+		removeButton.className = "row-remove-button";
+		removeButton.setAttribute("aria-label", "Remove rule");
+		removeButton.textContent = "×";
+		removeButton.addEventListener("click", () => {
+			settingsPermissionRules.splice(index, 1);
+			renderPermissionRules();
+		});
+
+		row.append(targetSelect, patternInput, actionSelect, removeButton);
+		list.appendChild(row);
+	});
+}
+
+function renderMcpServers() {
+	const list = $("mcp-server-list");
+	list.innerHTML = "";
+	if (settingsMcpServers.length === 0) {
+		const empty = document.createElement("p");
+		empty.className = "settings-empty-note";
+		empty.textContent = "No MCP servers configured.";
+		list.appendChild(empty);
+		return;
+	}
+	settingsMcpServers.forEach((server, index) => {
+		const card = document.createElement("div");
+		card.className = "mcp-server-card";
+
+		const header = document.createElement("div");
+		header.className = "mcp-server-card-header";
+		const nameInput = document.createElement("input");
+		nameInput.type = "text";
+		nameInput.spellcheck = false;
+		nameInput.placeholder = "Server name";
+		nameInput.value = server.name || "";
+		nameInput.addEventListener("input", () => (server.name = nameInput.value));
+		const typeSelect = document.createElement("select");
+		for (const [value, label] of [["http", "HTTP"], ["stdio", "Stdio"]]) {
+			const option = document.createElement("option");
+			option.value = value;
+			option.textContent = label;
+			if (server.type === value) option.selected = true;
+			typeSelect.appendChild(option);
+		}
+		typeSelect.addEventListener("change", () => {
+			server.type = typeSelect.value;
+			renderMcpServers();
+		});
+		const removeButton = document.createElement("button");
+		removeButton.type = "button";
+		removeButton.className = "row-remove-button";
+		removeButton.setAttribute("aria-label", "Remove server");
+		removeButton.textContent = "×";
+		removeButton.addEventListener("click", () => {
+			settingsMcpServers.splice(index, 1);
+			renderMcpServers();
+		});
+		header.append(nameInput, typeSelect, removeButton);
+
+		const fields = document.createElement("div");
+		fields.className = "mcp-server-fields";
+
+		function makeField(labelText, value, onInput, { wide = false, placeholder = "" } = {}) {
+			const label = document.createElement("label");
+			if (wide) label.className = "field-wide";
+			const span = document.createElement("span");
+			span.textContent = labelText;
+			const inputEl = document.createElement("input");
+			inputEl.type = "text";
+			inputEl.spellcheck = false;
+			inputEl.placeholder = placeholder;
+			inputEl.value = value || "";
+			inputEl.addEventListener("input", () => onInput(inputEl.value));
+			label.append(span, inputEl);
+			return label;
+		}
+
+		function makeCheckboxField(labelText, checked, onChange) {
+			const label = document.createElement("label");
+			const span = document.createElement("span");
+			span.textContent = labelText;
+			const inputEl = document.createElement("input");
+			inputEl.type = "checkbox";
+			inputEl.checked = !!checked;
+			inputEl.style.width = "auto";
+			inputEl.addEventListener("change", () => onChange(inputEl.checked));
+			label.append(inputEl, span);
+			return label;
+		}
+
+		if (server.type === "http") {
+			fields.append(
+				makeField("URL", server.url, (value) => (server.url = value), { wide: true, placeholder: "https://example.com/mcp" }),
+				makeField("Bearer token env var", server.bearerTokenEnvVar, (value) => (server.bearerTokenEnvVar = value), {
+					placeholder: "MY_SERVER_TOKEN",
+				}),
+				makeCheckboxField("Use OAuth login", server.oauth, (value) => (server.oauth = value)),
+				makeCheckboxField("Enabled", server.enabled !== false, (value) => (server.enabled = value)),
+			);
+		} else {
+			fields.append(
+				makeField("Command", server.command, (value) => (server.command = value), { placeholder: "npx" }),
+				makeField("Arguments (space-separated)", server.argsText, (value) => (server.argsText = value), {
+					placeholder: "-y @scope/mcp-server",
+				}),
+				makeField("Environment (KEY=value, one per line via commas)", server.envText, (value) => (server.envText = value), {
+					wide: true,
+					placeholder: "API_KEY=xxxx,OTHER=yyyy",
+				}),
+				makeCheckboxField("Enabled", server.enabled !== false, (value) => (server.enabled = value)),
+			);
+		}
+
+		card.append(header, fields);
+		list.appendChild(card);
+	});
+}
+
+function mcpServersFromSettings(mcpServers) {
+	if (!mcpServers || typeof mcpServers !== "object") return [];
+	return Object.entries(mcpServers).map(([name, config]) => {
+		if (config.type === "stdio") {
+			return {
+				name,
+				type: "stdio",
+				command: config.command || "",
+				argsText: Array.isArray(config.args) ? config.args.join(" ") : "",
+				envText: config.env ? Object.entries(config.env).map(([k, v]) => `${k}=${v}`).join(",") : "",
+				enabled: config.enabled !== false,
+			};
+		}
+		return {
+			name,
+			type: "http",
+			url: config.url || "",
+			bearerTokenEnvVar: config.bearerTokenEnvVar || "",
+			oauth: !!config.oauth,
+			enabled: config.enabled !== false,
+		};
+	});
+}
+
+function mcpServersToSettings() {
+	const named = settingsMcpServers.filter((server) => server.name && server.name.trim());
+	if (named.length === 0) return null;
+	const result = {};
+	for (const server of named) {
+		const name = server.name.trim();
+		if (server.type === "stdio") {
+			const args = (server.argsText || "").trim().split(/\s+/).filter(Boolean);
+			const env = {};
+			for (const pair of (server.envText || "").split(",")) {
+				const [key, ...rest] = pair.split("=");
+				if (key && key.trim() && rest.length) env[key.trim()] = rest.join("=").trim();
+			}
+			result[name] = {
+				type: "stdio",
+				command: (server.command || "").trim(),
+				...(args.length ? { args } : {}),
+				...(Object.keys(env).length ? { env } : {}),
+				enabled: server.enabled !== false,
+			};
+		} else {
+			result[name] = {
+				type: "http",
+				url: (server.url || "").trim(),
+				...(server.bearerTokenEnvVar ? { bearerTokenEnvVar: server.bearerTokenEnvVar.trim() } : {}),
+				...(server.oauth ? { oauth: true } : {}),
+				enabled: server.enabled !== false,
+			};
+		}
+	}
+	return result;
+}
+
+function populateSettingsForm(settings) {
+	settingsDialog.querySelectorAll("[data-setting]").forEach((el) => {
+		const value = settingsPathGet(settings, el.dataset.setting);
+		if (el.dataset.type === "bool") {
+			el.value = value === true ? "true" : value === false ? "false" : "";
+		} else if (value === undefined || value === null) {
+			el.value = "";
+		} else {
+			el.value = String(value);
+		}
+	});
+
+	settingsChipState.clear();
+	settingsDialog.querySelectorAll("[data-chip-list]").forEach((field) => {
+		const settingPath = field.dataset.chipList;
+		const value = settingsPathGet(settings, settingPath);
+		settingsChipState.set(settingPath, Array.isArray(value) ? [...value] : []);
+		renderChipList(settingPath);
+	});
+
+	settingsMcpServers = mcpServersFromSettings(settings.mcpServers);
+	renderMcpServers();
+
+	const rules = settingsPathGet(settings, "permissions.rules");
+	settingsPermissionRules = Array.isArray(rules) ? rules.map((rule) => ({ ...rule })) : [];
+	renderPermissionRules();
+}
+
+function collectSettingsPatch() {
+	const patch = {};
+
+	settingsDialog.querySelectorAll("[data-setting]").forEach((el) => {
+		const settingPath = el.dataset.setting;
+		const raw = el.value;
+		if (el.dataset.type === "bool") {
+			settingsPathSet(patch, settingPath, raw === "" ? null : raw === "true");
+			return;
+		}
+		if (el.dataset.type === "number") {
+			if (raw.trim() === "") {
+				settingsPathSet(patch, settingPath, null);
+				return;
+			}
+			const num = Number(raw);
+			settingsPathSet(patch, settingPath, Number.isFinite(num) ? num : null);
+			return;
+		}
+		// text/select-as-text, including idleEvictionMinutes which also accepts "off"
+		if (raw.trim() === "") {
+			settingsPathSet(patch, settingPath, null);
+			return;
+		}
+		if (settingPath === "idleEvictionMinutes" && raw.trim() !== "off") {
+			const num = Number(raw);
+			settingsPathSet(patch, settingPath, Number.isFinite(num) ? num : raw.trim());
+			return;
+		}
+		settingsPathSet(patch, settingPath, raw.trim());
+	});
+
+	for (const [settingPath, values] of settingsChipState.entries()) {
+		settingsPathSet(patch, settingPath, values.length ? values : null);
+	}
+
+	patch.mcpServers = mcpServersToSettings();
+	settingsPathSet(patch, "permissions.rules", settingsPermissionRules.length
+		? settingsPermissionRules.filter((rule) => rule.pattern && rule.pattern.trim())
+		: null);
+
+	return patch;
+}
+
+function switchSettingsTab(tabKey) {
+	settingsDialog.querySelectorAll("[data-settings-tab]").forEach((tab) => {
+		tab.classList.toggle("active", tab.dataset.settingsTab === tabKey);
+	});
+	settingsDialog.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+		panel.classList.toggle("active", panel.dataset.settingsPanel === tabKey);
+	});
+}
+
+async function openSettingsDialog() {
+	settingsStatus.textContent = "";
+	settingsStatus.classList.remove("error");
+	try {
+		const { settings, path: loadedPath } = await window.desktopAgent.getSettings();
+		settingsPath = loadedPath;
+		populateSettingsForm(settings || {});
+		settingsLoaded = true;
+	} catch (error) {
+		settingsStatus.textContent = `Could not load settings: ${error?.message || error}`;
+		settingsStatus.classList.add("error");
+	}
+	$("settings-search").value = "";
+	clearSettingsSearch();
+	settingsDialog.showModal();
+	requestAnimationFrame(() => $("settings-search").focus());
+}
+
+function closeSettingsDialog() {
+	if (settingsDialog.open) settingsDialog.close();
+}
+
+async function saveSettingsFromDialog() {
+	if (!settingsLoaded) return;
+	const saveButton = $("settings-save");
+	const patch = collectSettingsPatch();
+	saveButton.disabled = true;
+	settingsStatus.classList.remove("error");
+	settingsStatus.textContent = "Saving…";
+	try {
+		const { settings } = await window.desktopAgent.saveSettings(patch);
+		populateSettingsForm(settings || {});
+		state.hideThinkingBlock = settings?.hideThinkingBlock ?? true;
+		renderMessages();
+		settingsStatus.textContent = "Saved. Some changes apply to new sessions.";
+		showToast("Settings saved.");
+	} catch (error) {
+		settingsStatus.textContent = `Could not save settings: ${error?.message || error}`;
+		settingsStatus.classList.add("error");
+	} finally {
+		saveButton.disabled = false;
+	}
+}
+
+initChipFields();
+settingsDialog.querySelectorAll("[data-settings-tab]").forEach((tab) => {
+	tab.addEventListener("click", () => {
+		lastActiveSettingsTab = tab.dataset.settingsTab;
+		if (settingsSearchInput.value) {
+			settingsSearchInput.value = "";
+			clearSettingsSearch();
+		}
+		switchSettingsTab(tab.dataset.settingsTab);
+	});
+});
+$("settings-button").addEventListener("click", () => {
+	void openSettingsDialog();
+});
+$("settings-dialog-close").addEventListener("click", closeSettingsDialog);
+$("settings-cancel").addEventListener("click", closeSettingsDialog);
+$("settings-save").addEventListener("click", () => {
+	void saveSettingsFromDialog();
+});
+$("settings-open-file").addEventListener("click", () => {
+	if (settingsPath) void window.desktopAgent.openPath(settingsPath);
+});
+$("permission-rule-add").addEventListener("click", () => {
+	settingsPermissionRules.push({ target: "command", pattern: "", action: "ask" });
+	renderPermissionRules();
+});
+$("mcp-server-add").addEventListener("click", () => {
+	settingsMcpServers.push({ name: "", type: "http", url: "", bearerTokenEnvVar: "", oauth: false, enabled: true });
+	renderMcpServers();
+});
+settingsDialog.addEventListener("cancel", (event) => {
+	event.preventDefault();
+	closeSettingsDialog();
+});
+
+
+// ---------------------------------------------------------------------------
+// Settings dialog: search
+// ---------------------------------------------------------------------------
+
+const settingsDialogBody = $("settings-dialog-body");
+const settingsSearchInput = $("settings-search");
+let settingsSearchEmptyNote = null;
+let lastActiveSettingsTab = "general";
+
+function settingsUnitText(unit) {
+	return (unit.textContent || "").trim().toLowerCase();
+}
+
+function clearSettingsSearch() {
+	settingsDialogBody.classList.remove("searching");
+	settingsDialog.querySelectorAll("[data-search-hit]").forEach((el) => el.removeAttribute("data-search-hit"));
+	settingsDialog.querySelectorAll("[data-search-empty]").forEach((el) => el.removeAttribute("data-search-empty"));
+	settingsDialog.querySelectorAll(".settings-search-panel-label").forEach((el) => el.remove());
+	if (settingsSearchEmptyNote) {
+		settingsSearchEmptyNote.remove();
+		settingsSearchEmptyNote = null;
+	}
+}
+
+function applySettingsSearch(query) {
+	const trimmed = query.trim().toLowerCase();
+	if (!trimmed) {
+		clearSettingsSearch();
+		switchSettingsTab(lastActiveSettingsTab);
+		return;
+	}
+
+	settingsDialogBody.classList.add("searching");
+	let anyPanelVisible = false;
+
+	settingsDialog.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+		let panelHasVisible = false;
+
+		panel.querySelectorAll(".settings-field").forEach((field) => {
+			const hit = settingsUnitText(field).includes(trimmed);
+			field.setAttribute("data-search-hit", String(hit));
+			if (hit) panelHasVisible = true;
+		});
+
+		panel.querySelectorAll(".settings-subsection").forEach((section) => {
+			if (section.querySelector(".settings-field")) {
+				// Group container: visible whenever any field inside matched.
+				const hit = !!section.querySelector('.settings-field[data-search-hit="true"]');
+				section.setAttribute("data-search-hit", String(hit));
+				if (hit) panelHasVisible = true;
+				return;
+			}
+			// Custom editor section (permission rules, MCP servers): no discrete
+			// fields to filter, so match against its own heading/description text.
+			const hit = settingsUnitText(section).includes(trimmed);
+			section.setAttribute("data-search-hit", String(hit));
+			if (hit) panelHasVisible = true;
+		});
+
+		panel.setAttribute("data-search-empty", String(!panelHasVisible));
+		if (panelHasVisible) anyPanelVisible = true;
+
+		let label = panel.querySelector(".settings-search-panel-label");
+		if (panelHasVisible) {
+			if (!label) {
+				const tab = settingsDialog.querySelector(`[data-settings-tab="${panel.dataset.settingsPanel}"]`);
+				label = document.createElement("p");
+				label.className = "settings-search-panel-label";
+				label.textContent = tab ? tab.textContent : panel.dataset.settingsPanel;
+				panel.prepend(label);
+			}
+		} else if (label) {
+			label.remove();
+		}
+	});
+
+	if (!settingsSearchEmptyNote) {
+		settingsSearchEmptyNote = document.createElement("p");
+		settingsSearchEmptyNote.className = "settings-search-empty";
+		settingsSearchEmptyNote.textContent = "No settings match your search.";
+		$("settings-panels").appendChild(settingsSearchEmptyNote);
+	}
+	settingsSearchEmptyNote.hidden = anyPanelVisible;
+}
+
+settingsSearchInput.addEventListener("input", () => {
+	applySettingsSearch(settingsSearchInput.value);
+});
+settingsSearchInput.addEventListener("keydown", (event) => {
+	if (event.key === "Escape" && settingsSearchInput.value) {
+		event.stopPropagation();
+		settingsSearchInput.value = "";
+		applySettingsSearch("");
+	}
+});
