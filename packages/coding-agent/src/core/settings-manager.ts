@@ -120,6 +120,29 @@ export type McpServerConfig =
 			disabledTools?: string[];
 	  };
 
+/**
+ * Marketplace configuration and plugin descriptors.
+ */
+export interface MarketplacePlugin {
+	name: string;
+	source: string;
+	description?: string;
+	version?: string;
+	author?: { name?: string; email?: string } | string;
+	category?: string;
+	tags?: string[];
+}
+
+export interface MarketplaceConfig {
+	name: string;
+	source: string;
+	description?: string;
+	owner?: { name?: string; email?: string } | string;
+	plugins: MarketplacePlugin[];
+	installedPath?: string;
+	lastUpdated?: number;
+}
+
 export interface Settings {
 	onboardingShown?: boolean;
 	onboardingCompleted?: boolean;
@@ -150,6 +173,7 @@ export interface Settings {
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
 	mcpServers?: Record<string, McpServerConfig>; // User-declared MCP servers (name → config); built-ins are in the ai/mcp catalog
+	marketplaces?: Record<string, MarketplaceConfig>; // Registered plugin marketplaces (name → config)
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -1334,5 +1358,84 @@ export class SettingsManager {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
 		this.save();
+	}
+
+	getMarketplaces(): Record<string, MarketplaceConfig> {
+		return { ...(this.settings.marketplaces ?? {}) };
+	}
+
+	getGlobalMarketplaces(): Record<string, MarketplaceConfig> {
+		return { ...(this.globalSettings.marketplaces ?? {}) };
+	}
+
+	getProjectMarketplaces(): Record<string, MarketplaceConfig> {
+		return { ...(this.projectSettings.marketplaces ?? {}) };
+	}
+
+	setMarketplaces(marketplaces: Record<string, MarketplaceConfig>): void {
+		this.globalSettings.marketplaces = { ...marketplaces };
+		this.markModified("marketplaces");
+		this.save();
+	}
+
+	setProjectMarketplaces(marketplaces: Record<string, MarketplaceConfig>): void {
+		const projectSettings = structuredClone(this.projectSettings);
+		projectSettings.marketplaces = { ...marketplaces };
+		this.markProjectModified("marketplaces");
+		this.saveProjectSettings(projectSettings);
+	}
+
+	addMarketplace(marketplace: MarketplaceConfig, options?: { local?: boolean }): void {
+		if (options?.local) {
+			const projectMarketplaces = { ...(this.projectSettings.marketplaces ?? {}) };
+			projectMarketplaces[marketplace.name] = marketplace;
+			this.setProjectMarketplaces(projectMarketplaces);
+		} else {
+			const globalMarketplaces = { ...(this.globalSettings.marketplaces ?? {}) };
+			globalMarketplaces[marketplace.name] = marketplace;
+			this.setMarketplaces(globalMarketplaces);
+		}
+	}
+
+	removeMarketplace(nameOrSource: string, options?: { local?: boolean }): boolean {
+		const findKey = (map: Record<string, MarketplaceConfig>): string | undefined => {
+			if (map[nameOrSource]) return nameOrSource;
+			for (const [key, val] of Object.entries(map)) {
+				if (val.name === nameOrSource || val.source === nameOrSource) {
+					return key;
+				}
+			}
+			return undefined;
+		};
+
+		if (options?.local) {
+			const projectMarketplaces = { ...(this.projectSettings.marketplaces ?? {}) };
+			const key = findKey(projectMarketplaces);
+			if (key) {
+				delete projectMarketplaces[key];
+				this.setProjectMarketplaces(projectMarketplaces);
+				return true;
+			}
+			return false;
+		}
+
+		let removed = false;
+		const globalMarketplaces = { ...(this.globalSettings.marketplaces ?? {}) };
+		const gKey = findKey(globalMarketplaces);
+		if (gKey) {
+			delete globalMarketplaces[gKey];
+			this.setMarketplaces(globalMarketplaces);
+			removed = true;
+		}
+
+		const projectMarketplaces = { ...(this.projectSettings.marketplaces ?? {}) };
+		const pKey = findKey(projectMarketplaces);
+		if (pKey) {
+			delete projectMarketplaces[pKey];
+			this.setProjectMarketplaces(projectMarketplaces);
+			removed = true;
+		}
+
+		return removed;
 	}
 }

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added `/plugin` and marketplace management commands to add plugin marketplaces and install plugins with autocomplete and instant reload.
 - Added structured todo list support via a bundled Python skill and host session state with prompt cache preservation, paired with an interactive UI card with custom titles and collapsible task progress.
 
 - Added guidance to the IPython system prompt to define reusable code as a function on first use instead of retyping it, since kernel state persists across cells.

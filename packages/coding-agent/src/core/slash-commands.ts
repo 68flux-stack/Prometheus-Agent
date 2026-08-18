@@ -228,6 +228,12 @@ const CANONICAL_BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "heartbeats", description: "View and manage all user and agent heartbeats" },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes" },
 	{
+		name: "plugin",
+		description: "Manage plugins and marketplaces (install, remove, list, marketplace)",
+		argumentHint: "[install|remove|list|update|marketplace <add|remove|list|update>]",
+		takesArgument: true,
+	},
+	{
 		name: "fullscreen",
 		description: "Toggle fullscreen (alternate screen) rendering with scrollable transcript",
 		argumentHint: "[on|off]",
@@ -242,6 +248,7 @@ const BUILTIN_SLASH_COMMAND_ALIASES: ReadonlyArray<BuiltinSlashCommandAlias> = [
 	{ name: "thinking", aliasFor: "effort" },
 	{ name: "rename", aliasFor: "name" },
 	{ name: "side", aliasFor: "btw" },
+	{ name: "package", aliasFor: "plugin" },
 ];
 
 function buildBuiltinSlashCommands(): ReadonlyArray<BuiltinSlashCommand> {

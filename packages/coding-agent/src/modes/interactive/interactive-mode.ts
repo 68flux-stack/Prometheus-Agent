@@ -97,6 +97,7 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { emptyGoalState, formatGoalUsage, GOAL_CONTEXT_PREVIEW_LABEL, type GoalState } from "../../core/goals.js";
 import type { KernelSentAgentMessage } from "../../core/kernel/index.js";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
+import { MarketplaceManager } from "../../core/marketplace-manager.js";
 import {
 	bashOutputToText,
 	COMPACTION_OUTCOME_CUSTOM_TYPE,
@@ -111,6 +112,7 @@ import {
 } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScopeFromModels } from "../../core/model-resolver.js";
 import { parseNewSessionCommand } from "../../core/new-session-command.js";
+import { DefaultPackageManager } from "../../core/package-manager.js";
 import { resolvePrometheusTracesBaseUrl } from "../../core/prime-inference-auth.js";
 import { resolvePrimeInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
 import { parseCommandArgs } from "../../core/prompt-templates.js";
@@ -1278,6 +1280,12 @@ export class InteractiveMode {
 		if (heartbeatCommand) {
 			heartbeatCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
 				this.getHeartbeatArgumentCompletions(prefix);
+		}
+
+		const pluginCommand = slashCommands.find((command) => command.name === "plugin");
+		if (pluginCommand) {
+			pluginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
+				this.getPluginArgumentCompletions(prefix);
 		}
 
 		const connectionCommands = this.connectionCommands;
@@ -4778,6 +4786,11 @@ export class InteractiveMode {
 				if (commandName === "mcp") {
 					this.editor.setText("");
 					await this.handleMcpCommand(commandArgs);
+					return;
+				}
+				if (commandName === "plugin") {
+					this.editor.setText("");
+					await this.handlePluginCommand(commandArgs);
 					return;
 				}
 				if (slashCommand?.name === "clear") {
@@ -8412,6 +8425,286 @@ export class InteractiveMode {
 		}
 
 		this.showError(`Unknown /mcp subcommand: ${sub}. Use list, login, or logout.`);
+	}
+
+	private async handlePluginCommand(args: string | undefined): Promise<void> {
+		const rawArgs = (args ?? "").trim();
+		const [subcommand, ...rest] = rawArgs ? rawArgs.split(/\s+/) : [];
+
+		const marketplaceManager = new MarketplaceManager({
+			cwd: this.getCurrentCwd(),
+			agentDir: getAgentDir(),
+			settingsManager: this.settingsManager,
+		});
+		const packageManager = new DefaultPackageManager({
+			cwd: this.getCurrentCwd(),
+			agentDir: getAgentDir(),
+			settingsManager: this.settingsManager,
+		});
+
+		if (!subcommand || subcommand === "help" || subcommand === "-h" || subcommand === "--help") {
+			this.showStatus(
+				`Plugin Commands:\n  /plugin marketplace add <source>   Add a marketplace (e.g. DietrichGebert/ponytail)\n  /plugin marketplace remove <name>  Remove a marketplace\n  /plugin marketplace list           List registered marketplaces\n  /plugin marketplace update [name]  Update marketplace catalogs\n  /plugin install <spec>             Install a plugin (e.g. ponytail@ponytail)\n  /plugin remove <name>              Remove an installed plugin\n  /plugin list                       List installed plugins\n  /plugin update [name]              Update installed plugins`,
+			);
+			return;
+		}
+
+		try {
+			if (subcommand === "marketplace") {
+				const [mpAction, ...mpArgs] = rest;
+				if (!mpAction || mpAction === "list") {
+					const list = marketplaceManager.listMarketplaces();
+					if (list.length === 0) {
+						this.showStatus(
+							`No marketplaces registered. Add one with: /plugin marketplace add <source>\nExample: /plugin marketplace add DietrichGebert/ponytail`,
+						);
+						return;
+					}
+					const lines: string[] = ["Registered Marketplaces:"];
+					for (const { marketplace, scope } of list) {
+						lines.push(`\n• ${marketplace.name} (${scope}) — ${marketplace.source}`);
+						if (marketplace.description) {
+							lines.push(`  ${marketplace.description}`);
+						}
+						if (marketplace.plugins.length > 0) {
+							lines.push("  Available plugins:");
+							for (const p of marketplace.plugins) {
+								lines.push(`    - ${p.name}${p.description ? `: ${p.description}` : ""}`);
+							}
+						}
+					}
+					lines.push(`\nInstall a plugin with: /plugin install <plugin>@<marketplace>`);
+					this.showStatus(lines.join("\n"));
+					return;
+				}
+
+				if (mpAction === "add") {
+					const source = mpArgs[0];
+					if (!source) {
+						this.showError(
+							"Usage: /plugin marketplace add <source> (e.g. /plugin marketplace add DietrichGebert/ponytail)",
+						);
+						return;
+					}
+					this.showStatus(`Adding marketplace from ${source}…`);
+					const added = await marketplaceManager.addMarketplace(source);
+					const lines = [`Added marketplace "${added.name}" from ${source}`];
+					if (added.plugins.length > 0) {
+						lines.push("\nAvailable plugins:");
+						for (const p of added.plugins) {
+							lines.push(`  • ${p.name}${p.description ? ` - ${p.description}` : ""}`);
+						}
+						lines.push(`\nInstall with: /plugin install ${added.plugins[0]!.name}@${added.name}`);
+					}
+					this.showStatus(lines.join("\n"));
+					return;
+				}
+
+				if (mpAction === "remove" || mpAction === "uninstall") {
+					const target = mpArgs[0];
+					if (!target) {
+						this.showError("Usage: /plugin marketplace remove <name>");
+						return;
+					}
+					const removed = marketplaceManager.removeMarketplace(target);
+					if (!removed) {
+						this.showError(`No matching marketplace found for "${target}"`);
+						return;
+					}
+					this.showStatus(`Removed marketplace "${target}"`);
+					return;
+				}
+
+				if (mpAction === "update") {
+					const target = mpArgs[0];
+					this.showStatus("Updating marketplaces…");
+					const updated = await marketplaceManager.updateMarketplaces(target);
+					if (updated.length > 0) {
+						this.showStatus(`Updated marketplaces: ${updated.join(", ")}`);
+					} else {
+						this.showStatus("No marketplaces were updated.");
+					}
+					return;
+				}
+
+				this.showError(`Unknown marketplace action: ${mpAction}. Use add, remove, list, or update.`);
+				return;
+			}
+
+			if (subcommand === "install") {
+				const spec = rest[0];
+				if (!spec) {
+					this.showError("Usage: /plugin install <spec> (e.g. /plugin install ponytail@ponytail)");
+					return;
+				}
+				this.showStatus(`Installing ${spec}…`);
+				const resolved = await marketplaceManager.installPlugin(spec, packageManager);
+				const label = resolved.marketplaceName
+					? `${resolved.pluginName}@${resolved.marketplaceName}`
+					: resolved.pluginName;
+
+				if (this.isAgentStreaming() || this.isAgentCompacting()) {
+					this.showStatus(`Installed plugin ${label}. Run /reload after the current turn to activate.`);
+				} else {
+					this.showStatus(`Installed plugin ${label}. Reloading resources…`);
+					await this.handleReloadCommand();
+				}
+				return;
+			}
+
+			if (subcommand === "remove" || subcommand === "uninstall") {
+				const spec = rest[0];
+				if (!spec) {
+					this.showError("Usage: /plugin remove <name>");
+					return;
+				}
+				const removed = await marketplaceManager.removePlugin(spec, packageManager);
+				if (!removed) {
+					this.showError(`No matching plugin found for "${spec}"`);
+					return;
+				}
+				if (this.isAgentStreaming() || this.isAgentCompacting()) {
+					this.showStatus(`Removed plugin "${spec}". Run /reload after the current turn.`);
+				} else {
+					this.showStatus(`Removed plugin "${spec}". Reloading resources…`);
+					await this.handleReloadCommand();
+				}
+				return;
+			}
+
+			if (subcommand === "list") {
+				const configuredPackages = packageManager.listConfiguredPackages();
+				const marketplaces = marketplaceManager.listMarketplaces();
+
+				const lines: string[] = ["Installed Plugins / Packages:"];
+				if (configuredPackages.length === 0) {
+					lines.push("  (None installed)");
+				} else {
+					for (const pkg of configuredPackages) {
+						const display = pkg.filtered ? `${pkg.source} (filtered)` : pkg.source;
+						lines.push(`  • ${display} (${pkg.scope})`);
+					}
+				}
+
+				if (marketplaces.length > 0) {
+					lines.push("\nRegistered Marketplaces:");
+					for (const { marketplace, scope } of marketplaces) {
+						lines.push(`  • ${marketplace.name} (${scope}) - ${marketplace.plugins.length} plugin(s)`);
+					}
+				}
+				this.showStatus(lines.join("\n"));
+				return;
+			}
+
+			if (subcommand === "update") {
+				const target = rest[0];
+				this.showStatus("Updating plugins…");
+				await packageManager.update(target);
+				if (this.isAgentStreaming() || this.isAgentCompacting()) {
+					this.showStatus("Plugins updated. Run /reload after current turn.");
+				} else {
+					this.showStatus("Plugins updated. Reloading resources…");
+					await this.handleReloadCommand();
+				}
+				return;
+			}
+
+			this.showError(
+				`Unknown /plugin subcommand: ${subcommand}. Use marketplace, install, remove, list, or update.`,
+			);
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(`Plugin error: ${message}`);
+		}
+	}
+
+	private getPluginArgumentCompletions(prefix: string): AutocompleteItem[] | null {
+		const trimmed = prefix.trimStart();
+		const parts = trimmed.split(/\s+/);
+
+		const marketplaceManager = new MarketplaceManager({
+			cwd: this.getCurrentCwd(),
+			agentDir: getAgentDir(),
+			settingsManager: this.settingsManager,
+		});
+		const packageManager = new DefaultPackageManager({
+			cwd: this.getCurrentCwd(),
+			agentDir: getAgentDir(),
+			settingsManager: this.settingsManager,
+		});
+
+		if (parts.length <= 1 && !trimmed.endsWith(" ")) {
+			const subcommands = [
+				{ value: "marketplace", label: "marketplace", description: "Manage plugin marketplaces" },
+				{
+					value: "install",
+					label: "install",
+					description: "Install a plugin (e.g. /plugin install ponytail@ponytail)",
+				},
+				{ value: "remove", label: "remove", description: "Remove an installed plugin" },
+				{ value: "list", label: "list", description: "List installed plugins and marketplaces" },
+				{ value: "update", label: "update", description: "Update installed plugins" },
+			];
+			const current = parts[0] || "";
+			return subcommands.filter((s) => s.value.startsWith(current));
+		}
+
+		if (parts[0] === "marketplace") {
+			if (parts.length === 2 && !trimmed.endsWith(" ")) {
+				const actions = [
+					{
+						value: "marketplace add",
+						label: "add",
+						description: "Add a marketplace (e.g. DietrichGebert/ponytail)",
+					},
+					{ value: "marketplace list", label: "list", description: "List registered marketplaces" },
+					{ value: "marketplace remove", label: "remove", description: "Remove a registered marketplace" },
+					{ value: "marketplace update", label: "update", description: "Update registered marketplaces" },
+				];
+				const current = parts[1] || "";
+				return actions.filter((a) => a.label.startsWith(current));
+			}
+			if (parts[1] === "remove" && (parts.length === 2 ? trimmed.endsWith(" ") : parts.length === 3)) {
+				const current = parts.length === 3 ? parts[2] : "";
+				const list = marketplaceManager.listMarketplaces();
+				return list
+					.filter(({ marketplace }) => marketplace.name.startsWith(current || ""))
+					.map(({ marketplace }) => ({
+						value: `marketplace remove ${marketplace.name}`,
+						label: marketplace.name,
+						description: marketplace.source,
+					}));
+			}
+		}
+
+		if (parts[0] === "install" && (parts.length === 1 ? trimmed.endsWith(" ") : parts.length === 2)) {
+			const current = parts.length === 2 ? parts[1] : "";
+			const available = marketplaceManager.getAvailablePluginCompletions();
+			return available
+				.filter((p) => p.spec.toLowerCase().includes((current || "").toLowerCase()))
+				.map((p) => ({
+					value: `install ${p.spec}`,
+					label: p.spec,
+					description: p.description,
+				}));
+		}
+
+		if (
+			(parts[0] === "remove" || parts[0] === "uninstall") &&
+			(parts.length === 1 ? trimmed.endsWith(" ") : parts.length === 2)
+		) {
+			const current = parts.length === 2 ? parts[1] : "";
+			const pkgs = packageManager.listConfiguredPackages();
+			return pkgs
+				.filter((p) => p.source.toLowerCase().includes((current || "").toLowerCase()))
+				.map((p) => ({
+					value: `${parts[0]} ${p.source}`,
+					label: p.source,
+					description: p.scope,
+				}));
+		}
+
+		return null;
 	}
 
 	private async showLogoutSelector(): Promise<void> {

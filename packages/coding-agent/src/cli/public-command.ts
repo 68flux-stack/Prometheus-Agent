@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { APP_NAME, SELF_UPDATE_INTERACTIVE_CHILD_ENV } from "../config.js";
-import { handlePackageCommand, isSelfUpdateSource } from "../package-manager-cli.js";
+import { handlePackageCommand, handlePluginCommand, isSelfUpdateSource } from "../package-manager-cli.js";
 import { INTERNAL_RUNTIME_COMMAND_MARKER, parseArgs } from "./args.js";
 import {
 	findCommandSuggestion,
@@ -109,6 +109,8 @@ async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
 			return runShutdown(args.slice(1));
 		case "package":
 			return runPackage(args.slice(1));
+		case "plugin":
+			return runPlugin(args.slice(1));
 		case "update": {
 			const rest = args.slice(1);
 			const hasLegacySelfTarget = rest.some((arg) => arg === "--self" || isSelfUpdateSource(arg));
@@ -300,6 +302,11 @@ async function runPackage(args: string[]): Promise<PublicCommandResult> {
 		return HANDLED;
 	}
 	await handlePackageCommand([subcommand, ...rest]);
+	return HANDLED;
+}
+
+async function runPlugin(args: string[]): Promise<PublicCommandResult> {
+	await handlePluginCommand(args);
 	return HANDLED;
 }
 

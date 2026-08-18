@@ -121,6 +121,63 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 		summary: "Update capability packages",
 	},
 	{
+		path: ["plugin"],
+		usage: "plugin <install|remove|list|update|marketplace>",
+		summary: "Manage plugins and marketplaces",
+		description: "Plugins provide skills, commands, prompts, extensions, and themes.",
+	},
+	{
+		path: ["plugin", "install"],
+		usage: "plugin install <spec> [--local]",
+		summary: "Install a plugin from a marketplace or direct source",
+		options: ["--local  Install into the current project instead of the user configuration"],
+		examples: [`plugin install ponytail@ponytail`, `plugin install DietrichGebert/ponytail`],
+	},
+	{
+		path: ["plugin", "remove"],
+		usage: "plugin remove <name> [--local]",
+		summary: "Remove an installed plugin",
+		options: ["--local  Remove from the current project configuration"],
+	},
+	{
+		path: ["plugin", "list"],
+		usage: "plugin list",
+		summary: "List installed plugins",
+	},
+	{
+		path: ["plugin", "update"],
+		usage: "plugin update [name]",
+		summary: "Update installed plugins",
+	},
+	{
+		path: ["plugin", "marketplace"],
+		usage: "plugin marketplace <add|remove|list|update>",
+		summary: "Manage plugin marketplaces",
+	},
+	{
+		path: ["plugin", "marketplace", "add"],
+		usage: "plugin marketplace add <source> [--local]",
+		summary: "Add a plugin marketplace from a GitHub repo, Git URL, or local path",
+		options: ["--local  Add to the current project instead of the user configuration"],
+		examples: [`plugin marketplace add DietrichGebert/ponytail`],
+	},
+	{
+		path: ["plugin", "marketplace", "remove"],
+		usage: "plugin marketplace remove <name> [--local]",
+		summary: "Remove a registered plugin marketplace",
+		options: ["--local  Remove from the current project configuration"],
+	},
+	{
+		path: ["plugin", "marketplace", "list"],
+		usage: "plugin marketplace list",
+		summary: "List registered plugin marketplaces and available plugins",
+	},
+	{
+		path: ["plugin", "marketplace", "update"],
+		usage: "plugin marketplace update [name]",
+		summary: "Update registered plugin marketplaces",
+	},
+	{
 		path: ["update"],
 		usage: "update [--force]",
 		summary: "Update Prometheus",
