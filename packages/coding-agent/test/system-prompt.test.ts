@@ -722,6 +722,16 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("# Additional Guidance");
 		expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
 	});
+
+	test("custom prompts render the injected session-fixed date", () => {
+		const prompt = buildSystemPrompt({
+			cwd: "/repo",
+			customPrompt: "You are a test agent.",
+			date: "2026-01-02",
+		});
+
+		expect(prompt).toContain("Current date: 2026-01-02");
+	});
 });
 
 describe("createIpythonToolDefinition", () => {

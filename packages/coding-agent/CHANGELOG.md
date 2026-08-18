@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Changed system prompt rebuilds to reuse a session-frozen date and skip re-rendering when every input is byte-identical, so the LLM prefix cache stays warm across harness-state reloads and tool re-registration.
 - Added `/plugin` and marketplace management commands to add plugin marketplaces and install plugins with autocomplete and instant reload.
 - Added structured todo list support via a bundled Python skill and host session state with prompt cache preservation, paired with an interactive UI card with custom titles and collapsible task progress.
 
