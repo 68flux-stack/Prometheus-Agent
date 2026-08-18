@@ -24,6 +24,7 @@ import type { SessionActionSnapshot } from "../../core/session-action-store.js";
 import type { DeleteSessionFileResult } from "../../core/session-file-actions.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import type { SubagentWorktree } from "../../core/subagent-worktree.js";
+import type { TodoListState } from "../../core/todo.js";
 
 /**
  * Client-side interaction boundary consumed by InteractiveMode.
@@ -348,6 +349,7 @@ export interface AgentConnectionState {
 	sessionActions: SessionActionSnapshot;
 	compactionCount: number;
 	goal: GoalState;
+	todo?: TodoListState;
 	heartbeat?: AgentCronJob | null;
 	scopedModels: AgentConnectionScopedModel[];
 	activeToolNames: string[];
@@ -598,6 +600,7 @@ export type AgentConnectionSessionEvent =
 	| { type: "rlm_child_update"; child: AgentConnectionRlmChildAgentSnapshot }
 	| { type: "recap_update"; recap: string | undefined }
 	| { type: "goal_update"; goal: GoalState }
+	| { type: "todo_update"; todo: TodoListState }
 	| { type: "bash_start"; command: string; excludeFromContext: boolean; transient?: boolean; runId?: string }
 	| { type: "bash_output"; chunk: string }
 	| {

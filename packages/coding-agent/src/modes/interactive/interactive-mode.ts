@@ -2676,6 +2676,9 @@ export class InteractiveMode {
 			case "goal_update":
 				this.patchConnectionState({ goal: event.goal });
 				break;
+			case "todo_update":
+				this.patchConnectionState({ todo: event.todo });
+				break;
 			case "bash_start":
 				this.patchConnectionState({ isBashRunning: true });
 				break;
@@ -5674,6 +5677,10 @@ export class InteractiveMode {
 
 			case "goal_update":
 				this.handleGoalUpdate(event.goal);
+				break;
+
+			case "todo_update":
+				this.ui.requestRender();
 				break;
 
 			case "refine_failed":

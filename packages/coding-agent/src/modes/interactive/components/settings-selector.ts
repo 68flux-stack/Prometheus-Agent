@@ -368,7 +368,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(blockImagesIndex + 1, 0, {
 			id: "skill-commands",
 			label: "Skill commands",
-			description: "Register skills as /skill:name commands",
+			description: "Register skills as /name commands",
 			currentValue: config.enableSkillCommands ? "true" : "false",
 			values: ["true", "false"],
 		});

@@ -50,7 +50,8 @@ Prometheus ships with built-in skills that load by default:
 
 - `prime-intellect` - Prime Intellect products and workflows via the prime CLI: verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, sandboxes, tunnels, Prime Inference, GPU compute, and storage. Reference docs for each area load on demand from the skill's `references/` directory.
 - `skill-creator` - teaches the agent to create new skills: markdown skill layout, frontmatter rules, placement and precedence, and the full Python-backed skill contract (package layout, `run()` convention, optional CLI, kernel venv behavior) with a working template in `references/python-skills.md`.
-- `websearch` - a Python-backed web search skill using [Exa](https://exa.ai)'s remote MCP server.
+- `websearch` - a Python-backed web search skill using [Exa](https://exa.ai)'s remote MCP server. Searches the web and reads whole pages.
+- `research` - deep research: decomposes a question, fans out subagents, triangulates across independent sources, and writes a citation-verified report. Invoke with `/research <question>`. Its quota mode handles "find N things that pass these filters" briefs: candidates are scored against explicit criteria, rounds rotate source classes, rejected ideas cannot be rediscovered under a new name, and the report refuses to render while the run is short of the quota.
 
 Built-in skills behave like any other skill but have the lowest precedence: a user, project, package, or `--skill` skill with the same name overrides the built-in one.
 
@@ -77,6 +78,14 @@ Once loaded, the model can call it directly in the IPython kernel by import name
 
 ```python
 print(await websearch("latest Prometheus release"))
+```
+
+Search returns highlights only. To read a source in full, fetch it — up to 10
+URLs per call, `max_chars` up to 50,000 per page:
+
+```python
+page = await websearch.fetch("https://example.com/post")
+pages = await websearch.fetch([url_a, url_b], max_chars=20000)
 ```
 
 Disable only the built-in `websearch` skill in settings:

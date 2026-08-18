@@ -52,6 +52,15 @@ class SearchTest(unittest.TestCase):
 
         self.assertEqual(len(hits), 5)
 
+    def test_files_only_also_matches_by_filename(self) -> None:
+        (self.root / "memory.md").write_text("nothing relevant here\n", encoding="utf-8")
+        (self.root / "other.md").write_text("this file mentions memory.md in prose\n", encoding="utf-8")
+
+        hits = search("memory.md", self.root, files_only=True, fixed=True)
+
+        self.assertIn(str(self.root / "memory.md"), hits)
+        self.assertIn(str(self.root / "other.md"), hits)
+
     def test_no_match_is_empty_not_an_error(self) -> None:
         self.assertEqual(search("definitely-not-present-anywhere", self.root), [])
 

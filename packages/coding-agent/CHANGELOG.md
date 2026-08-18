@@ -2,12 +2,24 @@
 
 ## [Unreleased]
 
+- Added structured todo list support via a bundled Python skill and host session state with prompt cache preservation, paired with an interactive UI card with custom titles and collapsible task progress.
+
+- Added guidance to the IPython system prompt to define reusable code as a function on first use instead of retyping it, since kernel state persists across cells.
+- Changed `hideThinkingBlock` to default to `true`, so the TUI hides thinking blocks by default (toggle with the existing keybinding).
+- Changed the desktop app to always show a collapsible "Thinking" row for assistant reasoning, expandable like a tool card; added a "Collapse thinking by default" toggle to Settings > General controlling its default expand state.
+- Fixed slash-command autocomplete listing skills as `/skill:name` and duplicating builtin commands under `skill:` names; skills now register as plain `/name`, deduplicated against extension, prompt, and builtin command names.
+- Added a context and session metrics row centered underneath the desktop composer, showing context-window tokens, a usage bar, percent used, and session elapsed time.
+- Added `/research <question>`, a deep research mode that decomposes the question, fans out subagents to read sources, triangulates across independent domains, and writes a citation-verified report under `research/<slug>/`.
+- Added `websearch.fetch(urls)` so the agent can read whole pages as markdown instead of concluding from search highlights.
+- Added a quota mode to `/research` for "find N candidates that pass these criteria" briefs: candidates are scored against explicit criteria, each round is forced onto a source class it has not used, rejected ideas cannot be re-registered under a new name, and the report refuses to render while the run is short of its quota.
 - Added crash-safe continual harness recovery, compatibility aliases, scoped ID migration, and explicit recovery commands.
 - Added root-tree RLM child count, concurrency, and optional cost limits with session and global controls.
 - Added privacy-safe local harness exposure events and deterministic replay evaluation fixtures.
 - Changed oversized kernel output to retain UTF-8-safe head and tail previews with permission-restricted full-output spill files.
 - Changed refinement context selection to reserve model capacity and select the newest messages by estimated tokens.
 - Changed the built-in `websearch` skill from the Serper API to Exa's remote MCP server; it now works anonymously out of the box, with an optional API key (via `/login`) to raise the rate limit.
+- Fixed idle conversations getting a spurious `<prometheus_worker_interrupted>` marker: a finished turn left its session checkpointed as busy, so any later session-worker restart reported the completed work as interrupted.
+- Fixed switching conversations failing on Windows with a raw `EPERM` rename error by retrying transient session-lease acquisition failures.
 - Fixed `websearch` paying a fresh TCP+TLS handshake on every call by reusing a pooled connection across searches.
 - Fixed the desktop stop control and conversation activity indicator remaining visually active after an abort.
 - Fixed the desktop stop control leaving active subagents running after the main agent was aborted.

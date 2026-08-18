@@ -279,6 +279,7 @@ import type { SettingsManager } from "./settings-manager.js";
 import { getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
 import {
 	BUILTIN_SLASH_COMMANDS,
+	isBuiltinSlashCommandName,
 	parseRefineCommandOptions,
 	parseSessionSlashCommand,
 	parseSlashCommand,
@@ -288,6 +289,22 @@ import {
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { SubagentWorktreeManager } from "./subagent-worktree.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
+import {
+	emptyTodoListState,
+	isPersistedTodoListState,
+	MAX_TODO_ITEMS,
+	normalizeTodoItem,
+	normalizeTodoItemStatus,
+	normalizeTodoListState,
+	TODO_STATE_CUSTOM_TYPE,
+	type TodoHostResponse,
+	type TodoItem,
+	type TodoItemStatus,
+	type TodoListState,
+	todoHostResponse,
+	validateTodoItemText,
+	validateTodoTitle,
+} from "./todo.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { IpythonKernelProvisioner } from "./tools/ipython.js";
@@ -299,6 +316,7 @@ import { WorkspaceChangeReview, type WorkspaceMutationDiff } from "./workspace-c
 export type { GoalState, GoalStatus } from "./goals.js";
 export type { SessionStats } from "./session-stats.js";
 export { type ParsedSkillBlock, parseSkillBlock } from "./skill-blocks.js";
+export type { TodoItem, TodoItemStatus, TodoListState } from "./todo.js";
 
 export type RlmChildAgentStatus = "queued" | "running" | "done" | "error" | "cancelled";
 
@@ -384,6 +402,7 @@ export type AgentSessionEvent =
 	| { type: "rlm_child_update"; child: RlmChildAgentSnapshot }
 	| { type: "recap_update"; recap: string | undefined }
 	| { type: "goal_update"; goal: GoalState }
+	| { type: "todo_update"; todo: TodoListState }
 	| {
 			type: "bash_start";
 			command: string;
@@ -1386,8 +1405,11 @@ export class AgentSession {
 	// Kept alive for retained children so nested updates (e.g. a grandchild cancel)
 	// still forward to root; torn down when the retained child is disposed.
 	private _rlmChildUnsubscribes = new Map<string, () => void>();
-	/** Latest recap for this session, written by the daemon summarizer; read by a parent to label its child snapshots. */
+	// Latest recap for this session, written by the daemon summarizer; read by a parent to label its child snapshots.
 	private _currentRecap?: string;
+
+	// Active todo list state
+	private _todoListState: TodoListState = emptyTodoListState();
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
@@ -1550,6 +1572,7 @@ export class AgentSession {
 			cwd: this._cwd,
 		});
 		this._goalState = this._loadPersistedGoalState();
+		this._todoListState = this._loadPersistedTodoListState();
 		// Seed initial goal from CLI --goal flag, but only for top-level sessions
 		// and only when the branch contains only bootstrap entry types (model_change,
 		// thinking_level_change, service_tier_change) and no persisted
@@ -3072,6 +3095,181 @@ export class AgentSession {
 		}
 	}
 
+	get todoListState(): TodoListState {
+		return this._todoListState;
+	}
+
+	private _loadPersistedTodoListState(): TodoListState {
+		const branch = this.sessionManager.getBranch();
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (
+				entry.type === "custom" &&
+				entry.customType === TODO_STATE_CUSTOM_TYPE &&
+				isPersistedTodoListState(entry.data)
+			) {
+				return normalizeTodoListState(entry.data);
+			}
+		}
+		return emptyTodoListState();
+	}
+
+	private _emitTodoUpdate(): void {
+		this._emit({ type: "todo_update", todo: this.todoListState });
+	}
+
+	private _setTodoListState(next: TodoListState): TodoListState {
+		this._todoListState = normalizeTodoListState(next);
+		this.sessionManager.appendCustomEntry(TODO_STATE_CUSTOM_TYPE, this._todoListState);
+		this._emitTodoUpdate();
+		return this._todoListState;
+	}
+
+	setTodoList(title: string, items: Array<string | Partial<TodoItem>>): TodoListState {
+		return this._setTodoListState({
+			title: validateTodoTitle(title),
+			items: items.map((item, idx) => normalizeTodoItem(item, String(idx + 1))),
+			updatedAt: Date.now(),
+		});
+	}
+
+	updateTodoItem(idOrIndex: string | number, update: { status?: TodoItemStatus; text?: string }): TodoListState {
+		const targetId = String(idOrIndex).trim();
+		const num = Number(idOrIndex);
+		const targetIndex = Number.isInteger(num) ? num : -1;
+		const items = this.todoListState.items.map((item, idx) => {
+			const matchesId = item.id === targetId;
+			const matches1Based = targetIndex > 0 && idx + 1 === targetIndex;
+			const matches0Based = targetIndex === 0 && idx === 0;
+			if (matchesId || matches1Based || matches0Based) {
+				return {
+					...item,
+					status: update.status ? normalizeTodoItemStatus(update.status) : item.status,
+					text: update.text ? validateTodoItemText(update.text) : item.text,
+				};
+			}
+			return item;
+		});
+		return this._setTodoListState({
+			...this.todoListState,
+			items,
+			updatedAt: Date.now(),
+		});
+	}
+
+	addTodoItem(text: string, status?: TodoItemStatus): TodoListState {
+		const nextId = String(this.todoListState.items.length + 1);
+		const items = [
+			...this.todoListState.items,
+			{ id: nextId, text: validateTodoItemText(text), status: normalizeTodoItemStatus(status) },
+		];
+		return this._setTodoListState({
+			...this.todoListState,
+			items,
+			updatedAt: Date.now(),
+		});
+	}
+
+	clearTodoList(): TodoListState {
+		return this._setTodoListState(emptyTodoListState());
+	}
+
+	handleTodoHostRequest(type: string, payload: Record<string, unknown> = {}): TodoHostResponse {
+		switch (type) {
+			case "todo.get":
+				return todoHostResponse(this.todoListState);
+			case "todo.set":
+			case "todo.create": {
+				const title = validateTodoTitle(payload.title);
+				const rawItems = Array.isArray(payload.items) ? payload.items : [];
+				const items: TodoItem[] = [];
+				for (let i = 0; i < rawItems.length && items.length < MAX_TODO_ITEMS; i++) {
+					items.push(normalizeTodoItem(rawItems[i], String(i + 1)));
+				}
+				const state: TodoListState = {
+					title,
+					items,
+					updatedAt: Date.now(),
+				};
+				return todoHostResponse(this._setTodoListState(state));
+			}
+			case "todo.update": {
+				const rawId = payload.id;
+				if (rawId === undefined || rawId === null) {
+					throw new Error("todo.update requires an item id or index");
+				}
+				const targetId = String(rawId).trim();
+				const num = Number(rawId);
+				const targetIndex = Number.isInteger(num) ? num : -1;
+				const status = payload.status !== undefined ? normalizeTodoItemStatus(payload.status) : undefined;
+				const text = payload.text !== undefined ? validateTodoItemText(payload.text) : undefined;
+
+				const items = this.todoListState.items.map((item, idx) => {
+					const matchesId = item.id === targetId;
+					const matches1Based = targetIndex > 0 && idx + 1 === targetIndex;
+					const matches0Based = targetIndex === 0 && idx === 0;
+					if (matchesId || matches1Based || matches0Based) {
+						return {
+							...item,
+							status: status ?? item.status,
+							text: text ?? item.text,
+						};
+					}
+					return item;
+				});
+
+				const state: TodoListState = {
+					...this.todoListState,
+					items,
+					updatedAt: Date.now(),
+				};
+				return todoHostResponse(this._setTodoListState(state));
+			}
+			case "todo.complete": {
+				const rawId = payload.id;
+				if (rawId === undefined || rawId === null) {
+					throw new Error("todo.complete requires an item id or index");
+				}
+				const targetId = String(rawId).trim();
+				const num = Number(rawId);
+				const targetIndex = Number.isInteger(num) ? num : -1;
+				const items = this.todoListState.items.map((item, idx) => {
+					const matchesId = item.id === targetId;
+					const matches1Based = targetIndex > 0 && idx + 1 === targetIndex;
+					const matches0Based = targetIndex === 0 && idx === 0;
+					if (matchesId || matches1Based || matches0Based) {
+						return { ...item, status: "completed" as TodoItemStatus };
+					}
+					return item;
+				});
+				const state: TodoListState = {
+					...this.todoListState,
+					items,
+					updatedAt: Date.now(),
+				};
+				return todoHostResponse(this._setTodoListState(state));
+			}
+			case "todo.add": {
+				const text = validateTodoItemText(payload.text);
+				const status = normalizeTodoItemStatus(payload.status);
+				const nextId = String(this.todoListState.items.length + 1);
+				const items = [...this.todoListState.items, { id: nextId, text, status }];
+				const state: TodoListState = {
+					...this.todoListState,
+					items,
+					updatedAt: Date.now(),
+				};
+				return todoHostResponse(this._setTodoListState(state));
+			}
+			case "todo.clear": {
+				const state: TodoListState = emptyTodoListState();
+				return todoHostResponse(this._setTodoListState(state), "Todo list cleared.");
+			}
+			default:
+				throw new Error(`unknown todo request type "${type}"`);
+		}
+	}
+
 	/**
 	 * Handle a compact.* request from the kernel host bridge. Compaction would
 	 * abort the run executing the requesting cell, so compact.run only schedules
@@ -4563,6 +4761,15 @@ export class AgentSession {
 			promptGuidelines.push(
 				`Workspace mode: keep file work inside ${this._cwd}. If a task genuinely needs a directory outside it, call request_directory_access("<directory>", "<why>") — the user gets an accept/deny prompt. Granted directories stay open for the rest of the conversation; if the answer is denied, treat that directory as restricted and find another way.`,
 			);
+		} else if (this._executionPolicy.mode === "plan") {
+			promptGuidelines.push(
+				`Plan mode is active: the objective right now is to investigate and produce a plan, not to implement it. Don't edit, create, delete, or move files; don't run commands that write to disk, touch git, or reach the network. Read code, search, and reason about the approach, then present the plan directly in this conversation. There's no tool to leave plan mode — it stays active until the user switches modes themselves (e.g. \`/permissions workspace\`), so end your turn once the plan is written rather than trying to start implementing.`,
+			);
+			if (this._executionPolicy.enforcement === "application") {
+				promptGuidelines.push(
+					`On this platform plan mode only exposes the ipython tool — other tools aren't just restricted, they're absent from your tool list. ipython is itself locked to read-only use here: writes, subprocess launches, and most network calls raise a PermissionError. Use it for reading and searching, not for making changes.`,
+				);
+			}
 		}
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
@@ -5097,17 +5304,29 @@ export class AgentSession {
 	}
 
 	/**
-	 * Expand skill commands (/skill:name args) to their full content.
-	 * Returns the expanded text, or the original text if not a skill command or skill not found.
-	 * Emits errors via extension runner if file read fails.
+	 * Expand skill commands (/name args) to their full content.
+	 * Skills are invoked as plain `/name`; the legacy `/skill:name` spelling still
+	 * works too. Returns the expanded text, or the original text if not a skill
+	 * command or skill not found. Emits errors via extension runner if file read fails.
 	 */
 	private _expandSkillCommand(text: string): string {
-		if (!text.startsWith("/skill:")) return text;
+		if (!text.startsWith("/")) return text;
 
 		const parsed = parseSlashCommand(text);
-		if (!parsed?.name.startsWith("skill:")) return text;
-		const skillName = parsed.name.slice("skill:".length);
+		if (!parsed) return text;
+
+		const isExplicitSkillPrefix = parsed.name.startsWith("skill:");
+		const skillName = isExplicitSkillPrefix ? parsed.name.slice("skill:".length) : parsed.name;
 		const args = parsed.args;
+
+		// A bare `/name` only resolves to a skill when nothing else already owns that
+		// name (extension commands and builtins are dispatched earlier and never reach
+		// here, but this keeps `/name` from shadowing a prompt template of the same name).
+		if (!isExplicitSkillPrefix) {
+			if (isBuiltinSlashCommandName(skillName)) return text;
+			if (this.promptTemplates.some((template) => template.name === skillName)) return text;
+			if (this._extensionRunner.getCommand(skillName)) return text;
+		}
 
 		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
 		if (!skill) return text; // Unknown skill, pass through
@@ -8858,13 +9077,6 @@ export class AgentSession {
 				sourceInfo: template.sourceInfo,
 			}));
 
-			const skills: SlashCommandInfo[] = this._resourceLoader.getSkills().skills.map((skill) => ({
-				name: `skill:${skill.name}`,
-				description: skill.description,
-				source: "skill",
-				sourceInfo: skill.sourceInfo,
-			}));
-
 			// Only "session" commands run identically for every client (they parse the
 			// raw prompt text in agent-session, e.g. _parseGoalSlashCommand). The rest
 			// (e.g. /model, /settings) open interactive-mode-only selector UI and have
@@ -8878,7 +9090,22 @@ export class AgentSession {
 				sourceInfo: createSyntheticSourceInfo(`<builtin:${command.name}>`, { source: "builtin" }),
 			}));
 
-			return [...extensionCommands, ...templates, ...skills, ...builtins];
+			// Skills are advertised as plain `/name` commands (the description column
+			// already says "skill"), never `/skill:name`. A skill whose name collides
+			// with an extension, prompt, or builtin command is dropped so the same name
+			// doesn't show up twice.
+			const reservedNames = new Set([...extensionCommands, ...templates, ...builtins].map((c) => c.name));
+			const skills: SlashCommandInfo[] = this._resourceLoader
+				.getSkills()
+				.skills.filter((skill) => !reservedNames.has(skill.name))
+				.map((skill) => ({
+					name: skill.name,
+					description: skill.description,
+					source: "skill",
+					sourceInfo: skill.sourceInfo,
+				}));
+
+			return [...extensionCommands, ...templates, ...builtins, ...skills];
 		};
 
 		runner.bindCore(
@@ -9249,6 +9476,53 @@ export class AgentSession {
 		return client;
 	}
 
+	/**
+	 * Shared path for the kernel-side Exa host handlers (Windows Plan Mode only):
+	 * skill and network gates, optional API key, pooled client with one reconnect
+	 * retry, and text extraction.
+	 */
+	private async _callExaTool(
+		name: string,
+		args: Record<string, unknown>,
+		timeoutSeconds: number,
+	): Promise<{ text: string }> {
+		if (!this._modelVisibleSkills().some((skill) => skill.name === WEBSEARCH_SKILL_NAME)) {
+			throw new Error("Web search is not available in this session");
+		}
+		if (this._executionPolicy.permission("network", "mcp.exa.ai", "allow") !== "allow") {
+			throw new Error("Web search is denied by the current network permission rules");
+		}
+		// Exa's MCP server works anonymously; an API key (env var or stored via
+		// /login) is optional and only raises the free-tier rate limit.
+		const envKey = process.env[EXA_ENV_VAR]?.trim();
+		const credential = this._modelRegistry.authStorage.get(EXA_CREDENTIAL_ID);
+		const apiKey =
+			envKey || (credential?.type === "api_key" ? resolveConfigValue(credential.key)?.trim() : undefined);
+		const callExa = async () => {
+			const client = await this._getExaMcpClient(apiKey);
+			return client.callTool({ name, arguments: args }, undefined, { timeout: timeoutSeconds * 1_000 });
+		};
+		let result: Awaited<ReturnType<typeof callExa>>;
+		try {
+			result = await callExa();
+		} catch {
+			// Reused client may hold a stale/closed connection; drop and retry once.
+			if (this._exaMcpClient) {
+				await this._exaMcpClient.client.close().catch(() => {});
+				this._exaMcpClient = undefined;
+			}
+			result = await callExa();
+		}
+		const text = Array.isArray(result.content)
+			? result.content
+					.map((block) => (block && typeof block === "object" && "text" in block ? block.text : undefined))
+					.filter((value): value is string => typeof value === "string")
+					.join("\n")
+			: "";
+		if (result.isError) throw new Error(text || `Exa ${name} error`);
+		return { text };
+	}
+
 	private _createKernelHostHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
@@ -9270,12 +9544,6 @@ export class AgentSession {
 				input: this.model?.input ?? [],
 			}),
 			"websearch.search": async (payload) => {
-				if (!this._modelVisibleSkills().some((skill) => skill.name === WEBSEARCH_SKILL_NAME)) {
-					throw new Error("Web search is not available in this session");
-				}
-				if (this._executionPolicy.permission("network", "mcp.exa.ai", "allow") !== "allow") {
-					throw new Error("Web search is denied by the current network permission rules");
-				}
 				if (typeof payload.query !== "string" || !payload.query.trim() || payload.query.length > 2_000) {
 					throw new Error("websearch.search query must be between 1 and 2,000 characters");
 				}
@@ -9287,39 +9555,27 @@ export class AgentSession {
 				if (!Number.isInteger(numResults) || (numResults as number) < 1 || (numResults as number) > 10) {
 					throw new Error("websearch.search num_results must be between 1 and 10");
 				}
-				// Exa's MCP server works anonymously; an API key (env var or stored via
-				// /login) is optional and only raises the free-tier rate limit.
-				const envKey = process.env[EXA_ENV_VAR]?.trim();
-				const credential = this._modelRegistry.authStorage.get(EXA_CREDENTIAL_ID);
-				const apiKey =
-					envKey || (credential?.type === "api_key" ? resolveConfigValue(credential.key)?.trim() : undefined);
-				const callExa = async () => {
-					const client = await this._getExaMcpClient(apiKey);
-					return client.callTool(
-						{ name: "web_search_exa", arguments: { query: payload.query, numResults } },
-						undefined,
-						{ timeout: (timeout as number) * 1_000 },
-					);
-				};
-				let result: Awaited<ReturnType<typeof callExa>>;
-				try {
-					result = await callExa();
-				} catch {
-					// Reused client may hold a stale/closed connection; drop and retry once.
-					if (this._exaMcpClient) {
-						await this._exaMcpClient.client.close().catch(() => {});
-						this._exaMcpClient = undefined;
-					}
-					result = await callExa();
+				return this._callExaTool("web_search_exa", { query: payload.query, numResults }, timeout as number);
+			},
+			"websearch.fetch": async (payload) => {
+				const urls = payload.urls;
+				if (
+					!Array.isArray(urls) ||
+					urls.length < 1 ||
+					urls.length > 10 ||
+					urls.some((url) => typeof url !== "string" || !url.trim())
+				) {
+					throw new Error("websearch.fetch urls must be 1 to 10 non-empty strings");
 				}
-				const text = Array.isArray(result.content)
-					? result.content
-							.map((block) => (block && typeof block === "object" && "text" in block ? block.text : undefined))
-							.filter((value): value is string => typeof value === "string")
-							.join("\n")
-					: "";
-				if (result.isError) throw new Error(text || "Exa search error");
-				return { text };
+				const timeout = payload.timeout === undefined ? 45 : payload.timeout;
+				const maxChars = payload.max_chars === undefined ? 8_000 : payload.max_chars;
+				if (!Number.isInteger(timeout) || (timeout as number) < 1 || (timeout as number) > 120) {
+					throw new Error("websearch.fetch timeout must be between 1 and 120 seconds");
+				}
+				if (!Number.isInteger(maxChars) || (maxChars as number) < 1 || (maxChars as number) > 50_000) {
+					throw new Error("websearch.fetch max_chars must be between 1 and 50,000");
+				}
+				return this._callExaTool("web_fetch_exa", { urls, maxCharacters: maxChars }, timeout as number);
 			},
 			"jobs.start": async (payload) => {
 				if (typeof payload.command !== "string" || !payload.command.trim()) {
@@ -9389,6 +9645,17 @@ export class AgentSession {
 			for (const type of ["goal.get", "goal.create", "goal.complete"]) {
 				handlers[type] = async (payload) => this.handleGoalHostRequest(type, payload);
 			}
+		}
+		for (const type of [
+			"todo.get",
+			"todo.set",
+			"todo.create",
+			"todo.update",
+			"todo.complete",
+			"todo.add",
+			"todo.clear",
+		]) {
+			handlers[type] = async (payload) => this.handleTodoHostRequest(type, payload);
 		}
 		if (this._includeCompactSkill) {
 			for (const type of ["compact.run", "compact.status"]) {

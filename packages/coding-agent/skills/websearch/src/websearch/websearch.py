@@ -10,6 +10,8 @@ from pathlib import Path
 from rlm import McpIntegration
 
 EXA_MCP_URL = "https://mcp.exa.ai/mcp"
+MAX_FETCH_URLS = 10
+MAX_FETCH_CHARS = 50_000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -146,6 +148,62 @@ async def _fetch_exa(query: str, timeout: int, num_results: int) -> str:
     if not isinstance(result, str):
         result = json.dumps(result)
     return result or f"No results returned for query: {query}"
+
+
+async def _fetch_pages_exa(urls: list[str], timeout: int, max_chars: int) -> str:
+    """Read full page content via Exa's MCP server (the ``web_fetch_exa`` tool)."""
+    if os.environ.get("PROMETHEUS_WINDOWS_PLAN_MODE") == "1":
+        from rlm import host_request
+
+        payload = await host_request(
+            "websearch.fetch",
+            {"urls": urls, "timeout": timeout, "max_chars": max_chars},
+        )
+        text = payload.get("text")
+        if not isinstance(text, str):
+            raise RuntimeError("Prometheus returned an invalid web fetch response")
+        return text or f"No content returned for: {', '.join(urls)}"
+
+    result = await asyncio.wait_for(
+        _exa.call_tool("web_fetch_exa", {"urls": urls, "maxCharacters": max_chars}),
+        timeout=timeout,
+    )
+    if not isinstance(result, str):
+        result = json.dumps(result)
+    return result or f"No content returned for: {', '.join(urls)}"
+
+
+async def fetch(
+    urls: str | list[str],
+    *,
+    max_chars: int = 8000,
+    timeout: int | None = None,
+) -> str:
+    """Read one or more web pages in full, as clean markdown.
+
+    Args:
+        urls: A single URL or a list of URLs (batched into one request).
+        max_chars: Maximum characters extracted per page.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Page content, or an error string on failure.
+    """
+    url_list = [urls] if isinstance(urls, str) else list(urls)
+    if not url_list:
+        raise ValueError("fetch requires at least one URL")
+    if len(url_list) > MAX_FETCH_URLS:
+        raise ValueError(f"fetch accepts at most {MAX_FETCH_URLS} URLs per call")
+    if max_chars < 1 or max_chars > MAX_FETCH_CHARS:
+        raise ValueError(f"max_chars must be between 1 and {MAX_FETCH_CHARS}")
+
+    if timeout is None:
+        timeout = _env_int("PROMETHEUS_WEBSEARCH_TIMEOUT", 45)
+
+    try:
+        return await _fetch_pages_exa(url_list, timeout=timeout, max_chars=max_chars)
+    except Exception as e:
+        return f"Error fetching {', '.join(url_list)}: {e}"
 
 
 async def run(

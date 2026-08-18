@@ -33,12 +33,7 @@
 					<div class="workspace-list" id="workspace-list" aria-label="Saved workspaces"></div>
 				</section>
 				<div class="sidebar-spacer"></div>
-				<div class="sidebar-actions">
-					<button class="secondary-button" id="runtime-button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10v9H3zM5.5 6 7 7.5 5.5 9M8.5 9h2"/></svg><span>Runtime</span></button>
-					<button class="secondary-button" id="export-button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.25v7.5m0 0 2.75-2.75M8 9.75 5.25 7M3 11.25v1.25a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.25"/></svg><span>Export</span></button>
-					<button class="secondary-button" id="stats-button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12.5V8.75m5 3.75V4.75m5 7.75V6.5"/></svg><span>Stats</span></button>
-				</div>
-				<div class="sidebar-footer"><span class="connection-dot" id="connection-dot"></span><span id="connection-label">Connecting…</span></div>
+				<div class="sidebar-footer"><span class="connection-dot" id="connection-dot"></span><span id="connection-label">Connecting… 0%</span><button class="settings-button" id="settings-button" type="button" title="Settings" aria-label="Open settings" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg></button></div>
 			</aside>
 			<div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
@@ -101,6 +96,18 @@
 				</section>
 
 				<form class="composer" id="composer">
+					<section class="todo-card" id="todo-card" aria-label="Todo list" hidden data-expanded="true">
+						<div class="todo-card-header" id="todo-card-header">
+							<div class="todo-card-heading">
+								<span class="todo-card-title" id="todo-card-title">Todo List</span>
+								<span class="todo-card-counter" id="todo-card-counter">0 of 0 completed</span>
+							</div>
+							<button type="button" class="todo-card-toggle" id="todo-card-toggle" aria-expanded="true" aria-controls="todo-card-list" title="Toggle todo list" aria-label="Toggle todo list">
+								<svg class="todo-card-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg>
+							</button>
+						</div>
+						<div class="todo-card-list" id="todo-card-list"></div>
+					</section>
 					<div class="job-banner" id="job-banner" hidden>
 						<button type="button" class="job-banner-toggle" id="job-banner-toggle" aria-expanded="false" aria-controls="job-banner-list">
 							<svg class="job-banner-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
@@ -149,6 +156,14 @@
 								<button class="send-button" id="send-button" type="submit" disabled><span id="send-label">Send</span><svg class="send-arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5V3.5m0 0L4.5 7M8 3.5 11.5 7"/></svg></button>
 							</div>
 						</div>
+					</div>
+					<div class="composer-metrics" id="composer-metrics" hidden>
+						<span class="composer-metric-context" id="composer-metric-context" hidden>
+							<span class="composer-metric-tokens" id="composer-metric-tokens">0/0</span>
+							<span class="composer-metric-bar" id="composer-metric-bar" role="img" aria-label="Context window usage"><span class="composer-metric-bar-fill" id="composer-metric-bar-fill"></span></span>
+							<span class="composer-metric-percent" id="composer-metric-percent">0%</span>
+						</span>
+						<span class="composer-metric-session" id="composer-metric-session">Session 0:00</span>
 					</div>
 				</form>
 			</main>
@@ -219,6 +234,470 @@
 				<div class="provider-dialog-actions"><button class="secondary-button" id="interaction-cancel" type="button">Cancel</button><button class="dialog-connect-button" id="interaction-submit" type="submit">Continue</button></div>
 			</form>
 		</dialog>
+		<dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
+	<div class="settings-dialog-surface">
+		<div class="settings-dialog-header">
+			<div>
+				<h2 id="settings-dialog-title">Settings</h2>
+				<p>Configure Prometheus. Changes apply to new turns and sessions; most take effect immediately.</p>
+			</div>
+			<button class="provider-dialog-close" id="settings-dialog-close" type="button" aria-label="Close settings">×</button>
+		</div>
+		<div class="settings-search-row">
+			<svg class="settings-search-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" /><path d="m14 14-3.2-3.2" /></svg>
+			<input type="search" id="settings-search" placeholder="Search settings…" autocomplete="off" spellcheck="false" aria-label="Search settings" />
+		</div>
+		<div class="settings-dialog-body" id="settings-dialog-body">
+			<nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+				<button type="button" class="settings-tab active" data-settings-tab="general">General</button>
+<button type="button" class="settings-tab" data-settings-tab="context">Context & memory</button>
+<button type="button" class="settings-tab" data-settings-tab="subagents">Sub-agents</button>
+<button type="button" class="settings-tab" data-settings-tab="permissions">Permissions</button>
+<button type="button" class="settings-tab" data-settings-tab="shell">Shell & sessions</button>
+<button type="button" class="settings-tab" data-settings-tab="extensions">Extensions & skills</button>
+<button type="button" class="settings-tab" data-settings-tab="mcp">Integrations (MCP)</button>
+<button type="button" class="settings-tab" data-settings-tab="privacy">Privacy & data</button>
+<button type="button" class="settings-tab" data-settings-tab="advanced">Advanced</button>
+			</nav>
+			<div class="settings-panels" id="settings-panels">
+				<section class="settings-panel active" data-settings-panel="general" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Default thinking level</span>
+	<select data-setting="defaultThinkingLevel" data-type="text">
+		<option value="">Default</option><option value="off">Off</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">X-high</option><option value="max">Max</option>
+	</select>
+	<small>Reasoning effort used for new sessions.</small>
+</label>
+	<label class="settings-field">
+	<span>Collapse thinking by default</span>
+	<select data-setting="hideThinkingBlock" data-type="bool">
+		<option value="">Default (on)</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Assistant thinking always shows as a "Thinking" row you can expand to read; this only controls whether it starts collapsed or expanded.</small>
+</label>
+	<label class="settings-field">
+	<span>Default service tier</span>
+	<select data-setting="defaultServiceTier" data-type="text">
+		<option value="">Default</option><option value="auto">Auto</option><option value="default">Standard</option><option value="flex">Flex</option><option value="priority">Priority</option>
+	</select>
+	<small>Provider service tier, where supported.</small>
+</label>
+	<label class="settings-field">
+	<span>Steering mode</span>
+	<select data-setting="steeringMode" data-type="text">
+		<option value="">Default</option><option value="all">Send all queued messages</option><option value="one-at-a-time">One at a time</option>
+	</select>
+	<small>How messages sent while the agent is working are delivered.</small>
+</label>
+	<label class="settings-field">
+	<span>Follow-up mode</span>
+	<select data-setting="followUpMode" data-type="text">
+		<option value="">Default</option><option value="all">Send all queued follow-ups</option><option value="one-at-a-time">One at a time</option>
+	</select>
+	<small>How queued follow-up prompts are delivered.</small>
+</label>
+	<label class="settings-field">
+	<span>Auto-name sessions</span>
+	<select data-setting="autoSessionName" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Name a new session from its first prompt automatically.</small>
+</label>
+</div>
+<div class="settings-field settings-chip-field" data-chip-list="enabledModels">
+	<span>Enabled models</span>
+	<div class="chip-list" data-chip-container="enabledModels"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="enabledModels" placeholder="provider/model-id" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="enabledModels">Add</button>
+	</div>
+	<small>Model patterns available for cycling, e.g. &quot;anthropic/*&quot;.</small>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="context" role="tabpanel">
+<div class="settings-subsection"><h3>Compaction</h3>
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Enable compaction</span>
+	<select data-setting="compaction.enabled" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Automatically compact long conversations to save context.</small>
+</label>
+	<label class="settings-field">
+	<span>Reserve tokens</span>
+	<input data-setting="compaction.reserveTokens" data-type="number" type="number" placeholder="16384" />
+	<small>Tokens reserved for the prompt and response.</small>
+</label>
+	<label class="settings-field">
+	<span>Keep recent tokens</span>
+	<input data-setting="compaction.keepRecentTokens" data-type="number" type="number" placeholder="20000" />
+	<small>Recent tokens kept uncompacted.</small>
+</label>
+	<label class="settings-field">
+	<span>Model-callable compaction</span>
+	<select data-setting="compaction.agentCallable" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Let the model request compaction itself via a skill.</small>
+</label>
+</div></div>
+<div class="settings-subsection"><h3>Auto-refine</h3>
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Enable auto-refine</span>
+	<select data-setting="autoRefine.enabled" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Periodically refine the continual harness during long sessions.</small>
+</label>
+	<label class="settings-field">
+	<span>Turn interval</span>
+	<input data-setting="autoRefine.turnInterval" data-type="number" type="number" placeholder="25" />
+	<small>Assistant turns between auto-refine passes.</small>
+</label>
+	<label class="settings-field">
+	<span>Compact after refine</span>
+	<select data-setting="autoRefine.compact" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Compact the conversation after an auto-refine pass.</small>
+</label>
+	<label class="settings-field">
+	<span>Cooldown (ms)</span>
+	<input data-setting="autoRefine.cooldownMs" data-type="number" type="number" placeholder="1200000" />
+	<small>Minimum time between auto-refine passes.</small>
+</label>
+</div></div>
+<div class="settings-subsection"><h3>Branch summaries</h3>
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Reserve tokens</span>
+	<input data-setting="branchSummary.reserveTokens" data-type="number" type="number" placeholder="16384" />
+	<small>Tokens reserved for prompt and response when summarizing a branch.</small>
+</label>
+	<label class="settings-field">
+	<span>Skip summary prompt</span>
+	<select data-setting="branchSummary.skipPrompt" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Skip the “Summarize branch?” prompt and default to no summary.</small>
+</label>
+</div></div>
+<div class="settings-subsection"><h3>Thinking token budgets</h3>
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Minimal</span>
+	<input data-setting="thinkingBudgets.minimal" data-type="number" type="number" />
+	
+</label>
+	<label class="settings-field">
+	<span>Low</span>
+	<input data-setting="thinkingBudgets.low" data-type="number" type="number" />
+	
+</label>
+	<label class="settings-field">
+	<span>Medium</span>
+	<input data-setting="thinkingBudgets.medium" data-type="number" type="number" />
+	
+</label>
+	<label class="settings-field">
+	<span>High</span>
+	<input data-setting="thinkingBudgets.high" data-type="number" type="number" />
+	
+</label>
+</div></div>
+</section>
+<section class="settings-panel" data-settings-panel="subagents" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Max recursion depth</span>
+	<input data-setting="rlmMaxDepth" data-type="number" type="number" placeholder="1" />
+	<small>Deepest allowed chain of nested sub-agents.</small>
+</label>
+	<label class="settings-field">
+	<span>Max total children</span>
+	<input data-setting="rlmMaxChildren" data-type="number" type="number" />
+	<small>Maximum sub-agents a session may spawn in total.</small>
+</label>
+	<label class="settings-field">
+	<span>Max concurrent children</span>
+	<input data-setting="rlmMaxConcurrentChildren" data-type="number" type="number" />
+	<small>Maximum sub-agents running at the same time.</small>
+</label>
+	<label class="settings-field">
+	<span>Child budget (USD)</span>
+	<input data-setting="rlmChildBudgetUsd" data-type="number" type="number" />
+	<small>Spend limit per sub-agent before it is stopped.</small>
+</label>
+	<label class="settings-field">
+	<span>Cancel children on budget exceeded</span>
+	<select data-setting="rlmCancelChildrenOnBudgetExceeded" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Stop running sub-agents once the budget limit is hit.</small>
+</label>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="permissions" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Execution mode</span>
+	<select data-setting="permissions.mode" data-type="text">
+		<option value="">Default</option><option value="plan">Plan (read-only)</option><option value="workspace">Workspace (confined writes)</option><option value="unrestricted">Unrestricted</option>
+	</select>
+	<small>Default execution mode for new sessions.</small>
+</label>
+</div>
+<div class="settings-field settings-chip-field" data-chip-list="permissions.writeRoots">
+	<span>Write roots</span>
+	<div class="chip-list" data-chip-container="permissions.writeRoots"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="permissions.writeRoots" placeholder="/path/to/project" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="permissions.writeRoots">Add</button>
+	</div>
+	<small>Directories writes are confined to in workspace mode. Empty allows writes anywhere permitted.</small>
+</div>
+<div class="settings-subsection">
+	<div class="settings-subsection-header"><h3>Permission rules</h3><button type="button" class="chip-add-button" id="permission-rule-add">Add rule</button></div>
+	<p class="settings-section-note">Rules are evaluated in order; the last matching rule wins. Patterns use glob syntax.</p>
+	<div class="rule-table" id="permission-rules-list"></div>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="shell" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Custom shell path</span>
+	<input data-setting="shellPath" data-type="text" type="text" placeholder="/bin/bash" spellcheck="false" />
+	<small>Overrides the shell used to run commands (e.g. for Cygwin on Windows).</small>
+</label>
+	<label class="settings-field">
+	<span>Shell command prefix</span>
+	<input data-setting="shellCommandPrefix" data-type="text" type="text" placeholder="shopt -s expand_aliases" spellcheck="false" />
+	<small>Prefix prepended to every command Prometheus runs.</small>
+</label>
+	<label class="settings-field">
+	<span>Custom session directory</span>
+	<input data-setting="sessionDir" data-type="text" type="text" placeholder="~/.prometheus/agent/sessions" spellcheck="false" />
+	<small>Overrides where session transcripts are stored.</small>
+</label>
+	<label class="settings-field">
+	<span>Idle eviction (minutes)</span>
+	<input data-setting="idleEvictionMinutes" data-type="text" type="text" placeholder="90" spellcheck="false" />
+	<small>Minutes of inactivity before the daemon evicts a session. Use "off" to disable.</small>
+</label>
+</div>
+<div class="settings-field settings-chip-field" data-chip-list="npmCommand">
+	<span>npm command override</span>
+	<div class="chip-list" data-chip-container="npmCommand"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="npmCommand" placeholder="npm" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="npmCommand">Add</button>
+	</div>
+	<small>Argv-style command used for package lookup/install, one token per entry.</small>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="extensions" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Enable skill commands</span>
+	<select data-setting="enableSkillCommands" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Register skills as /skill:name slash commands.</small>
+</label>
+	<label class="settings-field">
+	<span>Enable built-in skills</span>
+	<select data-setting="enableBuiltinSkills" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Load the skills bundled with Prometheus.</small>
+</label>
+	<label class="settings-field">
+	<span>Enable built-in web search skill</span>
+	<select data-setting="bundledSkills.websearch" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	
+</label>
+</div>
+<div class="settings-subsection"><h3>Local resources</h3>
+<div class="settings-grid settings-grid-wide">
+	<div class="settings-field settings-chip-field" data-chip-list="skills">
+	<span>Skill paths</span>
+	<div class="chip-list" data-chip-container="skills"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="skills" placeholder="/path/to/skill" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="skills">Add</button>
+	</div>
+	<small>Local skill files or directories to load.</small>
+</div>
+	<div class="settings-field settings-chip-field" data-chip-list="extensions">
+	<span>Extension paths</span>
+	<div class="chip-list" data-chip-container="extensions"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="extensions" placeholder="/path/to/extension.js" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="extensions">Add</button>
+	</div>
+	<small>Local extension files or directories to load.</small>
+</div>
+	<div class="settings-field settings-chip-field" data-chip-list="prompts">
+	<span>Prompt template paths</span>
+	<div class="chip-list" data-chip-container="prompts"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="prompts" placeholder="/path/to/prompts" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="prompts">Add</button>
+	</div>
+	<small>Local prompt template files or directories.</small>
+</div>
+	<div class="settings-field settings-chip-field" data-chip-list="themes">
+	<span>Theme paths</span>
+	<div class="chip-list" data-chip-container="themes"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="themes" placeholder="/path/to/theme.json" spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="themes">Add</button>
+	</div>
+	<small>Local theme files or directories.</small>
+</div>
+	<div class="settings-field settings-chip-field" data-chip-list="packages">
+	<span>Packages</span>
+	<div class="chip-list" data-chip-container="packages"></div>
+	<div class="chip-add-row">
+		<input type="text" data-chip-input="packages" placeholder="@scope/package or git+https://..." spellcheck="false" />
+		<button type="button" class="chip-add-button" data-chip-add="packages">Add</button>
+	</div>
+	<small>npm or git package sources to load extensions, skills, prompts, and themes from.</small>
+</div>
+</div></div>
+</section>
+<section class="settings-panel" data-settings-panel="mcp" role="tabpanel">
+<div class="settings-subsection">
+	<div class="settings-subsection-header"><h3>MCP servers</h3><button type="button" class="chip-add-button" id="mcp-server-add">Add server</button></div>
+	<p class="settings-section-note">Model Context Protocol servers Prometheus connects to for extra tools. Built-in integrations (Linear, Notion, etc.) are configured through /login and do not appear here.</p>
+	<div class="mcp-server-list" id="mcp-server-list"></div>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="privacy" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Anonymous telemetry</span>
+	<select data-setting="telemetry.enabled" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Share anonymous usage telemetry with the Prometheus team.</small>
+</label>
+	<label class="settings-field">
+	<span>Agent traces</span>
+	<select data-setting="agentTraces.enabled" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Record local agent execution traces for debugging.</small>
+</label>
+	<label class="settings-field">
+	<span>Block images</span>
+	<select data-setting="images.blockImages" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Prevent all images from being sent to LLM providers.</small>
+</label>
+</div>
+</section>
+<section class="settings-panel" data-settings-panel="advanced" role="tabpanel">
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Transport</span>
+	<select data-setting="transport" data-type="text">
+		<option value="">Default</option><option value="auto">Auto</option><option value="websocket">WebSocket</option><option value="sse">Server-sent events</option>
+	</select>
+	<small>Connection transport used between the client and engine.</small>
+</label>
+	<label class="settings-field">
+	<span>Session export theme</span>
+	<select data-setting="theme" data-type="text">
+		<option value="">Default</option><option value="dark">Dark</option><option value="light">Light</option>
+	</select>
+	<small>Theme used when exporting a session transcript to HTML.</small>
+</label>
+</div>
+<div class="settings-subsection"><h3>Retry</h3>
+<div class="settings-grid">
+	<label class="settings-field">
+	<span>Enable automatic retry</span>
+	<select data-setting="retry.enabled" data-type="bool">
+		<option value="">Default</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</select>
+	<small>Retry failed provider requests automatically.</small>
+</label>
+	<label class="settings-field">
+	<span>Max retries</span>
+	<input data-setting="retry.maxRetries" data-type="number" type="number" placeholder="3" />
+	<small>Maximum retry attempts.</small>
+</label>
+	<label class="settings-field">
+	<span>Base delay (ms)</span>
+	<input data-setting="retry.baseDelayMs" data-type="number" type="number" placeholder="2000" />
+	<small>Initial exponential-backoff delay.</small>
+</label>
+	<label class="settings-field">
+	<span>Provider request timeout (ms)</span>
+	<input data-setting="retry.provider.timeoutMs" data-type="number" type="number" />
+	<small>SDK/provider request timeout.</small>
+</label>
+	<label class="settings-field">
+	<span>Provider SDK retries</span>
+	<input data-setting="retry.provider.maxRetries" data-type="number" type="number" />
+	<small>SDK-level retry attempts, separate from Prometheus's own retry loop.</small>
+</label>
+	<label class="settings-field">
+	<span>Max retry delay (ms)</span>
+	<input data-setting="retry.provider.maxRetryDelayMs" data-type="number" type="number" placeholder="60000" />
+	<small>Maximum server-requested delay before failing.</small>
+</label>
+</div></div>
+</section>
+			</div>
+		</div>
+		<div class="settings-dialog-footer">
+			<span class="settings-status" id="settings-status" aria-live="polite"></span>
+			<div class="settings-dialog-actions">
+				<button class="secondary-button" id="settings-open-file" type="button">Open settings.json</button>
+				<button class="secondary-button" id="settings-cancel" type="button">Cancel</button>
+				<button class="dialog-connect-button" id="settings-save" type="button">Save changes</button>
+			</div>
+		</div>
+	</div>
+</dialog>
 		<div class="toast" id="toast" role="status"></div>
 		<script src="./tool-summary.js"></script>
 		<script src="./provider-logos.js"></script>

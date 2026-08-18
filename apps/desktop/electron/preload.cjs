@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("desktopAgent", {
 	applyWorkspaceChanges: (payload) => ipcRenderer.invoke("workspace-changes:apply", payload),
 	showContextMenu: (payload) => ipcRenderer.invoke("context-menu:show", payload),
 	getTheme: () => ipcRenderer.invoke("theme:get"),
+	getSettings: () => ipcRenderer.invoke("settings:get"),
+	saveSettings: (patch) => ipcRenderer.invoke("settings:save", patch),
 	getPaths: () => ipcRenderer.invoke("agent:paths"),
 	getDefaultWorkspace: () => ipcRenderer.invoke("workspace:default"),
 	listWorkspaces: () => ipcRenderer.invoke("workspace:list"),

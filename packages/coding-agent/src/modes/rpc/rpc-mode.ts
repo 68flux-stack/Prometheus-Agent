@@ -259,6 +259,7 @@ async function runRpcModeWithConnectionInternal(
 					messageCount: state.messageCount,
 					sessionActions: state.sessionActions,
 					goal: state.goal,
+					todo: state.todo,
 				};
 				return success(id, command.type, rpcState);
 			}

@@ -82,3 +82,19 @@ export type { CreateRlmSubagentRuntimeOptions, RlmSubagentRuntime, SubagentRunti
 export { SessionImportFileNotFoundError } from "./session-import-errors.js";
 export type { SessionStats } from "./session-stats.js";
 export { createSyntheticSourceInfo } from "./source-info.js";
+export {
+	emptyTodoListState,
+	formatTodoListSummary,
+	isPersistedTodoListState,
+	normalizeTodoItem,
+	normalizeTodoItemStatus,
+	normalizeTodoListState,
+	TODO_STATE_CUSTOM_TYPE,
+	type TodoHostResponse,
+	type TodoItem,
+	type TodoItemStatus,
+	type TodoListState,
+	todoHostResponse,
+	validateTodoItemText,
+	validateTodoTitle,
+} from "./todo.js";
