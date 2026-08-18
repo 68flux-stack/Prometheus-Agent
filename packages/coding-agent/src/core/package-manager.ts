@@ -1383,8 +1383,9 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private parseSource(source: string): ParsedSource {
-		if (source.startsWith("npm:")) {
-			const spec = source.slice("npm:".length).trim();
+		const trimmed = source.trim();
+		if (trimmed.startsWith("npm:")) {
+			const spec = trimmed.slice("npm:".length).trim();
 			const { name, version } = this.parseNpmSpec(spec);
 			return {
 				type: "npm",
@@ -1394,17 +1395,33 @@ export class DefaultPackageManager implements PackageManager {
 			};
 		}
 
-		if (isLocalPath(source)) {
-			return { type: "local", path: source };
+		if (isLocalPath(trimmed)) {
+			return { type: "local", path: trimmed };
 		}
 
 		// Try parsing as git URL
-		const gitParsed = parseGitUrl(source);
+		const gitParsed = parseGitUrl(trimmed);
 		if (gitParsed) {
 			return gitParsed;
 		}
 
-		return { type: "local", path: source };
+		// Check GitHub owner/repo shorthand
+		const shorthandMatch = /^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_.-]+))?$/.exec(trimmed);
+		if (shorthandMatch) {
+			const owner = shorthandMatch[1]!;
+			const repo = shorthandMatch[2]!;
+			const ref = shorthandMatch[3];
+			return {
+				type: "git",
+				repo: `https://github.com/${owner}/${repo}`,
+				host: "github.com",
+				path: `${owner}/${repo}`,
+				ref,
+				pinned: Boolean(ref),
+			};
+		}
+
+		return { type: "local", path: trimmed };
 	}
 
 	private async installedNpmMatchesPinnedVersion(source: NpmSource, installedPath: string): Promise<boolean> {
@@ -1970,14 +1987,26 @@ export class DefaultPackageManager implements PackageManager {
 
 		let hasAnyDir = false;
 		for (const resourceType of RESOURCE_TYPES) {
-			const dir = join(packageRoot, resourceType);
-			if (existsSync(dir)) {
-				// Collect all files from the directory (all enabled by default)
-				const files = collectResourceFiles(dir, resourceType);
-				for (const f of files) {
-					this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
+			const candidateDirs = [join(packageRoot, resourceType)];
+			if (resourceType === "prompts") candidateDirs.push(join(packageRoot, "commands"));
+			if (resourceType === "extensions") candidateDirs.push(join(packageRoot, "tools"));
+
+			for (const dir of candidateDirs) {
+				if (existsSync(dir)) {
+					const files = collectResourceFiles(dir, resourceType);
+					for (const f of files) {
+						this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
+					}
+					hasAnyDir = true;
 				}
-				hasAnyDir = true;
+			}
+
+			if (resourceType === "skills") {
+				const rootSkill = join(packageRoot, "SKILL.md");
+				if (existsSync(rootSkill)) {
+					this.addResource(this.getTargetMap(accumulator, "skills"), rootSkill, metadata, true);
+					hasAnyDir = true;
+				}
 			}
 		}
 		return hasAnyDir;
@@ -1995,12 +2024,23 @@ export class DefaultPackageManager implements PackageManager {
 			this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
 			return;
 		}
-		const dir = join(packageRoot, resourceType);
-		if (existsSync(dir)) {
-			// Collect all files from the directory (all enabled by default)
-			const files = collectResourceFiles(dir, resourceType);
-			for (const f of files) {
-				this.addResource(target, f, metadata, true);
+		const candidateDirs = [join(packageRoot, resourceType)];
+		if (resourceType === "prompts") candidateDirs.push(join(packageRoot, "commands"));
+		if (resourceType === "extensions") candidateDirs.push(join(packageRoot, "tools"));
+
+		for (const dir of candidateDirs) {
+			if (existsSync(dir)) {
+				const files = collectResourceFiles(dir, resourceType);
+				for (const f of files) {
+					this.addResource(target, f, metadata, true);
+				}
+			}
+		}
+
+		if (resourceType === "skills") {
+			const rootSkill = join(packageRoot, "SKILL.md");
+			if (existsSync(rootSkill)) {
+				this.addResource(target, rootSkill, metadata, true);
 			}
 		}
 	}
@@ -2050,11 +2090,27 @@ export class DefaultPackageManager implements PackageManager {
 			return { allFiles: Array.from(enabledByManifest), enabledByManifest };
 		}
 
-		const conventionDir = join(packageRoot, resourceType);
-		if (!existsSync(conventionDir)) {
+		const candidateDirs = [join(packageRoot, resourceType)];
+		if (resourceType === "prompts") candidateDirs.push(join(packageRoot, "commands"));
+		if (resourceType === "extensions") candidateDirs.push(join(packageRoot, "tools"));
+
+		const allFiles: string[] = [];
+		for (const dir of candidateDirs) {
+			if (existsSync(dir)) {
+				allFiles.push(...collectResourceFiles(dir, resourceType));
+			}
+		}
+
+		if (resourceType === "skills") {
+			const rootSkill = join(packageRoot, "SKILL.md");
+			if (existsSync(rootSkill) && !allFiles.includes(rootSkill)) {
+				allFiles.push(rootSkill);
+			}
+		}
+
+		if (allFiles.length === 0) {
 			return { allFiles: [], enabledByManifest: new Set() };
 		}
-		const allFiles = collectResourceFiles(conventionDir, resourceType);
 		return { allFiles, enabledByManifest: new Set(allFiles) };
 	}
 

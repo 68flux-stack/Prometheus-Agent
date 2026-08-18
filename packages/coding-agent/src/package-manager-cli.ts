@@ -45,6 +45,7 @@ import {
 import type { SessionActionRecoverySnapshot } from "./core/agent-session.js";
 import { SESSION_ACTION_RECOVERY_FORMAT_VERSION } from "./core/agent-session.js";
 import type { AgentSessionRuntimeMetadata } from "./core/agent-session-runtime.js";
+import { MarketplaceManager } from "./core/marketplace-manager.js";
 import { type CustomMessage, isSessionSlashCommand } from "./core/messages.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
@@ -1636,6 +1637,211 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 		}
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : "Unknown package command error";
+		console.error(chalk.red(`Error: ${message}`));
+		process.exitCode = 1;
+		return true;
+	}
+}
+
+export async function handlePluginCommand(args: string[]): Promise<boolean> {
+	const cwd = process.cwd();
+	const agentDir = getAgentDir();
+	const settingsManager = SettingsManager.create(cwd, agentDir);
+	reportSettingsErrors(settingsManager, "plugin command");
+
+	const marketplaceManager = new MarketplaceManager({ cwd, agentDir, settingsManager });
+	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+
+	packageManager.setProgressCallback((event) => {
+		if (event.type === "start") {
+			process.stdout.write(chalk.dim(`${event.message}\n`));
+		}
+	});
+
+	const [subcommand, ...rest] = args;
+	const isLocal = rest.includes("--local");
+	const filteredArgs = rest.filter((a) => a !== "--local" && a !== "-l");
+
+	if (!subcommand || subcommand === "help" || subcommand === "-h" || subcommand === "--help") {
+		console.log(`${chalk.bold("Usage:")}
+  ${APP_NAME} plugin <command> [options]
+
+Commands:
+  ${APP_NAME} plugin marketplace add <source> [--local]
+  ${APP_NAME} plugin marketplace remove <name> [--local]
+  ${APP_NAME} plugin marketplace list
+  ${APP_NAME} plugin marketplace update [name]
+  ${APP_NAME} plugin install <spec> [--local]
+  ${APP_NAME} plugin remove <name> [--local]
+  ${APP_NAME} plugin list
+  ${APP_NAME} plugin update [name]
+
+Examples:
+  ${APP_NAME} plugin marketplace add DietrichGebert/ponytail
+  ${APP_NAME} plugin install ponytail@ponytail
+  ${APP_NAME} plugin install DietrichGebert/ponytail
+  ${APP_NAME} plugin list
+`);
+		return true;
+	}
+
+	try {
+		if (subcommand === "marketplace") {
+			const [mpAction, ...mpArgs] = filteredArgs;
+			if (!mpAction || mpAction === "list") {
+				const list = marketplaceManager.listMarketplaces();
+				if (list.length === 0) {
+					console.log(chalk.dim("No marketplaces registered."));
+					console.log(chalk.dim(`Add one with: ${APP_NAME} plugin marketplace add <source>`));
+					return true;
+				}
+				console.log(chalk.bold("Registered Marketplaces:\n"));
+				for (const { marketplace, scope } of list) {
+					console.log(`${chalk.bold.cyan(marketplace.name)} (${chalk.dim(scope)}) — ${marketplace.source}`);
+					if (marketplace.description) {
+						console.log(chalk.dim(`  ${marketplace.description}`));
+					}
+					if (marketplace.plugins.length > 0) {
+						console.log(chalk.dim("  Plugins:"));
+						for (const p of marketplace.plugins) {
+							console.log(
+								`    • ${chalk.green(p.name)}${p.description ? ` - ${chalk.dim(p.description)}` : ""}`,
+							);
+						}
+					}
+					console.log();
+				}
+				return true;
+			}
+
+			if (mpAction === "add") {
+				const source = mpArgs[0];
+				if (!source) {
+					console.error(chalk.red(`Usage: ${APP_NAME} plugin marketplace add <source> [--local]`));
+					process.exitCode = 1;
+					return true;
+				}
+				const added = await marketplaceManager.addMarketplace(source, { local: isLocal });
+				console.log(chalk.green(`Added marketplace "${chalk.bold(added.name)}" from ${source}`));
+				if (added.plugins.length > 0) {
+					console.log(chalk.dim("\nAvailable plugins:"));
+					for (const p of added.plugins) {
+						console.log(`  • ${chalk.bold(p.name)}${p.description ? ` - ${p.description}` : ""}`);
+					}
+					console.log(chalk.dim(`\nInstall with: ${APP_NAME} plugin install <plugin>@${added.name}`));
+				}
+				return true;
+			}
+
+			if (mpAction === "remove" || mpAction === "uninstall") {
+				const target = mpArgs[0];
+				if (!target) {
+					console.error(chalk.red(`Usage: ${APP_NAME} plugin marketplace remove <name> [--local]`));
+					process.exitCode = 1;
+					return true;
+				}
+				const removed = marketplaceManager.removeMarketplace(target, { local: isLocal });
+				if (!removed) {
+					console.error(chalk.red(`No matching marketplace found for "${target}"`));
+					process.exitCode = 1;
+					return true;
+				}
+				console.log(chalk.green(`Removed marketplace "${target}"`));
+				return true;
+			}
+
+			if (mpAction === "update") {
+				const target = mpArgs[0];
+				const updated = await marketplaceManager.updateMarketplaces(target);
+				if (updated.length > 0) {
+					console.log(chalk.green(`Updated marketplaces: ${updated.join(", ")}`));
+				} else {
+					console.log(chalk.dim("No marketplaces were updated."));
+				}
+				return true;
+			}
+
+			console.error(chalk.red(`Unknown marketplace action: ${mpAction}`));
+			console.error(chalk.dim(`Usage: ${APP_NAME} plugin marketplace <add|remove|list|update>`));
+			process.exitCode = 1;
+			return true;
+		}
+
+		if (subcommand === "install") {
+			const spec = filteredArgs[0];
+			if (!spec) {
+				console.error(chalk.red(`Usage: ${APP_NAME} plugin install <spec> [--local]`));
+				process.exitCode = 1;
+				return true;
+			}
+			const resolved = await marketplaceManager.installPlugin(spec, packageManager, { local: isLocal });
+			const label = resolved.marketplaceName
+				? `${resolved.pluginName}@${resolved.marketplaceName}`
+				: resolved.pluginName;
+			console.log(chalk.green(`Installed plugin ${chalk.bold(label)}`));
+			return true;
+		}
+
+		if (subcommand === "remove" || subcommand === "uninstall") {
+			const spec = filteredArgs[0];
+			if (!spec) {
+				console.error(chalk.red(`Usage: ${APP_NAME} plugin remove <name> [--local]`));
+				process.exitCode = 1;
+				return true;
+			}
+			const removed = await marketplaceManager.removePlugin(spec, packageManager, { local: isLocal });
+			if (!removed) {
+				console.error(chalk.red(`No matching plugin found for "${spec}"`));
+				process.exitCode = 1;
+				return true;
+			}
+			console.log(chalk.green(`Removed plugin "${spec}"`));
+			return true;
+		}
+
+		if (subcommand === "list") {
+			const configuredPackages = packageManager.listConfiguredPackages();
+			const marketplaces = marketplaceManager.listMarketplaces();
+
+			console.log(chalk.bold("Installed Plugins / Packages:"));
+			if (configuredPackages.length === 0) {
+				console.log(chalk.dim("  No packages or plugins installed."));
+			} else {
+				for (const pkg of configuredPackages) {
+					const display = pkg.filtered ? `${pkg.source} (filtered)` : pkg.source;
+					console.log(`  • ${display} (${pkg.scope})`);
+					if (pkg.installedPath) {
+						console.log(chalk.dim(`    ${pkg.installedPath}`));
+					}
+				}
+			}
+
+			if (marketplaces.length > 0) {
+				console.log(chalk.bold("\nRegistered Marketplaces:"));
+				for (const { marketplace, scope } of marketplaces) {
+					console.log(`  • ${chalk.cyan(marketplace.name)} (${scope}) - ${marketplace.plugins.length} plugin(s)`);
+				}
+			}
+			return true;
+		}
+
+		if (subcommand === "update") {
+			const target = filteredArgs[0];
+			await packageManager.update(target);
+			if (target) {
+				console.log(chalk.green(`Updated ${target}`));
+			} else {
+				console.log(chalk.green("Updated plugins"));
+			}
+			return true;
+		}
+
+		console.error(chalk.red(`Unknown plugin command: ${subcommand}`));
+		console.error(chalk.dim(`Usage: ${APP_NAME} plugin <install|remove|list|update|marketplace>`));
+		process.exitCode = 1;
+		return true;
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
 		console.error(chalk.red(`Error: ${message}`));
 		process.exitCode = 1;
 		return true;
