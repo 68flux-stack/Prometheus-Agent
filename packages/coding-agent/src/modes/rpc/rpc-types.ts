@@ -6,7 +6,7 @@
  */
 
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { ImageContent, Model, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSessionMessageReceipt, AgentSessionMessageSafetyStatus } from "../../core/agent-messages.js";
 import type { BackgroundJobWaitResult } from "../../core/background-jobs.js";
 import type { BashResult } from "../../core/bash-executor.js";
@@ -20,11 +20,15 @@ import type {
 import type { ExecutionMode } from "../../core/execution-policy.js";
 import type { GoalState } from "../../core/goals.js";
 import type { RefinementResult } from "../../core/refinement/index.js";
+import type { RlmMaxDepthStatus, SetRlmMaxDepthResult } from "../../core/rlm-max-depth.js";
 import type { SessionActionSnapshot } from "../../core/session-action-store.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import type { TodoListState } from "../../core/todo.js";
 import type {
 	AgentConnectionHeartbeat,
+	AgentConnectionPluginDetail,
+	AgentConnectionPluginList,
+	AgentConnectionResourceSnapshot,
 	AgentConnectionRuntimeFeatures,
 	AgentConnectionSourceInfo,
 } from "../agent-connection/types.js";
@@ -57,6 +61,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_resource_snapshot" }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -81,6 +86,13 @@ export type RpcCommand =
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
+	| { id?: string; type: "get_system_prompt" }
+	| { id?: string; type: "get_changelog" }
+	| { id?: string; type: "get_logs_info" }
+	| { id?: string; type: "get_rlm_max_depth" }
+	| { id?: string; type: "set_rlm_max_depth"; maxDepth: number; global?: boolean }
+	| { id?: string; type: "set_service_tier"; serviceTier: ServiceTier }
+	| { id?: string; type: "import_session"; path: string; cwd?: string }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	// Like switch_session, but leaves the session being left running.
@@ -133,7 +145,21 @@ export type RpcCommand =
 	| { id?: string; type: "unobserve"; activeSessionId: string }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Plugin / package management (capability-gated by the pluginManagement
+	// runtime feature; daemon-backed connections reject these)
+	| { id?: string; type: "plugin_list" }
+	| { id?: string; type: "plugin_details"; source: string }
+	| { id?: string; type: "plugin_install"; spec: string; local?: boolean }
+	| { id?: string; type: "plugin_remove"; spec: string; local?: boolean }
+	| { id?: string; type: "plugin_update"; spec?: string }
+	| { id?: string; type: "plugin_marketplace_add"; source: string; local?: boolean; name?: string }
+	| { id?: string; type: "plugin_marketplace_remove"; nameOrSource: string; local?: boolean }
+	| { id?: string; type: "plugin_marketplace_update"; name?: string }
+	| { id?: string; type: "plugin_set_enabled"; source: string; enabled: boolean; local?: boolean }
+	| { id?: string; type: "plugin_set_hook_enabled"; extensionPath: string; event: string; enabled: boolean }
+	| { id?: string; type: "reload" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -149,6 +175,17 @@ export interface RpcSlashCommand {
 	source: "extension" | "prompt" | "skill" | "builtin";
 	/** Source metadata for the owning resource */
 	sourceInfo: AgentConnectionSourceInfo;
+	/**
+	 * How the command runs. "session" commands are parsed from prompt text by
+	 * agent-session and are safe to send through as a normal prompt. Undefined
+	 * (or "client") builtin commands are handled by a UI client instead; a
+	 * client with no handler for one must not silently forward it as a chat
+	 * message. Only meaningful for source "builtin" — extension/prompt/skill
+	 * commands are always sent through as prompt text.
+	 */
+	execution?: "client" | "session";
+	/** Alternate names that resolve to this same command (e.g. "clear" for "new"). */
+	aliases?: readonly string[];
 }
 
 // ============================================================================
@@ -160,6 +197,7 @@ export interface RpcSessionState {
 	cwd: string;
 	model?: Model<any>;
 	thinkingLevel: ThinkingLevel;
+	serviceTier: ServiceTier;
 	isStreaming: boolean;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
@@ -240,6 +278,13 @@ export type RpcResponse =
 			success: true;
 			data: { models: Model<any>[] };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_resource_snapshot";
+			success: true;
+			data: AgentConnectionResourceSnapshot;
+	  }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -270,6 +315,25 @@ export type RpcResponse =
 
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_system_prompt";
+			success: true;
+			data: { systemPrompt: string };
+	  }
+	| { id?: string; type: "response"; command: "get_changelog"; success: true; data: { markdown: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_logs_info";
+			success: true;
+			data: { dir: string; files: { name: string; sizeBytes: number }[] };
+	  }
+	| { id?: string; type: "response"; command: "get_rlm_max_depth"; success: true; data: RlmMaxDepthStatus }
+	| { id?: string; type: "response"; command: "set_rlm_max_depth"; success: true; data: SetRlmMaxDepthResult }
+	| { id?: string; type: "response"; command: "set_service_tier"; success: true }
+	| { id?: string; type: "response"; command: "import_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "open_session"; success: true; data: { cancelled: boolean } }
@@ -348,6 +412,37 @@ export type RpcResponse =
 			success: true;
 			data: { commands: RpcSlashCommand[] };
 	  }
+
+	// Plugins / packages
+	| { id?: string; type: "response"; command: "plugin_list"; success: true; data: AgentConnectionPluginList }
+	| { id?: string; type: "response"; command: "plugin_details"; success: true; data: AgentConnectionPluginDetail }
+	| {
+			id?: string;
+			type: "response";
+			command: "plugin_install";
+			success: true;
+			data: { name: string; source: string };
+	  }
+	| { id?: string; type: "response"; command: "plugin_remove"; success: true }
+	| { id?: string; type: "response"; command: "plugin_update"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "plugin_marketplace_add";
+			success: true;
+			data: { name: string; pluginCount: number };
+	  }
+	| { id?: string; type: "response"; command: "plugin_marketplace_remove"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "plugin_marketplace_update";
+			success: true;
+			data: { updated: string[] };
+	  }
+	| { id?: string; type: "response"; command: "plugin_set_enabled"; success: true }
+	| { id?: string; type: "response"; command: "plugin_set_hook_enabled"; success: true }
+	| { id?: string; type: "response"; command: "reload"; success: true }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

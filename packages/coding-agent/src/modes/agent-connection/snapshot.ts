@@ -3,6 +3,7 @@ import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "../../core/agent-session.js";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.js";
+import { getAvailableOutputStyles } from "../../core/resource-loader.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import { createSyntheticSourceInfo } from "../../core/source-info.js";
 import type {
@@ -95,18 +96,20 @@ export function createAgentConnectionCommands(session: AgentSession): AgentConne
 		source: "prompt" as const,
 		sourceInfo: entry.sourceInfo,
 	}));
-	// Only "session" builtins run the same for every client (they parse the raw
-	// prompt text in agent-session, e.g. _parseGoalSlashCommand). The rest (e.g.
-	// /model, /settings) open interactive-mode-only selector UI with no
-	// RPC-client equivalent, so they'd be dead entries here.
-	const builtinCommands = BUILTIN_SLASH_COMMANDS.filter((command) => command.execution === "session").map(
-		(command) => ({
-			name: command.name,
-			description: command.description,
-			source: "builtin" as const,
-			sourceInfo: createSyntheticSourceInfo(`<builtin:${command.name}>`, { source: "builtin" }),
-		}),
-	);
+	// Advertise the full builtin set so any client (TUI, desktop, headless) can
+	// surface every command without a per-client hardcoded list: a new builtin
+	// (e.g. /plugin) automatically reaches clients that read get_commands.
+	// Each client decides what a command means to it — session builtins are
+	// parsed from prompt text in agent-session, others are handled client-side
+	// or passed through as prompt text.
+	const builtinCommands = BUILTIN_SLASH_COMMANDS.map((command) => ({
+		name: command.name,
+		description: command.description,
+		source: "builtin" as const,
+		sourceInfo: createSyntheticSourceInfo(`<builtin:${command.name}>`, { source: "builtin" }),
+		execution: command.execution,
+		aliases: command.aliases,
+	}));
 
 	// Skills are advertised as plain `/name` commands (the description column already
 	// says "skill"), never `/skill:name`. A skill whose name collides with an extension,
@@ -162,6 +165,7 @@ export function createAgentConnectionResourceSnapshot(session: AgentSession): Ag
 			sourceInfo: loadedTheme.sourceInfo,
 			artifact: createArtifactReference(session, "theme", loadedTheme.sourcePath),
 		})),
+		outputStyles: getAvailableOutputStyles(),
 		diagnostics: {
 			skills: skillsResult.diagnostics,
 			prompts: promptsResult.diagnostics,

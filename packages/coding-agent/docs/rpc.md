@@ -175,6 +175,7 @@ Response:
   "data": {
     "model": {...},
     "thinkingLevel": "medium",
+    "serviceTier": "default",
     "isStreaming": false,
     "isCompacting": false,
     "steeringMode": "all",
@@ -194,7 +195,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set. `serviceTier` is `"default"` or `"priority"` (OpenAI Fast mode); set it via `set_service_tier`.
 
 #### get_messages
 
@@ -582,6 +583,103 @@ Response:
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
+#### get_system_prompt
+
+Get the exact system prompt currently sent to the model.
+
+```json
+{"type": "get_system_prompt"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_system_prompt",
+  "success": true,
+  "data": {
+    "systemPrompt": "You are Prometheus..."
+  }
+}
+```
+
+#### get_changelog
+
+Get rendered changelog entries (newest first) as markdown.
+
+```json
+{"type": "get_changelog"}
+```
+
+Response:
+```json
+{"type": "response", "command": "get_changelog", "success": true, "data": {"markdown": "## [0.7.1]\n\n- ..."}}
+```
+
+#### get_logs_info
+
+Get the logs directory and the files currently in it.
+
+```json
+{"type": "get_logs_info"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_logs_info",
+  "success": true,
+  "data": {
+    "dir": "/home/user/.prometheus/agent/logs",
+    "files": [{"name": "client-errors.log", "sizeBytes": 1024}]
+  }
+}
+```
+
+#### get_rlm_max_depth / set_rlm_max_depth
+
+Get or set the per-chat persistent RLM max depth (`/rlm-max-depth`).
+
+```json
+{"type": "get_rlm_max_depth"}
+{"type": "set_rlm_max_depth", "maxDepth": 3, "global": false}
+```
+
+Response:
+```json
+{"type": "response", "command": "get_rlm_max_depth", "success": true, "data": {"maxDepth": 3, "source": "chat"}}
+{"type": "response", "command": "set_rlm_max_depth", "success": true, "data": {"maxDepth": 3, "globalSaved": false}}
+```
+
+#### set_service_tier
+
+Set the service tier (`"priority"` enables OpenAI Fast mode where the current model supports it; unsupported models are silently clamped back to `"default"` server-side).
+
+```json
+{"type": "set_service_tier", "serviceTier": "priority"}
+```
+
+Response:
+```json
+{"type": "response", "command": "set_service_tier", "success": true}
+```
+
+The resulting tier is reported back in `get_state`'s `serviceTier` field.
+
+#### import_session
+
+Import and resume a session from a JSONL file, replacing the current session.
+
+```json
+{"type": "import_session", "path": "/path/to/session.jsonl"}
+```
+
+Response:
+```json
+{"type": "response", "command": "import_session", "success": true, "data": {"cancelled": false}}
+```
+
 #### export_html
 
 Export session to an HTML file.
@@ -769,18 +867,19 @@ Response:
 
 Each command has:
 - `name`: Command name (invoke with `/name`)
-- `description`: Human-readable description (optional for extension commands)
+- `description`: Human-readable description (optional)
 - `source`: What kind of command:
   - `"extension"`: Registered via `pi.registerCommand()` in an extension
   - `"prompt"`: Loaded from a prompt template `.md` file
-  - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
-- `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.prometheus/agent/`)
-  - `"project"`: Project-level (`./.prometheus/agent/`)
-  - `"path"`: Explicit path via CLI or settings
-- `path`: Absolute file path to the command source (optional)
+  - `"skill"`: Loaded from a skill directory
+  - `"builtin"`: One of the engine's built-in commands (`/settings`, `/plugin`, `/compact`, ...)
+- `sourceInfo`: Source metadata for the owning resource (scope, origin, path)
+- `execution` (only meaningful for `source: "builtin"`):
+  - `"session"`: Safe to send through as a normal `prompt` — agent-session parses it from the raw text (e.g. `/compact`, `/goal`, `/permissions`).
+  - `"client"` or absent: Handled by a UI client instead (the TUI, desktop, or a headless client). Sending it through `prompt` verbatim reaches the model as literal chat text instead of running the command — a client that advertises support for a builtin command must implement it locally, and must refuse (not forward) any builtin command it does not implement.
+- `aliases`: Alternate names that resolve to the same command (e.g. `"clear"` for `"new"`), if any
 
-**Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
+**Note**: `source: "extension" | "prompt" | "skill"` commands are always safe to send through as `prompt` text — the engine parses and dispatches them server-side. Only `source: "builtin"` commands need the `execution` check above.
 
 ## Events
 

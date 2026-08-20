@@ -26,6 +26,9 @@ import type {
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 const ABORT_ERROR_MESSAGE = "Request was aborted";
+// ponytail: hard cap, not configurable. Raise if a real workload needs more than 10 tool
+// calls in one turn — this also bounds how many cache_control blocks land between requests.
+const MAX_TOOL_CALLS_PER_TURN = 10;
 const EMPTY_USAGE: AssistantMessage["usage"] = {
 	input: 0,
 	output: 0,
@@ -612,14 +615,53 @@ async function executeToolCalls(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
-	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+	const allToolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+	const toolCalls = allToolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
+	const overflowToolCalls = allToolCalls.slice(MAX_TOOL_CALLS_PER_TURN);
+
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);
-	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
-		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
+	const batch =
+		config.toolExecution === "sequential" || hasSequentialToolCall
+			? await executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit)
+			: await executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+
+	if (overflowToolCalls.length === 0) {
+		return batch;
 	}
-	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+
+	const overflowMessages = await rejectOverflowToolCalls(overflowToolCalls, emit);
+	return {
+		messages: [...batch.messages, ...overflowMessages],
+		terminate: batch.terminate,
+	};
+}
+
+/**
+ * Tool calls beyond MAX_TOOL_CALLS_PER_TURN are never executed. Every tool_use still needs a
+ * matching tool_result (the API rejects an unanswered one), so each gets an error result telling
+ * the model about the cap instead of silently running.
+ */
+async function rejectOverflowToolCalls(
+	overflowToolCalls: AgentToolCall[],
+	emit: AgentEventSink,
+): Promise<ToolResultMessage[]> {
+	const messages: ToolResultMessage[] = [];
+	for (const toolCall of overflowToolCalls) {
+		const finalized: FinalizedToolCallOutcome = {
+			toolCall,
+			result: createErrorToolResult(
+				`Not run: a single turn can call at most ${MAX_TOOL_CALLS_PER_TURN} tools. This call was past that limit. Call it again in a follow-up turn.`,
+			),
+			isError: true,
+		};
+		await emitToolExecutionEnd(finalized, emit);
+		const toolResultMessage = createToolResultMessage(finalized);
+		await emitToolResultMessage(toolResultMessage, emit);
+		messages.push(toolResultMessage);
+	}
+	return messages;
 }
 
 type ExecutedToolCallBatch = {

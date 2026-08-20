@@ -1,8 +1,13 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { CONFIG_DIR_NAME, getBundledSkillsDir } from "../config.js";
+import {
+	CONFIG_DIR_NAME,
+	getBundledOutputStylesDir,
+	getBundledSkillsDir,
+	getCustomOutputStylesDir,
+} from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
@@ -53,6 +58,68 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	}
 
 	return input;
+}
+
+/**
+ * List available output style names: the built-in "default" plus one entry per
+ * *.md file bundled with the package (output-styles/) or in the user's custom
+ * output styles directory (~/.prometheus/agent/output-styles/, which wins on a name clash).
+ */
+export function getAvailableOutputStyles(): string[] {
+	const styles = new Set<string>(["default"]);
+	for (const dir of [getBundledOutputStylesDir(), getCustomOutputStylesDir()]) {
+		if (!existsSync(dir)) continue;
+		for (const file of readdirSync(dir)) {
+			if (file.endsWith(".md")) {
+				styles.add(file.slice(0, -3));
+			}
+		}
+	}
+	return Array.from(styles).sort((a, b) => (a === "default" ? -1 : b === "default" ? 1 : a.localeCompare(b)));
+}
+
+/**
+ * Seed the user's custom output styles directory with the bundled *.md styles
+ * on first run only (skipped when the directory already exists, so a user's
+ * later edits or deletions are never overwritten).
+ */
+function seedCustomOutputStylesDir(customDir: string, bundledDir: string | null): void {
+	if (!bundledDir || existsSync(customDir) || !existsSync(bundledDir)) {
+		return;
+	}
+	try {
+		mkdirSync(customDir, { recursive: true });
+		for (const file of readdirSync(bundledDir)) {
+			if (file.endsWith(".md")) {
+				copyFileSync(join(bundledDir, file), join(customDir, file));
+			}
+		}
+	} catch (error) {
+		console.error(chalk.yellow(`Warning: could not seed output styles directory ${customDir}: ${error}`));
+	}
+}
+
+interface OutputStyleFrontmatter {
+	/** Default true: layer the style onto the default prompt via append instead of replacing it outright. */
+	keepCodingInstructions: boolean;
+}
+
+/**
+ * Split an optional leading `---`-delimited YAML frontmatter block off an
+ * output style file. Only the `keep-coding-instructions` key is read; the
+ * frontmatter (if any) is always stripped from the returned body so raw YAML
+ * never leaks into the system prompt.
+ */
+function parseOutputStyleFile(raw: string): { frontmatter: OutputStyleFrontmatter; body: string } {
+	const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+	if (!match) {
+		return { frontmatter: { keepCodingInstructions: true }, body: raw };
+	}
+	const keepMatch = match[1].match(/^keep-coding-instructions:\s*(true|false)\s*$/m);
+	return {
+		frontmatter: { keepCodingInstructions: keepMatch ? keepMatch[1] === "true" : true },
+		body: raw.slice(match[0].length).trimStart(),
+	};
 }
 
 function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
@@ -130,6 +197,8 @@ export interface DefaultResourceLoaderOptions {
 	noContextFiles?: boolean;
 	/** Directory of built-in skills shipped with the package. Defaults to the bundled skills dir; pass null to disable. */
 	bundledSkillsDir?: string | null;
+	/** Directory of built-in output styles shipped with the package. Defaults to the bundled output styles dir; pass null to disable. */
+	bundledOutputStylesDir?: string | null;
 	/** Extra force-exclude patterns for built-in skills (e.g. unauthenticated MCP integrations). */
 	extraBuiltinSkillOverrides?: () => string[];
 	systemPrompt?: string;
@@ -161,6 +230,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private eventBus: EventBus;
 	private packageManager: DefaultPackageManager;
 	private bundledSkillsDir: string | null;
+	private bundledOutputStylesDir: string | null;
 	private additionalExtensionPaths: string[];
 	private additionalSkillPaths: string[];
 	private additionalPromptTemplatePaths: string[];
@@ -216,6 +286,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
 		this.bundledSkillsDir = options.bundledSkillsDir === undefined ? getBundledSkillsDir() : options.bundledSkillsDir;
+		this.bundledOutputStylesDir =
+			options.bundledOutputStylesDir === undefined ? getBundledOutputStylesDir() : options.bundledOutputStylesDir;
+		seedCustomOutputStylesDir(join(this.agentDir, "output-styles"), this.bundledOutputStylesDir);
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
 			agentDir: this.agentDir,
@@ -419,6 +492,21 @@ export class DefaultResourceLoader implements ResourceLoader {
 		extensionsResult.extensions.push(...inlineExtensions.extensions);
 		extensionsResult.errors.push(...inlineExtensions.errors);
 
+		// Apply per-hook disable toggles (settings.disabledExtensionHooks): drop
+		// disabled event handlers before the runner ever sees them, so the toggle
+		// takes effect on the next reload and re-enabling restores them.
+		const disabledHooks = this.settingsManager.getDisabledExtensionHooks();
+		if (Object.keys(disabledHooks).length > 0) {
+			for (const ext of extensionsResult.extensions) {
+				const disabled = disabledHooks[ext.path];
+				if (disabled && disabled.length > 0) {
+					for (const event of disabled) {
+						ext.handlers.delete(event);
+					}
+				}
+			}
+		}
+
 		// Detect extension conflicts (tools, commands, flags with same names from different extensions)
 		// Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
 		const conflicts = this.detectExtensionConflicts(extensionsResult.extensions);
@@ -478,18 +566,45 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
 
-		const baseSystemPrompt = resolvePromptInput(
-			this.systemPromptSource ?? this.discoverSystemPromptFile(),
-			"system prompt",
-		);
+		// The selected output style (settings.outputStyle), if any: strip its optional
+		// frontmatter, then route the body to a full system-prompt replacement or an
+		// append, per `keep-coding-instructions` (default true = append).
+		let outputStyleOverride: string | undefined;
+		let outputStyleAppend: string | undefined;
+		const outputStyleFile = this.discoverOutputStyleFile();
+		if (outputStyleFile) {
+			const raw = resolvePromptInput(outputStyleFile, "output style");
+			if (raw !== undefined) {
+				const { frontmatter, body } = parseOutputStyleFile(raw);
+				if (frontmatter.keepCodingInstructions) {
+					outputStyleAppend = body;
+				} else {
+					outputStyleOverride = body;
+				}
+			}
+		}
+
+		const baseSystemPrompt =
+			resolvePromptInput(this.systemPromptSource, "system prompt") ??
+			outputStyleOverride ??
+			resolvePromptInput(this.discoverSystemPromptFile(), "system prompt");
 		this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
 
-		const appendSources =
-			this.appendSystemPromptSource ??
-			(this.discoverAppendSystemPromptFile() ? [this.discoverAppendSystemPromptFile()!] : []);
-		const baseAppend = appendSources
-			.map((s) => resolvePromptInput(s, "append system prompt"))
-			.filter((s): s is string => s !== undefined);
+		let baseAppend: string[];
+		if (this.appendSystemPromptSource) {
+			baseAppend = this.appendSystemPromptSource
+				.map((s) => resolvePromptInput(s, "append system prompt"))
+				.filter((s): s is string => s !== undefined);
+		} else {
+			baseAppend = [];
+			if (outputStyleAppend !== undefined) {
+				baseAppend.push(outputStyleAppend);
+			}
+			const discoveredAppend = resolvePromptInput(this.discoverAppendSystemPromptFile(), "append system prompt");
+			if (discoveredAppend !== undefined) {
+				baseAppend.push(discoveredAppend);
+			}
+		}
 		this.appendSystemPrompt = this.appendSystemPromptOverride
 			? this.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
@@ -872,6 +987,33 @@ export class DefaultResourceLoader implements ResourceLoader {
 			return globalPath;
 		}
 
+		return undefined;
+	}
+
+	/** Resolve the selected output style ("default" or unset = no extra append content). Custom (user) styles win over bundled ones with the same name. */
+	private discoverOutputStyleFile(): string | undefined {
+		const styleName = this.settingsManager.getOutputStyle();
+		if (!styleName || styleName === "default") {
+			return undefined;
+		}
+
+		const customPath = join(this.agentDir, "output-styles", `${styleName}.md`);
+		if (existsSync(customPath)) {
+			return customPath;
+		}
+
+		if (this.bundledOutputStylesDir) {
+			const bundledPath = join(this.bundledOutputStylesDir, `${styleName}.md`);
+			if (existsSync(bundledPath)) {
+				return bundledPath;
+			}
+		}
+
+		console.error(
+			chalk.yellow(
+				`Warning: output style "${styleName}" not found in ${join(this.agentDir, "output-styles")}${this.bundledOutputStylesDir ? ` or ${this.bundledOutputStylesDir}` : ""}; using default prompt.`,
+			),
+		);
 		return undefined;
 	}
 

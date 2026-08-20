@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -346,6 +346,155 @@ Content`,
 			await loader.reload();
 
 			expect(loader.getAppendSystemPrompt()).toContain("Additional instructions.");
+		});
+
+		it("should append the selected output style without replacing the default prompt", async () => {
+			const outputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(outputStylesDir, { recursive: true });
+			writeFileSync(join(outputStylesDir, "concise.md"), "Be extremely concise.");
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("concise");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBeUndefined();
+			expect(loader.getAppendSystemPrompt()).toContain("Be extremely concise.");
+		});
+
+		it("should combine a selected output style with APPEND_SYSTEM.md", async () => {
+			const outputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(outputStylesDir, { recursive: true });
+			writeFileSync(join(outputStylesDir, "concise.md"), "Be extremely concise.");
+			const piDir = join(cwd, ".prometheus", "agent");
+			mkdirSync(piDir, { recursive: true });
+			writeFileSync(join(piDir, "APPEND_SYSTEM.md"), "Additional instructions.");
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("concise");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toEqual(["Be extremely concise.", "Additional instructions."]);
+		});
+
+		it("should add no extra append content for an unset or unknown output style", async () => {
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("does-not-exist");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBeUndefined();
+			expect(loader.getAppendSystemPrompt()).toEqual([]);
+		});
+
+		it("should strip frontmatter from an output style and append only the body", async () => {
+			const outputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(outputStylesDir, { recursive: true });
+			writeFileSync(
+				join(outputStylesDir, "ELI5.md"),
+				`---
+name: ELI5
+description: keep it simple pls
+keep-coding-instructions: true
+---
+
+Talk to me like I'm 5.`,
+			);
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("ELI5");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBeUndefined();
+			expect(loader.getAppendSystemPrompt()).toEqual(["Talk to me like I'm 5."]);
+		});
+
+		it("should treat keep-coding-instructions: false as a full system prompt replacement", async () => {
+			const outputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(outputStylesDir, { recursive: true });
+			writeFileSync(
+				join(outputStylesDir, "persona.md"),
+				`---
+name: persona
+keep-coding-instructions: false
+---
+
+You are a pirate. Only speak in pirate slang.`,
+			);
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("persona");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBe("You are a pirate. Only speak in pirate slang.");
+			expect(loader.getAppendSystemPrompt()).toEqual([]);
+		});
+
+		it("should fall back to a bundled output style when no custom style of that name exists", async () => {
+			const bundledOutputStylesDir = join(tempDir, "bundled-output-styles");
+			mkdirSync(bundledOutputStylesDir, { recursive: true });
+			writeFileSync(join(bundledOutputStylesDir, "ELI5.md"), "Explain everything like I'm 5.");
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("ELI5");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, bundledOutputStylesDir });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toContain("Explain everything like I'm 5.");
+		});
+
+		it("should prefer a custom output style over a bundled one with the same name", async () => {
+			const bundledOutputStylesDir = join(tempDir, "bundled-output-styles");
+			mkdirSync(bundledOutputStylesDir, { recursive: true });
+			writeFileSync(join(bundledOutputStylesDir, "ELI5.md"), "Bundled version.");
+
+			const customOutputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(customOutputStylesDir, { recursive: true });
+			writeFileSync(join(customOutputStylesDir, "ELI5.md"), "Custom version.");
+
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("ELI5");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, bundledOutputStylesDir });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toContain("Custom version.");
+			expect(loader.getAppendSystemPrompt()).not.toContain("Bundled version.");
+		});
+
+		it("should seed the custom output styles directory with bundled styles on first run", () => {
+			const bundledOutputStylesDir = join(tempDir, "bundled-output-styles");
+			mkdirSync(bundledOutputStylesDir, { recursive: true });
+			writeFileSync(join(bundledOutputStylesDir, "ELI5.md"), "Explain everything like I'm 5.");
+
+			const customOutputStylesDir = join(agentDir, "output-styles");
+			expect(existsSync(customOutputStylesDir)).toBe(false);
+
+			new DefaultResourceLoader({ cwd, agentDir, bundledOutputStylesDir });
+
+			expect(readFileSync(join(customOutputStylesDir, "ELI5.md"), "utf-8")).toBe("Explain everything like I'm 5.");
+		});
+
+		it("should not reseed the custom output styles directory once it already exists", () => {
+			const bundledOutputStylesDir = join(tempDir, "bundled-output-styles");
+			mkdirSync(bundledOutputStylesDir, { recursive: true });
+			writeFileSync(join(bundledOutputStylesDir, "ELI5.md"), "Explain everything like I'm 5.");
+
+			const customOutputStylesDir = join(agentDir, "output-styles");
+			mkdirSync(customOutputStylesDir, { recursive: true });
+
+			new DefaultResourceLoader({ cwd, agentDir, bundledOutputStylesDir });
+
+			expect(existsSync(join(customOutputStylesDir, "ELI5.md"))).toBe(false);
 		});
 	});
 

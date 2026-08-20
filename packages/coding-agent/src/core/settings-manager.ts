@@ -88,6 +88,8 @@ export type PackageSource =
 			skills?: string[];
 			prompts?: string[];
 			themes?: string[];
+			/** When false, the package is configured but its resources are not loaded. */
+			enabled?: boolean;
 	  };
 
 /**
@@ -161,6 +163,7 @@ export interface Settings {
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
+	outputStyle?: string; // Name of a custom output style from the output-styles directory ("default" or unset uses the built-in prompt)
 	compaction?: CompactionSettings;
 	autoRefine?: AutoRefineSettings;
 	agentTraces?: AgentTracesSettings;
@@ -195,6 +198,8 @@ export interface Settings {
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	autoSessionName?: boolean; // default: true - name an unnamed session from its first prompt via a short model call
 	permissions?: PermissionSettings;
+	/** Extension path → event names whose handlers are disabled (per-hook toggles). */
+	disabledExtensionHooks?: Record<string, string[]>;
 }
 
 export interface AgentTracesSettings {
@@ -779,6 +784,16 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getOutputStyle(): string | undefined {
+		return this.settings.outputStyle;
+	}
+
+	setOutputStyle(outputStyle: string): void {
+		this.globalSettings.outputStyle = outputStyle;
+		this.markModified("outputStyle");
+		this.save();
+	}
+
 	getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | undefined {
 		return this.settings.defaultThinkingLevel;
 	}
@@ -1087,6 +1102,41 @@ export class SettingsManager {
 		projectSettings.packages = packages;
 		this.markProjectModified("packages");
 		this.saveProjectSettings(projectSettings);
+	}
+
+	/**
+	 * Toggle whether a configured package's resources are loaded. Matches the
+	 * package by its exact settings source string. Returns false when no entry
+	 * matched. Disabled packages stay configured so a later toggle re-enables
+	 * them without reinstalling.
+	 */
+	setPackageEnabled(source: string, enabled: boolean, local = false): boolean {
+		const packages = local ? [...(this.getProjectSettings().packages ?? [])] : [...this.getPackages()];
+		let found = false;
+		for (let i = 0; i < packages.length; i++) {
+			const pkg = packages[i]!;
+			const candidate = typeof pkg === "string" ? pkg : pkg.source;
+			if (candidate !== source) continue;
+			found = true;
+			packages[i] = typeof pkg === "string" ? { source: pkg, enabled } : { ...pkg, enabled };
+		}
+		if (!found) return false;
+		if (local) {
+			this.setProjectPackages(packages);
+		} else {
+			this.setPackages(packages);
+		}
+		return true;
+	}
+
+	getDisabledExtensionHooks(): Record<string, string[]> {
+		return { ...(this.settings.disabledExtensionHooks ?? {}) };
+	}
+
+	setDisabledExtensionHooks(hooks: Record<string, string[]>): void {
+		this.globalSettings.disabledExtensionHooks = hooks;
+		this.markModified("disabledExtensionHooks");
+		this.save();
 	}
 
 	getExtensionPaths(): string[] {

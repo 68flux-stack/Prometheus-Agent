@@ -45,6 +45,8 @@ export interface SettingsConfig {
 	availableThinkingLevels: ThinkingLevel[];
 	currentTheme: string;
 	availableThemes: string[];
+	currentOutputStyle: string;
+	availableOutputStyles: string[];
 	hideThinkingBlock: boolean;
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
@@ -71,6 +73,7 @@ export interface SettingsCallbacks {
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
+	onOutputStyleChange: (outputStyle: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
@@ -332,6 +335,28 @@ export class SettingsSelectorComponent extends Container {
 							// Preview theme on selection change
 							callbacks.onThemePreview?.(value);
 						},
+					),
+			},
+			{
+				id: "output-style",
+				label: "Output style",
+				description:
+					"Behavioral preset from the output-styles directory (usually appended, or a full replacement with keep-coding-instructions: false)",
+				currentValue: config.currentOutputStyle,
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"Output Style",
+						"Select output style",
+						config.availableOutputStyles.map((s) => ({
+							value: s,
+							label: s,
+						})),
+						currentValue,
+						(value) => {
+							callbacks.onOutputStyleChange(value);
+							done(value);
+						},
+						() => done(),
 					),
 			},
 		];

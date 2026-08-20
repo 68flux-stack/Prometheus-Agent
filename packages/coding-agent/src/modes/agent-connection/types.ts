@@ -58,6 +58,74 @@ export interface AgentConnectionRuntimeFeatures {
 	executionMode: ExecutionMode;
 	jobs: BackgroundJobSnapshot[];
 	worktrees: SubagentWorktree[];
+	/** True when the transport can manage plugins/packages locally. Absent on
+	 * transports that proxy a remote runtime and have no package RPC surface. */
+	pluginManagement?: boolean;
+}
+
+export interface AgentConnectionPluginSkill {
+	name: string;
+	path: string;
+	description?: string;
+	version?: string;
+	enabled: boolean;
+}
+
+export interface AgentConnectionPluginHook {
+	event: string;
+	handlerCount: number;
+	enabled: boolean;
+}
+
+export interface AgentConnectionPluginExtension {
+	path: string;
+	hooks: AgentConnectionPluginHook[];
+}
+
+export interface AgentConnectionPluginEntry {
+	source: string;
+	scope: "user" | "project";
+	filtered: boolean;
+	enabled: boolean;
+	installedPath?: string;
+	name?: string;
+	version?: string;
+	author?: string;
+	description?: string;
+	lastUpdated?: number;
+	skillCount: number;
+}
+
+export interface AgentConnectionMarketplacePlugin {
+	name: string;
+	source: string;
+	description?: string;
+	version?: string;
+	author?: string;
+	/** True when this marketplace plugin is already installed as a package. */
+	installed: boolean;
+}
+
+export interface AgentConnectionMarketplaceEntry {
+	name: string;
+	source: string;
+	scope: "user" | "project";
+	description?: string;
+	author?: string;
+	installedPath?: string;
+	lastUpdated?: number;
+	plugins: AgentConnectionMarketplacePlugin[];
+}
+
+export interface AgentConnectionPluginList {
+	packages: AgentConnectionPluginEntry[];
+	marketplaces: AgentConnectionMarketplaceEntry[];
+}
+
+export interface AgentConnectionPluginDetail {
+	entry: AgentConnectionPluginEntry;
+	skills: AgentConnectionPluginSkill[];
+	extensions: AgentConnectionPluginExtension[];
 }
 
 export interface AgentConnectionSessionHeader {
@@ -365,6 +433,10 @@ export interface AgentConnectionSlashCommand {
 	argumentHint?: string;
 	source: "extension" | "prompt" | "skill" | "builtin";
 	sourceInfo: AgentConnectionSourceInfo;
+	/** See RpcSlashCommand.execution; only meaningful for source "builtin". */
+	execution?: "client" | "session";
+	/** Alternate names that resolve to this same command. */
+	aliases?: readonly string[];
 }
 
 export type AgentConnectionArtifactType = "context_file" | "extension" | "prompt" | "skill" | "theme";
@@ -426,6 +498,7 @@ export interface AgentConnectionResourceSnapshot {
 	prompts: AgentConnectionResourcePrompt[];
 	extensions: AgentConnectionResourceExtension[];
 	themes: AgentConnectionResourceTheme[];
+	outputStyles: string[];
 	diagnostics: AgentConnectionResourceDiagnostics;
 }
 
@@ -735,6 +808,25 @@ export interface AgentConnection {
 	abortRetry(): Promise<void>;
 
 	reload(): Promise<void>;
+
+	/**
+	 * Plugin/package management surface. Optional: transports that proxy a
+	 * remote runtime (daemon client) do not implement it, and the runtime
+	 * features `pluginManagement` flag tells clients whether to call these.
+	 */
+	listPlugins?(): Promise<AgentConnectionPluginList>;
+	getPluginDetail?(source: string): Promise<AgentConnectionPluginDetail>;
+	installPlugin?(spec: string, options?: { local?: boolean }): Promise<{ name: string; source: string }>;
+	removePlugin?(spec: string, options?: { local?: boolean }): Promise<boolean>;
+	updatePlugins?(spec?: string): Promise<void>;
+	addMarketplace?(
+		source: string,
+		options?: { local?: boolean; name?: string },
+	): Promise<{ name: string; pluginCount: number }>;
+	removeMarketplace?(nameOrSource: string, options?: { local?: boolean }): Promise<boolean>;
+	updateMarketplaces?(name?: string): Promise<{ updated: string[] }>;
+	setPackageEnabled?(source: string, enabled: boolean, options?: { local?: boolean }): Promise<void>;
+	setExtensionHookEnabled?(extensionPath: string, event: string, enabled: boolean): Promise<void>;
 	newSession(options?: AgentConnectionNewSessionOptions): Promise<{ cancelled: boolean }>;
 	switchSession(sessionPath: string, options?: AgentConnectionSwitchSessionOptions): Promise<{ cancelled: boolean }>;
 	/**

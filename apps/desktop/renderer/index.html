@@ -255,6 +255,7 @@
 <button type="button" class="settings-tab" data-settings-tab="permissions">Permissions</button>
 <button type="button" class="settings-tab" data-settings-tab="shell">Shell & sessions</button>
 <button type="button" class="settings-tab" data-settings-tab="extensions">Extensions & skills</button>
+<button type="button" class="settings-tab" data-settings-tab="plugins">Plugins</button>
 <button type="button" class="settings-tab" data-settings-tab="mcp">Integrations (MCP)</button>
 <button type="button" class="settings-tab" data-settings-tab="privacy">Privacy & data</button>
 <button type="button" class="settings-tab" data-settings-tab="advanced">Advanced</button>
@@ -268,6 +269,13 @@
 		<option value="">Default</option><option value="off">Off</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">X-high</option><option value="max">Max</option>
 	</select>
 	<small>Reasoning effort used for new sessions.</small>
+</label>
+	<label class="settings-field">
+	<span>Output style</span>
+	<select id="settings-output-style" data-setting="outputStyle" data-type="text">
+		<option value="">Default</option>
+	</select>
+	<small>Preset from <code>~/.prometheus/agent/output-styles/</code> (ships with "ELI5"), or Default for the default prompt.</small>
 </label>
 	<label class="settings-field">
 	<span>Collapse thinking by default</span>
@@ -592,6 +600,22 @@
 	<small>npm or git package sources to load extensions, skills, prompts, and themes from.</small>
 </div>
 </div></div>
+</section>
+<section class="settings-panel" data-settings-panel="plugins" role="tabpanel">
+<div class="settings-subsection" id="plugins-list-view">
+	<div class="settings-subsection-header"><h3>Plugins</h3><button type="button" class="chip-add-button" id="plugins-install">Install plugin…</button></div>
+	<p class="settings-section-note">Installed packages provide extensions, skills, prompts, and themes. Click a row to inspect its skills and hooks. Changes apply to the running agent.</p>
+	<div class="chip-add-row" id="plugins-install-ui" hidden>
+		<input type="text" id="plugins-install-source" placeholder="Plugin spec: name@marketplace, npm:name, git+https://…, or a local path" spellcheck="false" />
+		<button type="button" class="chip-add-button" id="plugins-install-run">Install</button>
+		<button type="button" class="chip-add-button secondary" id="plugins-install-cancel">Cancel</button>
+	</div>
+	<div class="plugins-marketplaces" id="plugins-marketplaces" hidden></div>
+	<div class="plugins-table-wrap" id="plugins-table-wrap" hidden></div>
+	<p class="settings-empty-note" id="plugins-empty" hidden>No plugins installed yet. Use Install plugin… to add one.</p>
+	<p class="settings-empty-note" id="plugins-unsupported" hidden>Plugin management is not available on this connection.</p>
+</div>
+<div class="settings-subsection" id="plugins-detail-view" hidden></div>
 </section>
 <section class="settings-panel" data-settings-panel="mcp" role="tabpanel">
 <div class="settings-subsection">

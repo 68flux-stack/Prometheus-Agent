@@ -4358,6 +4358,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			prompts: [],
 			extensions: options.extensions ?? [],
 			themes: [],
+			outputStyles: [],
 			diagnostics: {
 				skills: options.skillDiagnostics ?? [],
 				prompts: [],

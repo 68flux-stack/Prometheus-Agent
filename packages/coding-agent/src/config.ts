@@ -480,6 +480,21 @@ export function getBundledSkillsDir(): string {
 	return isSourceCheckout ? join(packageDir, "skills") : join(packageDir, "dist", "skills");
 }
 
+/**
+ * Get the directory containing built-in output styles shipped with the package.
+ * - For Bun binary: output-styles/ next to executable
+ * - For Node.js (dist/): dist/output-styles/
+ * - For tsx (src/): output-styles/ at the package root
+ */
+export function getBundledOutputStylesDir(): string {
+	if (isBunBinary) {
+		return join(getPackageDir(), "output-styles");
+	}
+	const packageDir = getPackageDir();
+	const isSourceCheckout = existsSync(join(packageDir, "src"));
+	return isSourceCheckout ? join(packageDir, "output-styles") : join(packageDir, "dist", "output-styles");
+}
+
 // =============================================================================
 // App Config (from package.json piConfig)
 // =============================================================================
@@ -544,6 +559,11 @@ export function getAgentDir(): string {
 /** Get path to user's custom themes directory */
 export function getCustomThemesDir(): string {
 	return join(getAgentDir(), "themes");
+}
+
+/** Get path to user's custom output styles directory (one *.md behavioral preset per style). */
+export function getCustomOutputStylesDir(): string {
+	return join(getAgentDir(), "output-styles");
 }
 
 /** Directory where daemon and client diagnostic logs are written (e.g. ~/.prometheus/agent/logs/). */

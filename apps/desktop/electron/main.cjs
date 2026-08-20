@@ -35,7 +35,11 @@ let activeProviderLogin;
 let providerLoginPromptCounter = 0;
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const cliPath = process.env.PROMETHEUS_CLI_PATH || path.join(repoRoot, "packages", "coding-agent", "dist", "cli.js");
+// Run the bundled engine entry. The unbundled dist/cli.js graph is ~2,500
+// files and each RPC/daemon/worker process pays its module resolution on every
+// spawn; the bundle (dist/bundle/cli.js) loads the same code from ~20 chunks
+// in under half the time. The bin entry and the daemon benchmarks use it too.
+const cliPath = process.env.PROMETHEUS_CLI_PATH || path.join(repoRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 const distDir = path.join(repoRoot, "packages", "coding-agent", "dist");
 const { AuthStorage } = require(path.join(distDir, "core", "auth-storage.js"));
 const { SessionManager } = require(path.join(distDir, "core", "session-manager.js"));
@@ -216,6 +220,15 @@ function saveWorkspaces(payload = {}) {
 	const { sessionWorkspaces } = getWorkspaceStore();
 	writeFileSync(getWorkspacesPath(), `${JSON.stringify({ workspaces, sessionWorkspaces })}\n`, "utf8");
 	return { workspaces };
+}
+
+// The renderer boots the engine against the first saved workspace, or the idle
+// folder when none is saved. Mirror that choice so the pre-started child at
+// launch matches the renderer's first start request and is reused, not respawned.
+function resolveInitialWorkspace() {
+	const saved = getWorkspaceStore().workspaces[0];
+	if (saved && existsSync(saved)) return path.resolve(saved);
+	return getIdleWorkspaceDir();
 }
 
 function runSessionWorker(workerData) {
@@ -716,6 +729,16 @@ async function loginProvider(payload = {}) {
 }
 
 function startAgent(options = {}) {
+	const requestedWorkspace = options.cwd ? path.resolve(options.cwd) : process.cwd();
+	const hasSessionOptions = Boolean(
+		options.sessionPath || options.provider || options.model || (Array.isArray(options.args) && options.args.length > 0),
+	);
+	const childRunning = agentProcess && !agentProcess.killed && agentProcess.exitCode === null;
+	if (childRunning && agentWorkspace && path.resolve(agentWorkspace) === requestedWorkspace && !hasSessionOptions) {
+		// The engine is already warm on this workspace (pre-started at launch or
+		// reused after a renderer reload); respawning would only cost a spawn.
+		return { workspace: agentWorkspace, generation: agentGeneration, agentDataDir: getAgentDataDir() };
+	}
 	stopAgent();
 	if (!existsSync(cliPath)) {
 		throw new Error("Prometheus is not built yet. Run `npm install` and `npm run build` from the repository root first.");
@@ -896,13 +919,26 @@ function serveRenderer() {
 			return;
 		}
 		try {
-			if (!statSync(targetPath).isFile()) throw new Error("Not a file");
+			const fileStat = statSync(targetPath);
+			if (!fileStat.isFile()) throw new Error("Not a file");
 			const contentType = targetPath.endsWith(".html")
 				? "text/html; charset=utf-8"
 				: targetPath.endsWith(".css")
 					? "text/css; charset=utf-8"
 					: "text/javascript; charset=utf-8";
-			response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-store" });
+			// Revalidation (no-cache + ETag) instead of no-store: reloads and
+			// reopened windows skip re-downloading the 224KB app.js while files
+			// changed on disk still get served fresh.
+			const eTag = `"${fileStat.mtimeMs.toString(16)}-${fileStat.size.toString(16)}"`;
+			const ifNoneMatch = String(request.headers["if-none-match"] || "")
+				.split(",")
+				.map((candidate) => candidate.trim());
+			if (ifNoneMatch.includes(eTag)) {
+				response.writeHead(304, { ETag: eTag, "Cache-Control": "no-cache" });
+				response.end();
+				return;
+			}
+			response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache", ETag: eTag });
 			createReadStream(targetPath).pipe(response);
 		} catch {
 			response.writeHead(404);
@@ -1063,6 +1099,14 @@ app.whenReady().then(() => {
 	ipcMain.handle("shell:open-path", (_event, target) => shell.openPath(target));
 	ipcMain.handle("shell:show-item", (_event, target) => shell.showItemInFolder(target));
 	ipcMain.handle("shell:open-external", (_event, target) => shell.openExternal(target));
+	// Boot the engine in parallel with the window: spawn is synchronous and
+	// cheap, so the RPC child is already running by the time the renderer
+	// connects. The window still shows immediately; nothing awaits the engine.
+	try {
+		startAgent({ cwd: resolveInitialWorkspace() });
+	} catch (error) {
+		console.error(`[prometheus] engine pre-start failed: ${error.message}`);
+	}
 	createWindow();
 
 	app.on("activate", () => {

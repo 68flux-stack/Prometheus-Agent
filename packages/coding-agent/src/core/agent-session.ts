@@ -1484,7 +1484,9 @@ export class AgentSession {
 			this._cwd,
 			sessionArtifactDir,
 		);
-		this.changeReview = config.changeReview ?? WorkspaceChangeReview.openOrCreate(this._cwd, sessionArtifactDir);
+		this.changeReview =
+			config.changeReview ??
+			WorkspaceChangeReview.openOrCreate(this._cwd, sessionArtifactDir, { deferBaseline: true });
 		this.backgroundJobs = new BackgroundJobManager({
 			artifactDir: sessionArtifactDir,
 			cwd: this._cwd,
@@ -4765,15 +4767,15 @@ export class AgentSession {
 			validToolNames.includes("ipython")
 		) {
 			promptGuidelines.push(
-				`Workspace mode: keep file work inside ${this._cwd}. If a task genuinely needs a directory outside it, call request_directory_access("<directory>", "<why>") — the user gets an accept/deny prompt. Granted directories stay open for the rest of the conversation; if the answer is denied, treat that directory as restricted and find another way.`,
+				`Workspace mode: keep file work inside ${this._cwd}. If a task genuinely needs a directory outside it, call \`await request_directory_access("<directory>", "<why>")\` — the user gets an accept/deny prompt. Granted directories stay open for the rest of the conversation; if the answer is denied, treat that directory as restricted and find another way.`,
 			);
 		} else if (this._executionPolicy.mode === "plan") {
 			promptGuidelines.push(
-				`Plan mode is active: the objective right now is to investigate and produce a plan, not to implement it. Don't edit, create, delete, or move files; don't run commands that write to disk, touch git, or reach the network. Read code, search, and reason about the approach, then present the plan directly in this conversation. There's no tool to leave plan mode — it stays active until the user switches modes themselves (e.g. \`/permissions workspace\`), so end your turn once the plan is written rather than trying to start implementing.`,
+				`Plan mode is active: the objective right now is to investigate and produce a plan, not to implement it. Don't edit, create, delete, or move files; don't run commands that write to disk or touch git. Web search (the \`websearch\` skill) is allowed for research; other network access isn't. Read code, search, and reason about the approach, then present the plan directly in this conversation. There's no tool to leave plan mode — it stays active until the user switches modes themselves (e.g. \`/permissions workspace\`), so end your turn once the plan is written rather than trying to start implementing.`,
 			);
 			if (this._executionPolicy.enforcement === "application") {
 				promptGuidelines.push(
-					`On this platform plan mode only exposes the ipython tool — other tools aren't just restricted, they're absent from your tool list. ipython is itself locked to read-only use here: writes, subprocess launches, and most network calls raise a PermissionError. Use it for reading and searching, not for making changes.`,
+					`On this platform plan mode only exposes the ipython tool — other tools aren't just restricted, they're absent from your tool list. ipython is itself locked to read-only use here: writes, subprocess launches, and most network calls raise a PermissionError, except the websearch skill, which still works. Use it for reading and searching, not for making changes.`,
 				);
 			}
 		}
@@ -9108,13 +9110,13 @@ export class AgentSession {
 				sourceInfo: template.sourceInfo,
 			}));
 
-			// Only "session" commands run identically for every client (they parse the
-			// raw prompt text in agent-session, e.g. _parseGoalSlashCommand). The rest
-			// (e.g. /model, /settings) open interactive-mode-only selector UI and have
-			// no RPC-client equivalent, so they'd be dead entries here.
-			const builtins: SlashCommandInfo[] = BUILTIN_SLASH_COMMANDS.filter(
-				(command) => command.execution === "session",
-			).map((command) => ({
+			// Advertise the full builtin set so every consumer of runtime.getCommands
+			// (TUI, desktop, headless RPC clients) can surface all commands without a
+			// per-client hardcoded list; each client decides what a command means to
+			// it. Session builtins parse the raw prompt text in agent-session (e.g.
+			// _parseGoalSlashCommand); the rest are handled client-side or passed
+			// through as prompt text.
+			const builtins: SlashCommandInfo[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
 				name: command.name,
 				description: command.description,
 				source: "builtin",

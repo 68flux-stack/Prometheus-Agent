@@ -89,6 +89,17 @@
 		return paths;
 	}
 
+	// Ground truth from the kernel's read-side audit-hook ledger (mirrors mutatedPaths),
+	// so a read the regex heuristics below can't resolve statically (a loop variable, a
+	// helper function, an f-string path) still gets its real path instead of "a file".
+	function detailReadPaths(details) {
+		const paths = [];
+		if (Array.isArray(details?.readPaths)) {
+			for (const path of details.readPaths) if (typeof path === "string") paths.push(path);
+		}
+		return paths;
+	}
+
 	function groupSummary(group) {
 		if (group.files.length === 1) return `${group.verb} ${group.files[0]}`;
 		return `${group.verb} ${group.files.length} files`;
@@ -223,6 +234,7 @@
 		for (const [key, path] of mutationDisplays) {
 			if (!explicitMutations.has(key)) addPath(edits, path, workspace);
 		}
+		for (const path of detailReadPaths(details)) addRead(path);
 		for (const key of creates.keys()) reads.delete(key);
 		if (unresolvedReadVariables.size > 0 && reads.size === 0) reads.set("__unknown__", "a file");
 

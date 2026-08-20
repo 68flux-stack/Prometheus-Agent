@@ -6,7 +6,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSessionMessageReceipt, AgentSessionMessageSafetyStatus } from "../../core/agent-messages.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -17,6 +17,7 @@ import type {
 	AgentHeartbeatUpdateAction,
 } from "../../core/cron-jobs.js";
 import type { RefinementResult } from "../../core/refinement/index.js";
+import type { RlmMaxDepthStatus, SetRlmMaxDepthResult } from "../../core/rlm-max-depth.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import type { AgentConnectionHeartbeat } from "../agent-connection/types.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -365,6 +366,61 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.send({ type: "get_session_stats" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Get the exact system prompt sent to the model.
+	 */
+	async getSystemPrompt(): Promise<string> {
+		const response = await this.send({ type: "get_system_prompt" });
+		return this.getData<{ systemPrompt: string }>(response).systemPrompt;
+	}
+
+	/**
+	 * Get rendered changelog entries, newest first.
+	 */
+	async getChangelog(): Promise<string> {
+		const response = await this.send({ type: "get_changelog" });
+		return this.getData<{ markdown: string }>(response).markdown;
+	}
+
+	/**
+	 * Get the logs directory and the files currently in it.
+	 */
+	async getLogsInfo(): Promise<{ dir: string; files: { name: string; sizeBytes: number }[] }> {
+		const response = await this.send({ type: "get_logs_info" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Get the current per-chat RLM max depth.
+	 */
+	async getRlmMaxDepthStatus(): Promise<RlmMaxDepthStatus> {
+		const response = await this.send({ type: "get_rlm_max_depth" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Set the per-chat RLM max depth, optionally saving it as the global default.
+	 */
+	async setRlmMaxDepth(maxDepth: number, options?: { global?: boolean }): Promise<SetRlmMaxDepthResult> {
+		const response = await this.send({ type: "set_rlm_max_depth", maxDepth, global: options?.global });
+		return this.getData(response);
+	}
+
+	/**
+	 * Set the service tier ("priority" enables fast mode where supported).
+	 */
+	async setServiceTier(serviceTier: ServiceTier): Promise<void> {
+		await this.send({ type: "set_service_tier", serviceTier });
+	}
+
+	/**
+	 * Import and resume a session from a JSONL file.
+	 */
+	async importSession(path: string, cwd?: string): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "import_session", path, cwd });
 		return this.getData(response);
 	}
 

@@ -89,6 +89,8 @@ export interface ConfiguredPackage {
 	scope: "user" | "project";
 	filtered: boolean;
 	installedPath?: string;
+	/** False when the package is configured but intentionally not loaded. */
+	enabled: boolean;
 }
 
 export interface PackageManager {
@@ -940,6 +942,7 @@ export class DefaultPackageManager implements PackageManager {
 				scope: "user",
 				filtered: typeof pkg === "object",
 				installedPath: this.getInstalledPath(source, "user"),
+				enabled: typeof pkg === "string" || pkg.enabled !== false,
 			});
 		}
 
@@ -950,6 +953,7 @@ export class DefaultPackageManager implements PackageManager {
 				scope: "project",
 				filtered: typeof pkg === "object",
 				installedPath: this.getInstalledPath(source, "project"),
+				enabled: typeof pkg === "string" || pkg.enabled !== false,
 			});
 		}
 
@@ -1211,6 +1215,11 @@ export class DefaultPackageManager implements PackageManager {
 		for (const { pkg, scope } of sources) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			const filter = typeof pkg === "object" ? pkg : undefined;
+			// Configured-but-disabled packages resolve to no resources. Leaf them
+			// configured so toggling re-enables without reinstalling.
+			if (typeof pkg === "object" && pkg.enabled === false) {
+				continue;
+			}
 			const parsed = this.parseSource(sourceStr);
 			const metadata: PathMetadata = { source: sourceStr, scope, origin: "package" };
 

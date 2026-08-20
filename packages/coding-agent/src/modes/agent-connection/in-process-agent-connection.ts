@@ -22,6 +22,7 @@ import { SessionManager } from "../../core/session-manager.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import { type SideQuestionRun, startSideQuestion } from "../../core/side-question.js";
 import { waitForHeadlessCompletion } from "../headless-completion.js";
+import { PluginOps } from "./plugin-ops.js";
 import {
 	createAgentConnectionCommands,
 	createAgentConnectionResourceSnapshot,
@@ -44,6 +45,8 @@ import type {
 	AgentConnectionNavigateTreeOptions,
 	AgentConnectionNavigateTreeResult,
 	AgentConnectionNewSessionOptions,
+	AgentConnectionPluginDetail,
+	AgentConnectionPluginList,
 	AgentConnectionPromptOptions,
 	AgentConnectionQueueMode,
 	AgentConnectionQueueState,
@@ -161,7 +164,62 @@ export class InProcessAgentConnection implements AgentConnection {
 			executionMode: this.session.getExecutionMode(),
 			jobs: this.session.backgroundJobs.list(),
 			worktrees: this.session.subagentWorktrees.list(),
+			pluginManagement: true,
 		};
+	}
+
+	// =========================================================================
+	// Plugin / package management
+	// Local-only surface: the in-process connection owns the runtime services,
+	// so package operations run directly against settings + the resource loader.
+	// Daemon-backed connections route through the daemon protocol instead.
+	// =========================================================================
+
+	private get pluginOps(): PluginOps {
+		return new PluginOps(this.runtimeHost.services);
+	}
+
+	async listPlugins(): Promise<AgentConnectionPluginList> {
+		return this.pluginOps.listPlugins();
+	}
+
+	async getPluginDetail(source: string): Promise<AgentConnectionPluginDetail> {
+		return this.pluginOps.getPluginDetail(source);
+	}
+
+	async installPlugin(spec: string, options?: { local?: boolean }): Promise<{ name: string; source: string }> {
+		return this.pluginOps.installPlugin(spec, options);
+	}
+
+	async removePlugin(spec: string, options?: { local?: boolean }): Promise<boolean> {
+		return this.pluginOps.removePlugin(spec, options);
+	}
+
+	async updatePlugins(spec?: string): Promise<void> {
+		await this.pluginOps.updatePlugins(spec);
+	}
+
+	async addMarketplace(
+		source: string,
+		options?: { local?: boolean; name?: string },
+	): Promise<{ name: string; pluginCount: number }> {
+		return this.pluginOps.addMarketplace(source, options);
+	}
+
+	async removeMarketplace(nameOrSource: string, options?: { local?: boolean }): Promise<boolean> {
+		return this.pluginOps.removeMarketplace(nameOrSource, options);
+	}
+
+	async updateMarketplaces(name?: string): Promise<{ updated: string[] }> {
+		return this.pluginOps.updateMarketplaces(name);
+	}
+
+	async setPackageEnabled(source: string, enabled: boolean, options?: { local?: boolean }): Promise<void> {
+		this.pluginOps.setPackageEnabled(source, enabled, options?.local);
+	}
+
+	async setExtensionHookEnabled(extensionPath: string, event: string, enabled: boolean): Promise<void> {
+		this.pluginOps.setExtensionHookEnabled(extensionPath, event, enabled);
 	}
 
 	async setExecutionMode(mode: ExecutionMode): Promise<AgentConnectionRuntimeFeatures> {

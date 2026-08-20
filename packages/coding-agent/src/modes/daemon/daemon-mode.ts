@@ -118,6 +118,7 @@ import { resolveSessionPath } from "../../core/session-resolver.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import { type SideQuestionRun, startSideQuestion } from "../../core/side-question.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
+import { PluginOps } from "../agent-connection/plugin-ops.js";
 import {
 	createAgentConnectionCommands,
 	createAgentConnectionResourceSnapshot,
@@ -276,6 +277,7 @@ const DAEMON_COMMAND_TYPES: ReadonlySet<string> = new Set([
 	"get_messages",
 	"get_session_stats",
 	"runtime_control",
+	"plugin_control",
 	"get_context_tree",
 	"get_commands",
 	"get_resource_snapshot",
@@ -4216,6 +4218,57 @@ export class AgentDaemon {
 						return success(command.id, "runtime_control", snapshot());
 				}
 				throw new Error("Unknown runtime control action");
+			}
+
+			case "plugin_control": {
+				const state = this.getSessionState(command.activeSessionId);
+				const pluginOps = new PluginOps(state.runtime.services);
+				switch (command.action.type) {
+					case "list":
+						return success(command.id, "plugin_control", pluginOps.listPlugins());
+					case "detail":
+						return success(command.id, "plugin_control", pluginOps.getPluginDetail(command.action.source));
+					case "install":
+						return success(
+							command.id,
+							"plugin_control",
+							await pluginOps.installPlugin(command.action.spec, command.action.options),
+						);
+					case "remove":
+						return success(
+							command.id,
+							"plugin_control",
+							await pluginOps.removePlugin(command.action.spec, command.action.options),
+						);
+					case "update":
+						await pluginOps.updatePlugins(command.action.spec);
+						return success(command.id, "plugin_control");
+					case "add_marketplace":
+						return success(
+							command.id,
+							"plugin_control",
+							await pluginOps.addMarketplace(command.action.source, command.action.options),
+						);
+					case "remove_marketplace":
+						return success(
+							command.id,
+							"plugin_control",
+							await pluginOps.removeMarketplace(command.action.nameOrSource, command.action.options),
+						);
+					case "update_marketplaces":
+						return success(command.id, "plugin_control", await pluginOps.updateMarketplaces(command.action.name));
+					case "set_enabled":
+						pluginOps.setPackageEnabled(command.action.source, command.action.enabled, command.action.local);
+						return success(command.id, "plugin_control");
+					case "set_hook_enabled":
+						pluginOps.setExtensionHookEnabled(
+							command.action.extensionPath,
+							command.action.event,
+							command.action.enabled,
+						);
+						return success(command.id, "plugin_control");
+				}
+				throw new Error("Unknown plugin control action");
 			}
 
 			case "get_context_tree": {

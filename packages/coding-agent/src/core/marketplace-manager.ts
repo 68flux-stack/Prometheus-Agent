@@ -4,7 +4,6 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { windowsShellSpawn } from "../utils/child-process.js";
 import { parseGitUrl } from "../utils/git.js";
-import { isLocalPath } from "../utils/paths.js";
 import type { DefaultPackageManager } from "./package-manager.js";
 import type { MarketplaceConfig, MarketplacePlugin, SettingsManager } from "./settings-manager.js";
 
@@ -37,6 +36,19 @@ const MANIFEST_CANDIDATE_PATHS = [
 	["plugin.json"],
 	["package.json"],
 ];
+
+/**
+ * True only for sources that are unambiguously a filesystem path:
+ * relative ("./", "../"), home-relative ("~"), or absolute (including
+ * Windows drive-letter paths). Anything else - notably a bare
+ * "owner/repo" GitHub shorthand - must not be resolved against disk.
+ */
+function isExplicitLocalPath(value: string): boolean {
+	if (value.startsWith("./") || value.startsWith("../") || value.startsWith("~")) return true;
+	if (value.startsWith(".\\") || value.startsWith("..\\")) return true;
+	if (/^[a-zA-Z]:[\\/]/.test(value)) return true;
+	return isAbsolute(value);
+}
 
 function runGit(args: string[], cwd?: string): { success: boolean; stdout: string; stderr: string } {
 	const launch = windowsShellSpawn("git", args);
@@ -73,19 +85,24 @@ export class MarketplaceManager {
 
 	normalizeSource(source: string): { type: "local" | "git"; normalized: string; defaultName: string } {
 		const trimmed = source.trim();
-		if (isLocalPath(trimmed)) {
+
+		// Only treat the source as a filesystem path when it is explicitly local
+		// (relative "./"/"../", "~", or an absolute path). A bare "owner/repo" or
+		// "name" string must never be resolved against disk, matching Claude Code's
+		// `/plugin marketplace add` behavior of defaulting to GitHub.
+		if (isExplicitLocalPath(trimmed)) {
 			const abs = isAbsolute(trimmed) ? trimmed : resolve(this.cwd, trimmed);
 			return { type: "local", normalized: abs, defaultName: basename(abs) };
 		}
 
-		// Check git url or owner/repo shorthand
+		// Check git url (explicit protocol, "git:" prefix, or a recognized host)
 		const gitParsed = parseGitUrl(trimmed);
 		if (gitParsed) {
 			const repoName = gitParsed.path.split("/").pop() || "marketplace";
 			return { type: "git", normalized: gitParsed.repo, defaultName: repoName };
 		}
 
-		// Shorthand owner/repo (e.g. DietrichGebert/ponytail)
+		// Shorthand owner/repo (e.g. DietrichGebert/ponytail) resolves against GitHub
 		const shorthandMatch = /^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_.-]+))?$/.exec(trimmed);
 		if (shorthandMatch) {
 			const owner = shorthandMatch[1]!;
@@ -95,6 +112,7 @@ export class MarketplaceManager {
 			return { type: "git", normalized: url, defaultName: repo };
 		}
 
+		// Fallback: a bare name with no slash and no recognized git form; treat as local.
 		return { type: "local", normalized: resolve(this.cwd, trimmed), defaultName: basename(trimmed) };
 	}
 

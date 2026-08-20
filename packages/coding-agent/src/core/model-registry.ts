@@ -436,6 +436,7 @@ export class ModelRegistry {
 	private explicitPrivatePrimeInferenceModelIds = new Set<string>();
 	private openAICodexModelsCache: { authFingerprint: string; modelIds: Set<string>; refreshedAt: number } | undefined;
 	private backgroundPrivatePrimeAuthorization: { fingerprint: string; promise: Promise<void> } | undefined;
+	private inFlightRefreshAvailableModels: Promise<Model<Api>[]> | undefined;
 	private loadError: string | undefined = undefined;
 
 	/** Re-register dynamic OAuth providers (e.g. user MCP servers) after refresh() resets the registry. */
@@ -779,6 +780,19 @@ export class ModelRegistry {
 	}
 
 	async refreshAvailableModels(): Promise<Model<Api>[]> {
+		if (this.inFlightRefreshAvailableModels) {
+			return this.inFlightRefreshAvailableModels;
+		}
+		const refresh = this.refreshAvailableModelsInternal().finally(() => {
+			if (this.inFlightRefreshAvailableModels === refresh) {
+				this.inFlightRefreshAvailableModels = undefined;
+			}
+		});
+		this.inFlightRefreshAvailableModels = refresh;
+		return refresh;
+	}
+
+	private async refreshAvailableModelsInternal(): Promise<Model<Api>[]> {
 		const previousPrivateModelIds = new Set(this.authorizedPrivatePrimeInferenceModelIds);
 		const previousTeamId = this.authorizedPrivatePrimeInferenceTeamId;
 		this.refresh();
