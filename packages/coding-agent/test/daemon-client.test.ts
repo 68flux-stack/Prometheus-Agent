@@ -248,6 +248,39 @@ describe("DaemonClient", () => {
 		await expect(request).rejects.toThrow("closed before the operation completed");
 	});
 
+	it("does not send plugin management to an old daemon without the capability", async () => {
+		const client = new DaemonClient("/tmp/prometheus.sock");
+		const connect = client.connect();
+		const socket = netMock.sockets[0]!;
+		socket.emit("connect");
+		await connect;
+		emitHello(socket, DAEMON_PROTOCOL_VERSION, []);
+
+		await expect(
+			client.request({ type: "plugin_control", activeSessionId: "active-1", action: { type: "list" } }),
+		).rejects.toThrow("does not support plugin_management");
+		expect(socket.writes).toEqual([]);
+		client.close();
+	});
+
+	it("sends plugin management to a capable daemon without requiring a schema bump", async () => {
+		const client = new DaemonClient("/tmp/prometheus.sock");
+		const connect = client.connect();
+		const socket = netMock.sockets[0]!;
+		socket.emit("connect");
+		await connect;
+		emitHello(socket, DAEMON_PROTOCOL_VERSION, ["plugin_management"], DAEMON_SCHEMA_REVISION - 1);
+
+		const request = client.request({
+			type: "plugin_control",
+			activeSessionId: "active-1",
+			action: { type: "list" },
+		});
+		await vi.waitFor(() => expect(socket.writes).toHaveLength(1));
+		client.close();
+		await expect(request).rejects.toThrow("closed before the operation completed");
+	});
+
 	it("rejects an old daemon before requesting session state", async () => {
 		const client = new DaemonClient("/tmp/prometheus.sock");
 		const connect = client.connect();

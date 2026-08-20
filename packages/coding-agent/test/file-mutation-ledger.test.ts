@@ -150,10 +150,12 @@ describe("kernel audit-hook file-mutation ledger", () => {
 		);
 	}, 180_000);
 
-	it("does not report reads, and does not report writes outside the cwd", async () => {
+	it("reports reads under the cwd, and does not report reads or writes outside the cwd", async () => {
 		const outsideDir = join(tmpdir(), `pi-fs-ledger-outside-${Date.now()}`);
 		mkdirSync(outsideDir, { recursive: true });
 		writeFileSync(join(tempDir, "readme.txt"), "content");
+		writeFileSync(join(tempDir, "via_pathlib_read.txt"), "content");
+		writeFileSync(join(outsideDir, "outside_readme.txt"), "content");
 
 		try {
 			provisioner = new IpythonKernelProvisioner(tempDir);
@@ -161,8 +163,10 @@ describe("kernel audit-hook file-mutation ledger", () => {
 
 			const result = await manager.execute(
 				[
-					"import os",
+					"import os, pathlib",
 					"_ = open('readme.txt').read()",
+					"_ = pathlib.Path('via_pathlib_read.txt').read_text()",
+					`_ = open(os.path.join(${JSON.stringify(outsideDir)}, 'outside_readme.txt')).read()`,
 					`open(os.path.join(${JSON.stringify(outsideDir)}, 'outside.txt'), 'w').close()`,
 					"print('done')",
 				].join("\n"),
@@ -171,6 +175,9 @@ describe("kernel audit-hook file-mutation ledger", () => {
 			expect(result.status).toBe("ok");
 			expect(result.stdout).toContain("done");
 			expect(result.mutatedPaths ?? []).toEqual([]);
+			const readNames = (result.readPaths ?? []).map((p) => p.split(/[\\/]/).pop());
+			expect(readNames).toEqual(expect.arrayContaining(["readme.txt", "via_pathlib_read.txt"]));
+			expect(readNames).not.toContain("outside_readme.txt");
 		} finally {
 			try {
 				rmSync(outsideDir, { recursive: true, force: true });
@@ -184,10 +191,12 @@ describe("kernel audit-hook file-mutation ledger", () => {
 		provisioner = new IpythonKernelProvisioner(tempDir);
 		const manager = await provisioner.ensure();
 
-		const first = await manager.execute("open('once.txt', 'w').close()");
+		const first = await manager.execute("open('once.txt', 'w').close()\n_ = open('once.txt').read()");
 		expect((first.mutatedPaths ?? []).map((p) => p.split(/[\\/]/).pop())).toContain("once.txt");
+		expect((first.readPaths ?? []).map((p) => p.split(/[\\/]/).pop())).toContain("once.txt");
 
 		const second = await manager.execute("x = 1 + 1");
 		expect(second.mutatedPaths ?? []).toEqual([]);
+		expect(second.readPaths ?? []).toEqual([]);
 	}, 180_000);
 });

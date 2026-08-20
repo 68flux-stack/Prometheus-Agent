@@ -483,6 +483,15 @@ class FakeDaemonClient {
 						filePath: "/tmp/not-found.jsonl",
 					},
 				};
+			case "runtime_control":
+				return {
+					type: "response",
+					command: command.type,
+					success: true,
+					data: { executionMode: "default", jobs: [], worktrees: [] },
+				};
+			case "plugin_control":
+				return { type: "response", command: command.type, success: true, data: {} };
 			default:
 				throw new Error(`Unexpected command: ${command.type}`);
 		}
@@ -724,6 +733,44 @@ describe("DaemonAgentConnection", () => {
 
 		await expect(connection.getRuntimeFeatures()).rejects.toThrow("require a newer Prometheus daemon");
 		expect(fakeClient.requests).toEqual([]);
+	});
+
+	it("refuses plugin management when attached to an older daemon", async () => {
+		const fakeClient = new FakeDaemonClient();
+		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1");
+
+		await expect(connection.listPlugins()).rejects.toThrow("requires a newer Prometheus daemon");
+		expect(fakeClient.requests).toEqual([]);
+	});
+
+	it("routes plugin management through plugin_control when the daemon supports it", async () => {
+		const fakeClient = new FakeDaemonClient();
+		fakeClient.serverCapabilities.add("plugin_management");
+		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1");
+
+		await expect(connection.listPlugins()).resolves.toEqual({});
+		expect(fakeClient.requests).toEqual([
+			{ type: "plugin_control", activeSessionId: "active-1", action: { type: "list" } },
+		]);
+
+		await expect(connection.getPluginDetail("plugin-a")).resolves.toEqual({});
+		expect(fakeClient.requests).toHaveLength(2);
+		expect(fakeClient.requests[1]).toEqual({
+			type: "plugin_control",
+			activeSessionId: "active-1",
+			action: { type: "detail", source: "plugin-a" },
+		});
+	});
+
+	it("advertises plugin management in runtime features only when the daemon supports it", async () => {
+		const fakeClient = new FakeDaemonClient();
+		fakeClient.serverCapabilities.add("runtime_controls");
+		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1");
+
+		await expect(connection.getRuntimeFeatures()).resolves.toMatchObject({ pluginManagement: false });
+
+		fakeClient.serverCapabilities.add("plugin_management");
+		await expect(connection.getRuntimeFeatures()).resolves.toMatchObject({ pluginManagement: true });
 	});
 
 	it("capability-gates root-tree RLM child-limit commands", async () => {

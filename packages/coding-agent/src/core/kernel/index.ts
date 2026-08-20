@@ -154,6 +154,9 @@ export const AGENT_MESSAGE_DISPLAY_MIME = "application/vnd.prometheus.agent-mess
  */
 export const FILE_MUTATION_DISPLAY_MIME = "application/vnd.prometheus.file-mutations+json";
 
+/** MIME tag the same audit-hook ledger flushes read paths under, once per cell. */
+export const FILE_READ_DISPLAY_MIME = "application/vnd.prometheus.file-reads+json";
+
 /**
  * Hard ceiling on a single attachment's base64 payload, a defensive guard
  * against a runaway direct `display_data` emit. The `attach-image` skill caps
@@ -211,6 +214,8 @@ export interface ExecuteResult {
 	 * subprocesses are not visible to the hook and are absent here.
 	 */
 	mutatedPaths?: string[];
+	/** Absolute paths under the kernel cwd read via Python-level file APIs, same ledger. */
+	readPaths?: string[];
 	status: "ok" | "error" | "aborted";
 	error?: { ename: string; evalue: string; traceback: string[] };
 	durationMs: number;
@@ -229,11 +234,11 @@ function parseDiffDisplay(payload: unknown): KernelDiffDisplay | undefined {
 }
 
 /**
- * Parse a {@link FILE_MUTATION_DISPLAY_MIME} payload, tolerating malformed input.
- * The payload is `{"paths": [...]}`; non-string entries are dropped individually
- * rather than discarding the whole batch.
+ * Parse a {@link FILE_MUTATION_DISPLAY_MIME} or {@link FILE_READ_DISPLAY_MIME} payload,
+ * tolerating malformed input. The payload is `{"paths": [...]}`; non-string entries are
+ * dropped individually rather than discarding the whole batch.
  */
-function parseFileMutationDisplay(payload: unknown): string[] | undefined {
+function parsePathListDisplay(payload: unknown): string[] | undefined {
 	if (!isRecord(payload)) {
 		return undefined;
 	}
@@ -379,6 +384,7 @@ interface ActiveExecution {
 	attachments: KernelAttachment[];
 	sentAgentMessages: KernelSentAgentMessage[];
 	mutatedPaths: Set<string>;
+	readPaths: Set<string>;
 	error?: ExecuteResult["error"];
 	status: ExecuteResult["status"];
 	settled: boolean;
@@ -1020,6 +1026,7 @@ export class KernelManager {
 			attachments: [],
 			sentAgentMessages: [],
 			mutatedPaths: new Set(),
+			readPaths: new Set(),
 			status: "ok",
 			settled: false,
 			resolve: result.resolve,
@@ -1160,9 +1167,13 @@ export class KernelManager {
 			}
 			const sentAgentMessage = parseSentAgentMessage(c.data?.[AGENT_MESSAGE_DISPLAY_MIME]);
 			if (sentAgentMessage) execution.sentAgentMessages.push(sentAgentMessage);
-			const mutatedPaths = parseFileMutationDisplay(c.data?.[FILE_MUTATION_DISPLAY_MIME]);
+			const mutatedPaths = parsePathListDisplay(c.data?.[FILE_MUTATION_DISPLAY_MIME]);
 			if (mutatedPaths) {
 				for (const path of mutatedPaths) execution.mutatedPaths.add(path);
+			}
+			const readPaths = parsePathListDisplay(c.data?.[FILE_READ_DISPLAY_MIME]);
+			if (readPaths) {
+				for (const path of readPaths) execution.readPaths.add(path);
 			}
 		} else if (t === "error") {
 			const c = incoming.content as { ename: string; evalue: string; traceback: string[] };
@@ -1225,6 +1236,7 @@ export class KernelManager {
 				attachments: execution.attachments.length > 0 ? execution.attachments : undefined,
 				sentAgentMessages: execution.sentAgentMessages.length > 0 ? execution.sentAgentMessages : undefined,
 				mutatedPaths: execution.mutatedPaths.size > 0 ? [...execution.mutatedPaths] : undefined,
+				readPaths: execution.readPaths.size > 0 ? [...execution.readPaths] : undefined,
 				error: execution.error,
 				status,
 				durationMs: Date.now() - execution.started,

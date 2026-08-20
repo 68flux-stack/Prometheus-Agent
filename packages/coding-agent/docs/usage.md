@@ -147,6 +147,27 @@ Replace the default system prompt with:
 
 Append to the default prompt without replacing it with `APPEND_SYSTEM.md` in either location.
 
+### Output Styles
+
+Output styles are named, reusable behavioral presets, like Claude Code's output styles. Prometheus ships with a built-in `ELI5` style and seeds `~/.prometheus/agent/output-styles/` with it the first time the agent runs, so it's ready to use without any setup. Select a style from `/settings` → Output style, or set it directly in `settings.json` with `"outputStyle": "ELI5"`. The built-in `"default"` value (or leaving `outputStyle` unset) adds nothing extra.
+
+Add your own styles by putting one `.md` file per style in `~/.prometheus/agent/output-styles/` (e.g. `concise.md`). A custom style with the same name as a bundled one wins, and the seeding step never overwrites a directory that already exists, so your edits and deletions stick.
+
+An output style file may start with a `---`-delimited frontmatter block; it's stripped before use:
+
+```markdown
+---
+name: ELI5
+description: keep it simple pls
+keep-coding-instructions: true
+---
+
+Talk to me like I'm 5.
+```
+
+- `keep-coding-instructions: true` (default, or no frontmatter at all): the body is appended to the default system prompt (alongside `APPEND_SYSTEM.md`, if present), so the agent keeps its normal tool-use instructions and only picks up the style's tone/behavior guidance.
+- `keep-coding-instructions: false`: the body fully replaces the system prompt, the same way `SYSTEM.md` does — use this for a style that should not follow the default agent instructions at all.
+
 ## Exporting and Sharing Sessions
 
 Use `/export [file]` to write a session to HTML.

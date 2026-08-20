@@ -1389,6 +1389,81 @@ describe("agentLoop with AgentMessage", () => {
 		expect(parallelObserved).toBe(true);
 	});
 
+	it("should cap tool calls at 10 per turn and reject the rest with an error result", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		let executeCount = 0;
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executeCount++;
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const requestedCalls = Array.from({ length: 12 }, (_, i) => ({
+			type: "toolCall" as const,
+			id: `tool-${i + 1}`,
+			name: "echo",
+			arguments: { value: `${i + 1}` },
+		}));
+
+		const userPrompt: AgentMessage = createUserMessage("echo twelve");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolExecution: "parallel",
+		};
+
+		let callIndex = 0;
+		const stream = agentLoop([userPrompt], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					const message = createAssistantMessage(requestedCalls, "toolUse");
+					mockStream.push({ type: "done", reason: "toolUse", message });
+				} else {
+					const message = createAssistantMessage([{ type: "text", text: "done" }]);
+					mockStream.push({ type: "done", reason: "stop", message });
+				}
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const toolResults = events.flatMap((event) =>
+			event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
+		);
+
+		expect(executeCount).toBe(10);
+		expect(toolResults).toHaveLength(12);
+		expect(toolResults.slice(0, 10).every((r) => !r.isError)).toBe(true);
+		const rejected = toolResults.slice(10);
+		expect(rejected.map((r) => r.toolCallId)).toEqual(["tool-11", "tool-12"]);
+		expect(rejected.every((r) => r.isError)).toBe(true);
+		for (const r of rejected) {
+			const text = r.content.find((c) => c.type === "text");
+			expect(text && "text" in text ? text.text : "").toContain("10");
+		}
+	});
+
 	const naturalCompletionCases: Array<{
 		name: string;
 		stopBefore: "always" | "afterTurn" | "never";

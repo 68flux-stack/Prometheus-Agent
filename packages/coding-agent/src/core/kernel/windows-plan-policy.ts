@@ -98,11 +98,11 @@ if not getattr(_prometheus_plan_sys, "_prometheus_plan_policy_installed", False)
                 for root in _PROMETHEUS_WRITE_ROOTS
             )
 
-        def request_directory_access(path, reason=""):
+        async def request_directory_access(path, reason=""):
             """Ask the user to allow this directory for the rest of the conversation."""
             import rlm as _prometheus_rlm
 
-            response = _prometheus_rlm.host_request(
+            response = await _prometheus_rlm.host_request(
                 "permission.request_directory", {"path": str(path), "reason": str(reason)}
             )
             if response.get("granted"):

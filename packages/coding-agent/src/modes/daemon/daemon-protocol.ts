@@ -60,8 +60,10 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
 // Revision 15 adds capability-gated desktop runtime controls.
 // Revision 16 advertises root-tree RLM child-limit controls exposed through session commands.
-export const DAEMON_SCHEMA_REVISION = 16;
-export const DAEMON_SCHEMA_ID = "protocol-7-schema-16-1f38a274efcc";
+// Revision 17 adds plugin (package/marketplace) management exposed through the
+// plugin_control session command, gated by the plugin_management capability.
+export const DAEMON_SCHEMA_REVISION = 17;
+export const DAEMON_SCHEMA_ID = "protocol-7-schema-17-e9bb7b405b7d";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -101,7 +103,11 @@ export type DaemonServerCapability =
 	| "session_input_admission"
 	| "prompt_admission_cancellation"
 	| "runtime_controls"
-	| "rlm_child_limits";
+	| "rlm_child_limits"
+	// The daemon executes package/marketplace management (plugin_control)
+	// against its session runtime, so clients connected through the daemon get
+	// the full plugin surface. Clients must check before sending.
+	| "plugin_management";
 
 export type DaemonReplayStatus = "complete" | "partial" | "unavailable";
 
@@ -141,6 +147,7 @@ export const DAEMON_DEFAULT_SERVER_CAPABILITIES: readonly DaemonServerCapability
 	"prompt_admission_cancellation",
 	"runtime_controls",
 	"rlm_child_limits",
+	"plugin_management",
 ];
 
 export interface DaemonRuntimeIdentity {
@@ -529,6 +536,22 @@ export type DaemonCommand =
 				| { type: "discard_worktree"; id: string };
 	  }
 	| { id?: string; type: "get_context_tree"; activeSessionId: string }
+	| {
+			id?: string;
+			type: "plugin_control";
+			activeSessionId: string;
+			action:
+				| { type: "list" }
+				| { type: "detail"; source: string }
+				| { type: "install"; spec: string; options?: { local?: boolean } }
+				| { type: "remove"; spec: string; options?: { local?: boolean } }
+				| { type: "update"; spec?: string }
+				| { type: "add_marketplace"; source: string; options?: { local?: boolean; name?: string } }
+				| { type: "remove_marketplace"; nameOrSource: string; options?: { local?: boolean } }
+				| { type: "update_marketplaces"; name?: string }
+				| { type: "set_enabled"; source: string; enabled: boolean; local?: boolean }
+				| { type: "set_hook_enabled"; extensionPath: string; event: string; enabled: boolean };
+	  }
 	| { id?: string; type: "get_commands"; activeSessionId: string }
 	| { id?: string; type: "get_resource_snapshot"; activeSessionId: string }
 	| { id?: string; type: "get_model_catalog"; activeSessionId: string }
@@ -703,6 +726,7 @@ export const DAEMON_COMMAND_COMPATIBILITY = {
 	get_messages: LEGACY_DAEMON_COMMAND,
 	get_session_stats: LEGACY_DAEMON_COMMAND,
 	runtime_control: { minProtocol: 7, capability: "runtime_controls" },
+	plugin_control: { minProtocol: 7, capability: "plugin_management" },
 	get_context_tree: LEGACY_DAEMON_COMMAND,
 	get_commands: LEGACY_DAEMON_COMMAND,
 	get_resource_snapshot: LEGACY_DAEMON_COMMAND,

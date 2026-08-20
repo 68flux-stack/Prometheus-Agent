@@ -92,6 +92,14 @@ describe("daemon protocol helpers", () => {
 		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).toContain("runtime_controls");
 	});
 
+	it("capability-gates desktop plugin management", () => {
+		expect(DAEMON_COMMAND_COMPATIBILITY.plugin_control).toEqual({
+			minProtocol: 7,
+			capability: "plugin_management",
+		});
+		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).toContain("plugin_management");
+	});
+
 	it("advertises optional root-tree RLM child limits without a protocol-version bump", () => {
 		expect(DAEMON_PROTOCOL_VERSION).toBe(7);
 		expect(DAEMON_SCHEMA_REVISION).toBeGreaterThanOrEqual(16);

@@ -61,6 +61,8 @@ import type {
 	AgentConnectionNavigateTreeOptions,
 	AgentConnectionNavigateTreeResult,
 	AgentConnectionNewSessionOptions,
+	AgentConnectionPluginDetail,
+	AgentConnectionPluginList,
 	AgentConnectionPromptOptions,
 	AgentConnectionQueueMode,
 	AgentConnectionQueueState,
@@ -489,7 +491,11 @@ export class DaemonAgentConnection implements AgentConnection {
 	}
 
 	async getRuntimeFeatures(): Promise<AgentConnectionRuntimeFeatures> {
-		return this.runtimeControl({ type: "snapshot" });
+		const features = await this.runtimeControl<AgentConnectionRuntimeFeatures>({ type: "snapshot" });
+		return {
+			...features,
+			pluginManagement: this.client.supportsServerCapability("plugin_management"),
+		};
 	}
 
 	async setExecutionMode(mode: ExecutionMode): Promise<AgentConnectionRuntimeFeatures> {
@@ -530,6 +536,64 @@ export class DaemonAgentConnection implements AgentConnection {
 		}
 		return this.requestData<T>({
 			type: "runtime_control",
+			activeSessionId: this.activeSessionId,
+			action,
+		});
+	}
+
+	async listPlugins(): Promise<AgentConnectionPluginList> {
+		return this.pluginControl<AgentConnectionPluginList>({ type: "list" });
+	}
+
+	async getPluginDetail(source: string): Promise<AgentConnectionPluginDetail> {
+		return this.pluginControl<AgentConnectionPluginDetail>({ type: "detail", source });
+	}
+
+	async installPlugin(spec: string, options?: { local?: boolean }): Promise<{ name: string; source: string }> {
+		return this.pluginControl<{ name: string; source: string }>({ type: "install", spec, options });
+	}
+
+	async removePlugin(spec: string, options?: { local?: boolean }): Promise<boolean> {
+		return this.pluginControl<boolean>({ type: "remove", spec, options });
+	}
+
+	async updatePlugins(spec?: string): Promise<void> {
+		await this.pluginControl<void>({ type: "update", spec });
+	}
+
+	async addMarketplace(
+		source: string,
+		options?: { local?: boolean; name?: string },
+	): Promise<{ name: string; pluginCount: number }> {
+		return this.pluginControl<{ name: string; pluginCount: number }>({
+			type: "add_marketplace",
+			source,
+			options,
+		});
+	}
+
+	async removeMarketplace(nameOrSource: string, options?: { local?: boolean }): Promise<boolean> {
+		return this.pluginControl<boolean>({ type: "remove_marketplace", nameOrSource, options });
+	}
+
+	async updateMarketplaces(name?: string): Promise<{ updated: string[] }> {
+		return this.pluginControl<{ updated: string[] }>({ type: "update_marketplaces", name });
+	}
+
+	async setPackageEnabled(source: string, enabled: boolean, options?: { local?: boolean }): Promise<void> {
+		await this.pluginControl<void>({ type: "set_enabled", source, enabled, local: options?.local });
+	}
+
+	async setExtensionHookEnabled(extensionPath: string, event: string, enabled: boolean): Promise<void> {
+		await this.pluginControl<void>({ type: "set_hook_enabled", extensionPath, event, enabled });
+	}
+
+	private async pluginControl<T>(action: Extract<DaemonCommand, { type: "plugin_control" }>["action"]): Promise<T> {
+		if (!this.client.supportsServerCapability("plugin_management")) {
+			throw new Error("Plugin management requires a newer Prometheus daemon. Restart the daemon and try again.");
+		}
+		return this.requestData<T>({
+			type: "plugin_control",
 			activeSessionId: this.activeSessionId,
 			action,
 		});

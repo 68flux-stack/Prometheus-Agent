@@ -190,6 +190,7 @@ const DAEMON_COMMAND_TYPES: ReadonlySet<string> = new Set([
 	"get_messages",
 	"get_session_stats",
 	"runtime_control",
+	"plugin_control",
 	"get_context_tree",
 	"get_commands",
 	"get_resource_snapshot",

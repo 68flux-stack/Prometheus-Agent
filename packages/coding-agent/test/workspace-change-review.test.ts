@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -355,5 +355,43 @@ describe("WorkspaceChangeReview", () => {
 		review.recordMutatedPaths([dependency, runtime, generated]);
 		review.finalizeTurn();
 		expect(review.changes()).toEqual([]);
+	});
+
+	it("shares one object store and hash cache across conversations in the same agent directory", async () => {
+		const cwd = await createTempDir();
+		const agentDir = await createTempDir();
+		// The real layout: <agentDataDir>/session-artifacts/<sessionId>. Anything else keeps
+		// the old per-session store, so this shape is what turns sharing on.
+		const artifactsFor = (id: string) => join(agentDir, "session-artifacts", id);
+		const sharedStore = join(agentDir, "change-review-objects");
+		const file = join(cwd, "note.txt");
+		await writeFile(file, "one\n");
+
+		const first = WorkspaceChangeReview.openOrCreate(cwd, artifactsFor("s1"), { deferBaseline: true });
+		first.beginTurn();
+		await writeFile(file, "two\n");
+		first.recordMutatedPaths([file]);
+		first.finalizeTurn();
+
+		// Bytes land in the agent-wide store, not in the conversation's own folder.
+		expect(await readdir(sharedStore)).not.toHaveLength(0);
+		await expect(access(join(artifactsFor("s1"), "change-review-objects"))).rejects.toThrow();
+
+		// A second conversation reuses those objects instead of copying the workspace again.
+		const objectsAfterFirst = (await readdir(sharedStore)).sort();
+		const second = WorkspaceChangeReview.openOrCreate(cwd, artifactsFor("s2"), { deferBaseline: true });
+		second.beginTurn();
+		expect((await readdir(sharedStore)).sort()).toEqual(objectsAfterFirst);
+
+		// Sharing the store must not blur the two conversations: each still owns only what
+		// it mutated, and can still restore its own baseline from the shared objects.
+		await writeFile(file, "three\n");
+		second.recordMutatedPaths([file]);
+		second.finalizeTurn();
+		expect(first.changes().map((change) => change.path)).toEqual(["note.txt"]);
+		expect(second.preview("note.txt")).toContain("-two");
+		expect(second.preview("note.txt")).toContain("+three");
+		second.rejectAll();
+		expect(await readFile(file, "utf8")).toBe("two\n");
 	});
 });

@@ -1,8 +1,10 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -60,6 +62,71 @@ class SearchTest(unittest.TestCase):
 
         self.assertIn(str(self.root / "memory.md"), hits)
         self.assertIn(str(self.root / "other.md"), hits)
+
+    def test_queries_batches_independent_lookups_in_one_call(self) -> None:
+        (self.root / "second.js").write_text("const win = new BrowserWindow({})\nconsole.log(win)\n", encoding="utf-8")
+
+        results = search(queries=[("BrowserWindow", self.root), ("console", self.root)])
+
+        self.assertEqual(set(results.keys()), {("BrowserWindow", str(self.root)), ("console", str(self.root))})
+        browser_hits = results[("BrowserWindow", str(self.root))]
+        self.assertEqual({Path(hit.path).name for hit in browser_hits}, {"app.js", "second.js"})
+        console_hits = results[("console", str(self.root))]
+        self.assertEqual([Path(hit.path).name for hit in console_hits], ["second.js"])
+
+    def test_queries_shares_one_rg_call_per_path(self) -> None:
+        calls = []
+        real_popen = subprocess.Popen
+
+        def spy(argv, *args, **kwargs):
+            calls.append(argv)
+            return real_popen(argv, *args, **kwargs)
+
+        with unittest.mock.patch("rlm.grep.subprocess.Popen", side_effect=spy):
+            search(queries=[("BrowserWindow", self.root), ("app", self.root)])
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].count("--regexp"), 2)
+
+    def test_queries_with_different_paths_runs_one_call_per_path(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="rlm-grep-other-"))
+        self.addCleanup(shutil.rmtree, other, ignore_errors=True)
+        (other / "extra.js").write_text("BrowserWindow\n", encoding="utf-8")
+
+        results = search(queries=[("BrowserWindow", self.root), ("BrowserWindow", other)])
+
+        self.assertEqual(
+            {Path(hit.path).name for hit in results[("BrowserWindow", str(self.root))]},
+            {"app.js"},
+        )
+        self.assertEqual(
+            {Path(hit.path).name for hit in results[("BrowserWindow", str(other))]},
+            {"extra.js"},
+        )
+
+    def test_queries_files_only_attributes_per_pattern(self) -> None:
+        (self.root / "memory.md").write_text("nothing relevant here\n", encoding="utf-8")
+
+        results = search(
+            queries=[("BrowserWindow", self.root), ("memory.md", self.root)],
+            files_only=True,
+            fixed=True,
+        )
+
+        self.assertEqual([Path(p).name for p in results[("BrowserWindow", str(self.root))]], ["app.js"])
+        self.assertIn(str(self.root / "memory.md"), results[("memory.md", str(self.root))])
+
+    def test_queries_and_pattern_together_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            search("BrowserWindow", self.root, queries=[("console", self.root)])
+
+    def test_queries_rejects_empty_list(self) -> None:
+        with self.assertRaises(ValueError):
+            search(queries=[])
+
+    def test_queries_rejects_malformed_entry(self) -> None:
+        with self.assertRaises(ValueError):
+            search(queries=[("BrowserWindow",)])  # type: ignore[list-item]
 
     def test_no_match_is_empty_not_an_error(self) -> None:
         self.assertEqual(search("definitely-not-present-anywhere", self.root), [])

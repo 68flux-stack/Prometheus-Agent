@@ -20,6 +20,7 @@ import type { KernelBootstrapProgressHandler } from "../kernel/bootstrap.js";
 import {
 	type ExecuteResult,
 	FILE_MUTATION_DISPLAY_MIME,
+	FILE_READ_DISPLAY_MIME,
 	type HostRequestHandlers,
 	type KernelAttachment,
 	KernelBusyAfterInterruptError,
@@ -34,18 +35,20 @@ import { parseIpythonBashCell } from "./ipython-cell-code.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 /**
- * Kernel-side file-mutation ledger.
+ * Kernel-side file-mutation and file-read ledger.
  *
  * The agent's only tool is this kernel, so the host has no tool-argument boundary
  * to learn what the model did to the filesystem — an `await edit(...)` reports a
- * diff, but `open(p, "w")`, `pathlib.write_text`, and `shutil.move` report nothing.
+ * diff, but `open(p, "w")`, `pathlib.write_text`, and `shutil.move` report nothing,
+ * and a plain `open(p).read()` / `Path(p).read_text()` reports nothing either.
  * `sys.addaudithook` is the equivalent boundary for a single-Python-tool harness:
  * CPython raises these events from inside the C implementations, so every Python
  * caller is covered without patching any module.
  *
  * The hook only records into a set (no I/O, so no re-entrancy) and a `post_run_cell`
  * callback flushes it once per cell as a `display_data` payload, reusing the same
- * channel the `edit` and `attach-image` skills already use.
+ * channel the `edit` and `attach-image` skills already use. Reads flush under a
+ * separate MIME so a client that only understands mutations keeps working unchanged.
  *
  * ponytail: paths are filtered with abspath, not realpath, so a symlink pointing
  * outside the cwd is still recorded as inside it. This list is a summary hint, not
@@ -59,8 +62,10 @@ import sys as _prometheus_ledger_sys
 if not getattr(_prometheus_ledger_sys, "_prometheus_fs_ledger_installed", False):
     _prometheus_ledger_sys._prometheus_fs_ledger_installed = True
     _PROMETHEUS_FS_MUTATIONS = set()
-    # Cap so a runaway loop cannot grow the set or the flushed payload without bound.
+    _PROMETHEUS_FS_READS = set()
+    # Cap so a runaway loop cannot grow either set or its flushed payload without bound.
     _PROMETHEUS_FS_MUTATIONS_CAP = 200
+    _PROMETHEUS_FS_READS_CAP = 200
     # Single path argument.
     _PROMETHEUS_FS_EVENTS_ONE = frozenset({
         "os.remove", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod", "os.utime",
@@ -73,7 +78,7 @@ if not getattr(_prometheus_ledger_sys, "_prometheus_fs_ledger_installed", False)
         _PROMETHEUS_FS_EVENTS_ONE | _PROMETHEUS_FS_EVENTS_TWO | _PROMETHEUS_FS_EVENTS_DST | {"open"}
     )
 
-    def _prometheus_ledger_record(path):
+    def _prometheus_ledger_record(path, bucket, cap):
         if path is None or isinstance(path, int):
             return
         try:
@@ -85,8 +90,8 @@ if not getattr(_prometheus_ledger_sys, "_prometheus_fs_ledger_installed", False)
         cwd = _prometheus_ledger_os.getcwd()
         if path != cwd and not path.startswith(cwd + _prometheus_ledger_os.sep):
             return
-        if len(_PROMETHEUS_FS_MUTATIONS) < _PROMETHEUS_FS_MUTATIONS_CAP:
-            _PROMETHEUS_FS_MUTATIONS.add(path)
+        if len(bucket) < cap:
+            bucket.add(path)
 
     def _prometheus_ledger_audit(event, args):
         # Fast reject: this runs on every audited event in the kernel, including
@@ -97,8 +102,7 @@ if not getattr(_prometheus_ledger_sys, "_prometheus_fs_ledger_installed", False)
             if event == "open":
                 mode, flags = args[1], args[2]
                 if isinstance(mode, str):
-                    if not any(c in mode for c in ("w", "a", "x", "+")):
-                        return
+                    is_write = any(c in mode for c in ("w", "a", "x", "+"))
                 elif isinstance(flags, int):
                     write_flags = (
                         _prometheus_ledger_os.O_WRONLY
@@ -107,34 +111,44 @@ if not getattr(_prometheus_ledger_sys, "_prometheus_fs_ledger_installed", False)
                         | _prometheus_ledger_os.O_CREAT
                         | _prometheus_ledger_os.O_TRUNC
                     )
-                    if not flags & write_flags:
-                        return
+                    is_write = bool(flags & write_flags)
                 else:
                     return
-                _prometheus_ledger_record(args[0])
+                if is_write:
+                    _prometheus_ledger_record(args[0], _PROMETHEUS_FS_MUTATIONS, _PROMETHEUS_FS_MUTATIONS_CAP)
+                else:
+                    _prometheus_ledger_record(args[0], _PROMETHEUS_FS_READS, _PROMETHEUS_FS_READS_CAP)
             elif event in _PROMETHEUS_FS_EVENTS_TWO:
-                _prometheus_ledger_record(args[0])
-                _prometheus_ledger_record(args[1])
+                _prometheus_ledger_record(args[0], _PROMETHEUS_FS_MUTATIONS, _PROMETHEUS_FS_MUTATIONS_CAP)
+                _prometheus_ledger_record(args[1], _PROMETHEUS_FS_MUTATIONS, _PROMETHEUS_FS_MUTATIONS_CAP)
             elif event in _PROMETHEUS_FS_EVENTS_DST:
-                _prometheus_ledger_record(args[1])
+                _prometheus_ledger_record(args[1], _PROMETHEUS_FS_MUTATIONS, _PROMETHEUS_FS_MUTATIONS_CAP)
             else:
-                _prometheus_ledger_record(args[0])
+                _prometheus_ledger_record(args[0], _PROMETHEUS_FS_MUTATIONS, _PROMETHEUS_FS_MUTATIONS_CAP)
         except Exception:
             # An audit hook that raises breaks the operation it is observing.
             pass
 
     def _prometheus_ledger_flush(*_args, **_kwargs):
-        if not _PROMETHEUS_FS_MUTATIONS:
+        if not _PROMETHEUS_FS_MUTATIONS and not _PROMETHEUS_FS_READS:
             return
-        paths = sorted(_PROMETHEUS_FS_MUTATIONS)
-        _PROMETHEUS_FS_MUTATIONS.clear()
         try:
             from IPython.display import display as _prometheus_ledger_display
 
-            _prometheus_ledger_display(
-                {"${FILE_MUTATION_DISPLAY_MIME}": {"paths": paths}},
-                raw=True,
-            )
+            if _PROMETHEUS_FS_MUTATIONS:
+                paths = sorted(_PROMETHEUS_FS_MUTATIONS)
+                _PROMETHEUS_FS_MUTATIONS.clear()
+                _prometheus_ledger_display(
+                    {"${FILE_MUTATION_DISPLAY_MIME}": {"paths": paths}},
+                    raw=True,
+                )
+            if _PROMETHEUS_FS_READS:
+                paths = sorted(_PROMETHEUS_FS_READS)
+                _PROMETHEUS_FS_READS.clear()
+                _prometheus_ledger_display(
+                    {"${FILE_READ_DISPLAY_MIME}": {"paths": paths}},
+                    raw=True,
+                )
         except Exception:
             pass
 
@@ -411,6 +425,8 @@ export interface IpythonToolDetails {
 	 * from the audit-hook ledger. `%%bash` subprocess writes are not visible to it.
 	 */
 	mutatedPaths?: string[];
+	/** Paths under the kernel cwd this cell read through Python-level file APIs, same ledger. */
+	readPaths?: string[];
 	/** True when this result came after killing and restarting a busy kernel. */
 	kernelRestarted?: boolean;
 	error?: {
@@ -980,6 +996,7 @@ export function createIpythonToolDefinition(
 						attachments: r.attachments,
 						sentAgentMessages: r.sentAgentMessages,
 						mutatedPaths: r.mutatedPaths,
+						readPaths: r.readPaths,
 						kernelRestarted,
 						error: r.error,
 					},

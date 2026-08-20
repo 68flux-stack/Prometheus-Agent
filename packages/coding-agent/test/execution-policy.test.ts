@@ -137,26 +137,32 @@ except PermissionError:
 			const workspace = mkdtempSync(join(tmpdir(), "prime-policy-workspace-"));
 			// Outside the temp dir too — the kernel always keeps its own scratch dir writable.
 			const outside = mkdtempSync(join(homedir(), "prime-policy-outside-"));
-			const code = `import sys, types
+			const code = `import asyncio, sys, types
 _fake = types.ModuleType("rlm")
-_fake.host_request = lambda kind, payload: {"granted": payload["path"] == ${JSON.stringify(outside)}, "root": payload["path"], "message": "ok"}
+async def _fake_host_request(kind, payload):
+    return {"granted": payload["path"] == ${JSON.stringify(outside)}, "root": payload["path"], "message": "ok"}
+_fake.host_request = _fake_host_request
 sys.modules["rlm"] = _fake
 
 ${WINDOWS_PLAN_POLICY_BOOTSTRAP_CODE}
 import os
-denied = os.path.join(${JSON.stringify(outside)}, "..", "prime-policy-denied")
-try:
-    open(os.path.join(${JSON.stringify(outside)}, "granted.txt"), "w").write("nope")
-except PermissionError:
-    print("blocked-before-grant")
-request_directory_access(${JSON.stringify(outside)}, "test")
-open(os.path.join(${JSON.stringify(outside)}, "granted.txt"), "w").write("ok")
-print("allowed-after-grant")
-request_directory_access(denied, "test")
-try:
-    open(os.path.join(denied, "nope.txt"), "w").write("nope")
-except (PermissionError, FileNotFoundError):
-    print("still-blocked-after-deny")`;
+
+async def main():
+    denied = os.path.join(${JSON.stringify(outside)}, "..", "prime-policy-denied")
+    try:
+        open(os.path.join(${JSON.stringify(outside)}, "granted.txt"), "w").write("nope")
+    except PermissionError:
+        print("blocked-before-grant")
+    await request_directory_access(${JSON.stringify(outside)}, "test")
+    open(os.path.join(${JSON.stringify(outside)}, "granted.txt"), "w").write("ok")
+    print("allowed-after-grant")
+    await request_directory_access(denied, "test")
+    try:
+        open(os.path.join(denied, "nope.txt"), "w").write("nope")
+    except (PermissionError, FileNotFoundError):
+        print("still-blocked-after-deny")
+
+asyncio.run(main())`;
 			const result = spawnSync("python", ["-c", code], {
 				encoding: "utf8",
 				env: {

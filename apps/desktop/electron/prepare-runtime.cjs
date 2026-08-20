@@ -3,7 +3,12 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const runtimeEntrypoint = path.join(repoRoot, "packages", "coding-agent", "dist", "cli.js");
+// The desktop spawns the engine through the bundled entry: the unbundled
+// module graph is ~2,500 files and resolving them dominates process boot
+// (~1.5s on slow filesystems); the bundle loads the same code from ~20 chunks
+// in under half the time. dist/cli.js stays as the bundle's input and the
+// library-style requires the main process performs.
+const runtimeEntrypoint = path.join(repoRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 const runtimeInputs = [
 	path.join(repoRoot, "packages", "tui", "src"),
 	path.join(repoRoot, "packages", "ai", "src"),
@@ -25,6 +30,9 @@ function newestModifiedAt(target) {
 function runtimeNeedsBuild() {
 	try {
 		const builtAt = statSync(runtimeEntrypoint).mtimeMs;
+		// The bundle's input (dist/cli.js) is produced by the same build step;
+		// a missing or older bundle means a rebuild regardless of the input's age.
+		if (statSync(path.join(repoRoot, "packages", "coding-agent", "dist", "cli.js")).mtimeMs > builtAt) return true;
 		return runtimeInputs.some((input) => newestModifiedAt(input) > builtAt);
 	} catch {
 		return true;

@@ -211,6 +211,19 @@ describe("MarketplaceManager", () => {
 		expect(completions.map((c) => c.spec)).toEqual(["ponytail@ponytail", "ponytail-audit@ponytail"]);
 	});
 
+	it("normalizes an owner/repo shorthand as a GitHub source, not a local path", () => {
+		const result = marketplaceManager.normalizeSource("DietrichGebert/ponytail");
+		expect(result.type).toBe("git");
+		expect(result.normalized).toBe("https://github.com/DietrichGebert/ponytail");
+		expect(result.defaultName).toBe("ponytail");
+	});
+
+	it("normalizes an explicit relative path as local even if it looks like owner/repo", () => {
+		const result = marketplaceManager.normalizeSource("./DietrichGebert/ponytail");
+		expect(result.type).toBe("local");
+		expect(result.normalized).toBe(join(tempDir, "DietrichGebert", "ponytail"));
+	});
+
 	it("removes a marketplace from settings", async () => {
 		const mpDir = join(tempDir, "mp-remove");
 		mkdirSync(mpDir, { recursive: true });

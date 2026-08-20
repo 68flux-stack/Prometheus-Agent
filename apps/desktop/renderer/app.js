@@ -12,6 +12,7 @@ const state = {
 	commands: [],
 	model: undefined,
 	thinkingLevel: "off",
+	serviceTier: "default",
 	hideThinkingBlock: true,
 	requestId: 0,
 	streamIndex: -1,
@@ -719,6 +720,16 @@ function isEngineConnecting() {
 	return !state.ready || state.switchingSession;
 }
 
+// A conversation opened only to read it (state.deferredSwitch) has not attached
+// an engine on purpose, to avoid a worker spawn for a chat nobody is acting on
+// (see requestSessionSwitch). That is not "connecting": editing, forking, and
+// retrying a message call sendCommandAwait, which attaches on demand. Only a
+// real attach in flight (switchingSession without a still-pending deferred
+// switch) or a not-yet-started engine should block those actions.
+function isSessionActionBlocked() {
+	return !state.ready || (state.switchingSession && !state.deferredSwitch);
+}
+
 function syncComposer() {
 	const canPrompt = !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
 	input.disabled = !canPrompt;
@@ -896,6 +907,7 @@ function applyState(data) {
 	// reach the newly attached one.
 	if (!state.pendingModel) state.model = data.model;
 	if (state.pendingThinkingLevel === undefined) state.thinkingLevel = data.thinkingLevel || "off";
+	state.serviceTier = data.serviceTier || "default";
 	// Mid-switch the engine still reports the conversation we are leaving, so the
 	// sidebar, title and workspace follow the click until the handshake catches up.
 	if (state.switchingSession) {
@@ -1200,7 +1212,10 @@ function renderMarkdown(container, markdown) {
 				}
 				table.appendChild(row);
 			}
-			container.appendChild(table);
+			const tableWrap = document.createElement("div");
+			tableWrap.className = "message-table-wrap";
+			tableWrap.appendChild(table);
+			container.appendChild(tableWrap);
 			continue;
 		}
 		const quote = /^\s*>\s?(.*)$/.exec(line);
@@ -1342,7 +1357,7 @@ function renderMessageRow(row, message, display = {}) {
 	// fork is already landing) is what raced state.messages against the anchor
 	// message lookup and produced duplicate branches; disable those actions
 	// until the engine is actually attached and idle.
-	const sessionActionsDisabled = isEngineConnecting();
+	const sessionActionsDisabled = isSessionActionBlocked();
 	const actionsLabel = !showActions
 		? ""
 		: message.role === "user"
@@ -1779,6 +1794,42 @@ function renderDiffFiles(container, diffs) {
 	return { added, removed };
 }
 
+// Renders "<Verb> <file>" chips styled the same way for every ipython activity group, so a
+// plain read/list call's file paths look the same as an edit's — used by both the diff card
+// summary and the plain tool-card summary.
+function appendSummaryGroups(summary, groups) {
+	groups.forEach((group, index) => {
+		if (index > 0) {
+			const sep = document.createElement("span");
+			sep.className = "diff-summary-sep";
+			sep.textContent = "·";
+			summary.appendChild(sep);
+		}
+		const label = document.createElement("span");
+		label.className = "diff-summary-label";
+		label.textContent = group.verb;
+		const fileLabel = document.createElement("span");
+		fileLabel.className = "diff-summary-file";
+		fileLabel.textContent = group.files.length === 1 ? group.files[0] : `${group.files.length} files`;
+		summary.append(label, fileLabel);
+	});
+}
+
+function groupSummaryText(group) {
+	return group.files.length === 1 ? `${group.verb} ${group.files[0]}` : `${group.verb} ${group.files.length} files`;
+}
+
+// Only ipython calls carry file-path activity groups (Read/Created/Edited); other tools
+// (WebSearch, WebFetch, ...) keep the plain toolSummary() string.
+function toolSummaryGroups(tool) {
+	if (tool.toolName !== "ipython") return null;
+	const groups = ipythonActivities(tool).groups.map((group) => ({
+		verb: group.verb,
+		files: [...new Set(group.files.map(fileBaseName))],
+	}));
+	return groups.length ? groups : null;
+}
+
 function renderDiffToolCard(row, tool, diffs) {
 	const status = tool.isError ? "failed" : tool.done ? "done" : "running";
 	const code = typeof tool.args?.code === "string" ? tool.args.code : "";
@@ -1837,21 +1888,7 @@ function renderDiffToolCard(row, tool, diffs) {
 					files: [...new Set(diffs.filter((d) => d.kind !== "create").map((d) => fileBaseName(d.path)))],
 				},
 			].filter((group) => group.files.length > 0);
-	groups.forEach((group, index) => {
-		if (index > 0) {
-			const sep = document.createElement("span");
-			sep.className = "diff-summary-sep";
-			sep.textContent = "·";
-			summary.appendChild(sep);
-		}
-		const label = document.createElement("span");
-		label.className = "diff-summary-label";
-		label.textContent = group.verb;
-		const fileLabel = document.createElement("span");
-		fileLabel.className = "diff-summary-file";
-		fileLabel.textContent = group.files.length === 1 ? group.files[0] : `${group.files.length} files`;
-		summary.append(label, fileLabel);
-	});
+	appendSummaryGroups(summary, groups);
 	const stat = document.createElement("span");
 	stat.className = "diff-stat";
 	const statAdd = document.createElement("span");
@@ -1871,9 +1908,10 @@ function renderToolCard(row, tool) {
 		return;
 	}
 	const status = tool.isError ? "failed" : tool.done ? "done" : "running";
-	const summary = `${toolSummary(tool)} · ${status}`;
+	const groups = toolSummaryGroups(tool);
+	const summaryText = groups ? groups.map(groupSummaryText).join(" · ") : toolSummary(tool);
 	const details = toolDetails(tool);
-	const signature = `${summary} ${details}`;
+	const signature = `${summaryText} · ${status} ${details}`;
 	if (row._signature === signature) return;
 	row._signature = signature;
 
@@ -1884,7 +1922,14 @@ function renderToolCard(row, tool) {
 		card.open = true;
 		card.dataset.opened = "1";
 	}
-	setText(ensureChild(card, "tool-summary", "summary"), summary);
+	const summary = ensureChild(card, "tool-summary", "summary");
+	summary.replaceChildren();
+	if (groups) {
+		appendSummaryGroups(summary, groups);
+		summary.appendChild(document.createTextNode(` · ${status}`));
+	} else {
+		setText(summary, `${summaryText} · ${status}`);
+	}
 	setText(ensureChild(card, "tool-output", "pre"), details);
 }
 
@@ -2938,6 +2983,7 @@ function handleResponse(event) {
 		state.connectSteps.add("get_commands");
 		refreshConnectionLabel();
 		state.commands = event.data?.commands || [];
+		rebuildServerCommandIndex();
 	}
 	// /permissions changes the mode inside the engine without notifying the UI.
 	if (["prompt", "steer", "follow_up"].includes(pendingType || event.command)) refreshRuntimeFeatures();
@@ -3274,6 +3320,21 @@ async function submitPrompt(message, allowWithoutModel = false) {
 		closeCommandMenu();
 		void clientCommand.run(typedCommand[2] || "");
 		return;
+	}
+	// A builtin command with no CLIENT_COMMANDS handler and no server-side
+	// "session" execution (agent-session parses only a fixed set, like
+	// /compact, from prompt text) would otherwise be sent through verbatim and
+	// answered by the model as literal chat text. Refuse it here instead, same
+	// as the TUI refusing a command it doesn't recognize.
+	if (typedCommand) {
+		const serverCommand = serverCommandIndex.get(typedCommand[1].toLowerCase());
+		if (serverCommand?.source === "builtin" && serverCommand.execution !== "session") {
+			input.value = "";
+			input.style.height = "auto";
+			closeCommandMenu();
+			showToast(unsupportedCommandMessage(serverCommand.name));
+			return;
+		}
 	}
 	const connecting = isEngineConnecting();
 	// A missing provider is a real refusal; a connecting engine is not. While it
@@ -3673,7 +3734,7 @@ function beginEditMessage(message) {
 	// produced duplicate branches (see forkAtEntry/truncateConversationBefore).
 	// The action buttons are disabled for the same reason; this covers the
 	// context-menu path, which isn't.
-	if (isEngineConnecting() || state.sessionActionPending) {
+	if (isSessionActionBlocked() || state.sessionActionPending) {
 		showToast("Still connecting — try again in a moment.");
 		return;
 	}
@@ -3694,7 +3755,7 @@ function cancelEditMessage() {
 // first was still awaiting get_fork_messages, before forkAtEntry's own guard had
 // anything to check yet — sending two "fork" RPCs and producing two branches.
 function beginSessionAction() {
-	if (state.sessionActionPending || isEngineConnecting()) return false;
+	if (state.sessionActionPending || isSessionActionBlocked()) return false;
 	state.sessionActionPending = true;
 	return true;
 }
@@ -3823,8 +3884,10 @@ setInterval(() => {
 // Desktop-native slash commands: builtins with no server-side equivalent for an RPC
 // client (they open a picker, a dialog, or a native OS control instead of running through
 // the agent session). Never sent as prompt text — `run` is invoked locally and the
-// composer is cleared. Anything the server already knows about (get_commands) wins on
-// a name collision, so this list only fills gaps.
+// composer is cleared. The desktop-native entry wins on a name collision with a server
+// command: `run` executes here instead of submitting the command as plain prompt text.
+// Everything else the server reports (get_commands) passes through, so newly added
+// builtins like /plugin show up without an edit to this list.
 function openNativeSelect(select) {
 	select.focus();
 	try {
@@ -3834,14 +3897,386 @@ function openNativeSelect(select) {
 	}
 }
 
+async function showPluginHelp() {
+	await openInteraction({
+		title: "Plugin commands",
+		kind: "confirm",
+		confirmLabel: "Close",
+		message: [
+			"/plugin marketplace add <source>   Add a marketplace (e.g. DietrichGebert/ponytail)",
+			"/plugin marketplace remove <name>  Remove a marketplace",
+			"/plugin marketplace list           List registered marketplaces",
+			"/plugin marketplace update [name]  Update marketplace catalogs",
+			"/plugin install <spec>             Install a plugin (e.g. ponytail@ponytail)",
+			"/plugin remove <name>              Remove an installed plugin",
+			"/plugin list                       List installed plugins",
+			"/plugin update [name]              Update installed plugins",
+		].join("\n"),
+	});
+}
+
+// Mirrors interactive-mode's handlePluginCommand: parses the same subcommands and
+// drives the same plugin_* RPC commands the Settings > Plugins tab uses, so typing
+// "/plugin marketplace add <source>" in the composer runs immediately instead of
+// being sent to the agent as a chat message.
+async function runPluginSlashCommand(rawArgs) {
+	const args = (rawArgs || "").trim();
+	const [subcommand, ...rest] = args ? args.split(/\s+/) : [];
+	if (!subcommand || subcommand === "help" || subcommand === "-h" || subcommand === "--help") {
+		await showPluginHelp();
+		return;
+	}
+	try {
+		if (subcommand === "marketplace") {
+			const [mpAction, ...mpArgs] = rest;
+			if (!mpAction || mpAction === "list") {
+				const { marketplaces = [] } = await pluginCommand("plugin_list");
+				if (marketplaces.length === 0) {
+					showToast("No marketplaces registered. Add one with /plugin marketplace add <source>");
+					return;
+				}
+				const lines = ["Registered marketplaces:"];
+				for (const marketplace of marketplaces) {
+					lines.push(`\n• ${marketplace.name} (${marketplace.scope}) — ${marketplace.source}`);
+					if (marketplace.description) lines.push(`  ${marketplace.description}`);
+					if (marketplace.plugins.length > 0) {
+						lines.push("  Available plugins:");
+						for (const plugin of marketplace.plugins) {
+							lines.push(`    - ${plugin.name}${plugin.description ? `: ${plugin.description}` : ""}`);
+						}
+					}
+				}
+				lines.push("\nInstall a plugin with: /plugin install <plugin>@<marketplace>");
+				await openInteraction({ title: "Marketplaces", kind: "confirm", confirmLabel: "Close", message: lines.join("\n") });
+				return;
+			}
+			if (mpAction === "add") {
+				const source = mpArgs[0];
+				if (!source) {
+					showToast("Usage: /plugin marketplace add <source>");
+					return;
+				}
+				showToast(`Adding marketplace from ${source}…`);
+				const { name, pluginCount } = await pluginCommand("plugin_marketplace_add", { source });
+				showToast(`Added marketplace "${name}" (${pluginCount} plugin${pluginCount === 1 ? "" : "s"})`);
+				await refreshPluginsTab();
+				return;
+			}
+			if (mpAction === "remove" || mpAction === "uninstall") {
+				const target = mpArgs[0];
+				if (!target) {
+					showToast("Usage: /plugin marketplace remove <name>");
+					return;
+				}
+				await pluginCommand("plugin_marketplace_remove", { nameOrSource: target });
+				showToast(`Removed marketplace "${target}"`);
+				await refreshPluginsTab();
+				return;
+			}
+			if (mpAction === "update") {
+				const target = mpArgs[0];
+				showToast("Updating marketplaces…");
+				const { updated = [] } = await pluginCommand("plugin_marketplace_update", target ? { name: target } : {});
+				showToast(updated.length > 0 ? `Updated marketplaces: ${updated.join(", ")}` : "No marketplaces were updated.");
+				await refreshPluginsTab();
+				return;
+			}
+			showToast(`Unknown marketplace action: ${mpAction}. Use add, remove, list, or update.`);
+			return;
+		}
+
+		if (subcommand === "install") {
+			const spec = rest[0];
+			if (!spec) {
+				showToast("Usage: /plugin install <spec> (e.g. /plugin install ponytail@ponytail)");
+				return;
+			}
+			showToast(`Installing ${spec}…`);
+			const { name } = await pluginCommand("plugin_install", { spec });
+			showToast(`Installed plugin ${name}.`);
+			await refreshPluginsTab();
+			return;
+		}
+
+		if (subcommand === "remove" || subcommand === "uninstall") {
+			const spec = rest[0];
+			if (!spec) {
+				showToast("Usage: /plugin remove <name>");
+				return;
+			}
+			await pluginCommand("plugin_remove", { spec });
+			showToast(`Removed plugin "${spec}".`);
+			await refreshPluginsTab();
+			return;
+		}
+
+		if (subcommand === "list") {
+			const { packages = [], marketplaces = [] } = await pluginCommand("plugin_list");
+			const lines = ["Installed plugins / packages:"];
+			if (packages.length === 0) {
+				lines.push("  (None installed)");
+			} else {
+				for (const pkg of packages) {
+					const display = pkg.filtered ? `${pkg.source} (filtered)` : pkg.source;
+					lines.push(`  • ${display} (${pkg.scope})`);
+				}
+			}
+			if (marketplaces.length > 0) {
+				lines.push("\nRegistered marketplaces:");
+				for (const marketplace of marketplaces) {
+					lines.push(`  • ${marketplace.name} (${marketplace.scope}) - ${marketplace.plugins.length} plugin(s)`);
+				}
+			}
+			await openInteraction({ title: "Plugins", kind: "confirm", confirmLabel: "Close", message: lines.join("\n") });
+			return;
+		}
+
+		if (subcommand === "update") {
+			const target = rest[0];
+			showToast("Updating plugins…");
+			await pluginCommand("plugin_update", target ? { spec: target } : {});
+			showToast("Plugins updated.");
+			await refreshPluginsTab();
+			return;
+		}
+
+		showToast(`Unknown /plugin subcommand: ${subcommand}. Use marketplace, install, remove, list, or update.`);
+	} catch (error) {
+		showToast(error?.message || `Plugin error: ${error}`);
+	}
+}
+
+// Builtin commands the desktop composer can't yet run itself. The guard below
+// (in submitPrompt) still refuses to send any of these as chat text — it shows
+// this explanation instead, same as an unimplemented CLIENT_COMMANDS entry would.
+const UNSUPPORTED_BUILTIN_COMMAND_REASONS = {
+	// Keyed by canonical command name — serverCommandIndex resolves aliases (e.g. "side") to it.
+	btw: "Side questions aren't available in the desktop app yet — ask in the main conversation instead.",
+	tree: "Session tree/branch navigation isn't available in the desktop app yet; use the sidebar to switch conversations.",
+	traces: "Trace preview and upload aren't available in the desktop app yet.",
+	update: "Self-update isn't available in the desktop app; update Prometheus through your installer or package manager instead.",
+	"scoped-models": "Ctrl+P model cycling isn't available in the desktop app; use the model selector instead.",
+	share: "Sharing a session as a GitHub gist isn't available in the desktop app yet.",
+	logout: "Removing stored provider credentials isn't available in the desktop app yet.",
+};
+
+function unsupportedCommandMessage(name) {
+	return UNSUPPORTED_BUILTIN_COMMAND_REASONS[name] || `/${name} isn't available in the desktop app yet.`;
+}
+
+// Rebuilt whenever the server's command list (get_commands) refreshes. Maps
+// every builtin command name and alias to its {source, execution} metadata so
+// submitPrompt can tell a real builtin command apart from ordinary chat text
+// that merely starts with "/", without hardcoding names here.
+let serverCommandIndex = new Map();
+function rebuildServerCommandIndex() {
+	serverCommandIndex = new Map();
+	for (const command of state.commands) {
+		serverCommandIndex.set(command.name.toLowerCase(), command);
+		for (const alias of command.aliases || []) serverCommandIndex.set(alias.toLowerCase(), command);
+	}
+}
+
+function previewText(message) {
+	const text = contentText(message).replace(/\s+/g, " ").trim();
+	if (!text) return "(no text)";
+	return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+}
+
+const SETTINGS_TAB_KEYS = new Set([
+	"general",
+	"context",
+	"subagents",
+	"permissions",
+	"shell",
+	"extensions",
+	"plugins",
+	"mcp",
+	"privacy",
+	"advanced",
+]);
+
+async function openSettingsDialogOnTab(tabArg) {
+	await openSettingsDialog();
+	const tab = tabArg?.trim().toLowerCase();
+	if (tab && SETTINGS_TAB_KEYS.has(tab)) switchSettingsTab(tab);
+}
+
+// Mirrors forkAtEntry's landing sequence (see its comment) but for the "clone"
+// RPC, which duplicates the session at its current leaf instead of forking
+// from a specific prior message, so there is no entryId/position to pass.
+async function cloneSession() {
+	if (state.switchingSession) {
+		showToast("Still finishing the previous change — try again in a moment.");
+		return;
+	}
+	state.switchingSession = true;
+	resetConversationState();
+	setBusy(false, "Cloning conversation");
+	const switchToken = ++state.switchToken;
+	try {
+		const response = await sendCommandAwait("clone");
+		const result = response.data || {};
+		if (switchToken !== state.switchToken) return;
+		state.switchingSession = false;
+		if (result.cancelled) {
+			returnQueuedPromptToComposer();
+			sendCommand("get_messages");
+			setBusy(false, "Ready");
+			return;
+		}
+		sendCommand("get_state");
+		sendCommand("get_messages");
+		sendCommand("get_available_models");
+		refreshRuntimeFeatures();
+		void refreshWorkspaceChats(state.workspace);
+		flushQueuedPrompt();
+		flushPendingSessionSettings();
+		showToast("Cloned to a new session");
+	} catch (error) {
+		if (switchToken === state.switchToken) {
+			state.switchingSession = false;
+			returnQueuedPromptToComposer();
+			setBusy(false, "Ready");
+		}
+		showToast(error instanceof Error ? error.message : String(error));
+	}
+}
+
+// A simplified subset of the CLI's /heartbeat grammar (core/cron-jobs.ts
+// parseHeartbeatCommand): status/pause/resume/clear, plus "[every <interval>]
+// [--steer|--follow-up] <instruction>" to set one. Schedule normalization for
+// plain intervals ("30m") happens server-side in setHeartbeat.
+const HEARTBEAT_LEADING_INTERVAL_RE =
+	/^(\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours))\s+/i;
+
+function parseHeartbeatArgs(args) {
+	const text = (args || "").trim();
+	if (!text || text === "status") return { type: "status" };
+	if (text === "pause") return { type: "pause" };
+	if (text === "resume") return { type: "resume" };
+	if (text === "clear" || text === "stop") return { type: "clear" };
+
+	let rest = text;
+	let deliveryMode;
+	const takeDelivery = () => {
+		const match = /^--(steer|follow-up)\b\s*/.exec(rest);
+		if (!match) return false;
+		deliveryMode = match[1] === "follow-up" ? "follow_up" : "steer";
+		rest = rest.slice(match[0].length);
+		return true;
+	};
+	takeDelivery();
+
+	let schedule;
+	const everyMatch = /^(?:--)?every\s+(\S+)\s+/i.exec(rest);
+	const bareIntervalMatch = !everyMatch && HEARTBEAT_LEADING_INTERVAL_RE.exec(rest);
+	if (everyMatch) {
+		schedule = `every ${everyMatch[1]}`;
+		rest = rest.slice(everyMatch[0].length);
+	} else if (bareIntervalMatch) {
+		schedule = `every ${bareIntervalMatch[1]}`;
+		rest = rest.slice(bareIntervalMatch[0].length);
+	}
+	takeDelivery();
+
+	const instruction = rest.trim();
+	if (!instruction) return undefined;
+	return { type: "set", schedule: schedule || "every 5m", instruction, deliveryMode };
+}
+
+function showHeartbeatStatus(heartbeat) {
+	if (!heartbeat) {
+		showToast("No active heartbeat");
+		return;
+	}
+	void openInteraction({
+		title: "Heartbeat",
+		kind: "confirm",
+		confirmLabel: "Close",
+		message: [
+			`Schedule: ${heartbeat.schedule?.expression || "-"}`,
+			`Status: ${heartbeat.status || "-"}`,
+			`Next run: ${heartbeat.nextRunAt || "-"}`,
+			`Instruction: ${heartbeat.prompt || "-"}`,
+		].join("\n"),
+	});
+}
+
+async function runHeartbeatSlashCommand(args) {
+	const parsed = parseHeartbeatArgs(args);
+	if (!parsed) {
+		showToast("Usage: /heartbeat [every <interval>] [--steer|--follow-up] <instruction>");
+		return;
+	}
+	try {
+		if (parsed.type === "status") {
+			const response = await sendCommandAwait("get_heartbeat");
+			showHeartbeatStatus(response.data?.heartbeat);
+			return;
+		}
+		if (parsed.type === "pause" || parsed.type === "resume" || parsed.type === "clear") {
+			// update_heartbeat resolves with the affected heartbeat (truthy) or null
+			// when there was none to act on — not the post-clear state, so a
+			// successful "clear" is the truthy branch, same as pause/resume.
+			const response = await sendCommandAwait("update_heartbeat", { action: parsed.type });
+			const heartbeat = response.data?.heartbeat;
+			if (!heartbeat) {
+				showToast("No active heartbeat");
+				return;
+			}
+			if (parsed.type === "pause") showToast("Heartbeat paused");
+			else if (parsed.type === "resume") showToast(`Heartbeat resumed. Next run: ${heartbeat.nextRunAt || "-"}`);
+			else showToast("Heartbeat cleared");
+			return;
+		}
+		const response = await sendCommandAwait("set_heartbeat", {
+			schedule: parsed.schedule,
+			prompt: parsed.instruction,
+			deliveryMode: parsed.deliveryMode,
+		});
+		const heartbeat = response.data?.heartbeat;
+		showToast(`Heartbeat set. Next run: ${heartbeat?.nextRunAt || "-"}`);
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : String(error));
+	}
+}
+
+async function showAllHeartbeats() {
+	try {
+		const response = await sendCommandAwait("list_heartbeats");
+		const heartbeats = response.data?.heartbeats || [];
+		if (heartbeats.length === 0) {
+			showToast("No heartbeats across any conversation.");
+			return;
+		}
+		const lines = heartbeats.map(({ job, sessionName, firstMessage }) =>
+			[
+				`• ${sessionName || firstMessage || job.sessionId}`,
+				`  Schedule: ${job.schedule?.expression || "-"}  Status: ${job.status}  Next: ${job.nextRunAt || "-"}`,
+				`  ${job.prompt}`,
+			].join("\n"),
+		);
+		await openInteraction({
+			title: `Heartbeats (${heartbeats.length})`,
+			kind: "confirm",
+			confirmLabel: "Close",
+			message: lines.join("\n\n"),
+		});
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : String(error));
+	}
+}
+
 const CLIENT_COMMANDS = [
-	{ name: "new", source: "app", description: "Start a new session", run: () => void createNewSession() },
+	{ name: "new", source: "app", description: "Start a new session", aliases: ["clear"], run: () => void createNewSession() },
 	{ name: "model", source: "app", description: "Select model", run: () => openNativeSelect(modelSelect) },
 	{
 		name: "effort",
 		source: "app",
 		description: "Select reasoning/thinking level",
 		argumentHint: "[level]",
+		aliases: ["thinking"],
 		run: (args) => {
 			const level = args.trim().toLowerCase();
 			const option = level && [...thinkingSelect.options].find((item) => item.value === level);
@@ -3853,12 +4288,66 @@ const CLIENT_COMMANDS = [
 			}
 		},
 	},
+	{
+		name: "fast",
+		source: "app",
+		description: "Toggle OpenAI Fast mode",
+		run: async (args) => {
+			if (args.trim()) {
+				showToast("Usage: /fast");
+				return;
+			}
+			const next = state.serviceTier === "priority" ? "default" : "priority";
+			try {
+				await sendCommandAwait("set_service_tier", { serviceTier: next });
+				const stateResponse = await sendCommandAwait("get_state");
+				state.serviceTier = stateResponse.data?.serviceTier || "default";
+				showToast(`Fast mode: ${state.serviceTier === "priority" ? "on" : "off"}`);
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
 	{ name: "export", source: "app", description: "Export session as HTML", run: () => sendCommand("export_html") },
+	{
+		name: "import",
+		source: "app",
+		description: "Import and resume a session from a JSONL file",
+		argumentHint: "<path.jsonl>",
+		run: async (args) => {
+			let importPath = args.trim();
+			if (!importPath) {
+				const chosen = await window.desktopAgent.chooseFiles();
+				importPath = chosen?.[0] || "";
+			}
+			if (!importPath) return;
+			const confirmed = await openInteraction({
+				title: "Import session",
+				kind: "confirm",
+				confirmLabel: "Import",
+				message: `Replace current session with ${importPath}?`,
+			});
+			if (confirmed !== true) return;
+			try {
+				const response = await sendCommandAwait("import_session", { path: importPath });
+				if (response.data?.cancelled) {
+					showToast("Import cancelled");
+					return;
+				}
+				sendCommand("get_state");
+				sendCommand("get_messages");
+				showToast(`Session imported from: ${importPath}`);
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
 	{
 		name: "name",
 		source: "app",
 		description: "Rename this session",
 		argumentHint: "[name]",
+		aliases: ["rename"],
 		run: async (args) => {
 			const typed = args.trim();
 			if (typed) {
@@ -3894,9 +4383,31 @@ const CLIENT_COMMANDS = [
 			}),
 	},
 	{
+		name: "system-prompt",
+		source: "app",
+		description: "Show the exact system prompt sent to the model",
+		run: async () => {
+			let prompt = "";
+			try {
+				const response = await sendCommandAwait("get_system_prompt");
+				prompt = response.data?.systemPrompt || "";
+			} catch (error) {
+				showToast(error?.message || "Failed to load the system prompt");
+				return;
+			}
+			await openInteraction({
+				title: `System prompt (${prompt.length.toLocaleString()} chars)`,
+				kind: "editor",
+				prefill: prompt,
+				confirmLabel: "Close",
+			});
+		},
+	},
+	{
 		name: "context",
 		source: "app",
 		description: "Show token, cost, and message usage",
+		aliases: ["usage"],
 		run: () => sendCommand("get_session_stats"),
 	},
 	{
@@ -3908,6 +4419,160 @@ const CLIENT_COMMANDS = [
 			if (last) void copyMessageText(last);
 			else showToast("No agent message to copy yet");
 		},
+	},
+	{
+		name: "plugin",
+		source: "app",
+		description: "Manage plugins and marketplaces (install, remove, list, marketplace)",
+		argumentHint: "[install|remove|list|update|marketplace <add|remove|list|update>]",
+		aliases: ["package"],
+		run: (args) => void runPluginSlashCommand(args),
+	},
+	{
+		name: "settings",
+		source: "app",
+		description: "Open settings",
+		argumentHint: "[tab]",
+		run: (args) => void openSettingsDialogOnTab(args),
+	},
+	{
+		name: "mcp",
+		source: "app",
+		description: "Open MCP Connections or manage MCP integrations",
+		argumentHint: "[list|login <name>|logout <name>]",
+		run: () => void openSettingsDialogOnTab("mcp"),
+	},
+	{
+		name: "login",
+		source: "app",
+		description: "Configure provider authentication",
+		argumentHint: "[provider]",
+		run: (args) => {
+			const typed = args.trim().toLowerCase();
+			if (typed) {
+				const match = API_KEY_PROVIDERS.find(
+					(provider) => provider.id === typed || provider.name.toLowerCase() === typed,
+				);
+				if (match) selectedProviderId = match.id;
+			}
+			openProviderDialog();
+		},
+	},
+	{
+		name: "reload",
+		source: "app",
+		description: "Reload keybindings, extensions, skills, prompts, and themes",
+		run: async () => {
+			try {
+				await sendCommandAwait("reload");
+				showToast("Reloaded extensions, skills, prompts, and themes.");
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "clone",
+		source: "app",
+		description: "Duplicate the current session at the current position",
+		run: () => void cloneSession(),
+	},
+	{
+		name: "fork",
+		source: "app",
+		description: "Create a new fork from a previous user message",
+		run: async () => {
+			const userMessages = state.messages.filter((item) => item.role === "user" && !item._optimistic);
+			if (userMessages.length === 0) {
+				showToast("No messages to fork from yet.");
+				return;
+			}
+			const options = userMessages.map((message, index) => `${index + 1}. ${previewText(message)}`);
+			const selected = await openInteraction({
+				title: "Fork from message",
+				kind: "select",
+				options,
+				confirmLabel: "Fork",
+			});
+			if (!selected) return;
+			const index = options.indexOf(selected);
+			if (index >= 0) void forkFromMessage(userMessages[index]);
+		},
+	},
+	{
+		name: "rlm-max-depth",
+		source: "app",
+		description: "Set/view the per-chat persistent RLM max depth",
+		argumentHint: "[<int> [--global]]",
+		run: async (args) => {
+			const tokens = args.trim() ? args.trim().split(/\s+/) : [];
+			try {
+				if (tokens.length === 0) {
+					const response = await sendCommandAwait("get_rlm_max_depth");
+					showToast(`RLM max depth: ${response.data?.maxDepth} (${response.data?.source})`);
+					return;
+				}
+				const global = tokens[1] === "--global";
+				if (tokens.length > (global ? 2 : 1) || !/^\d+$/.test(tokens[0] || "")) {
+					showToast("Usage: /rlm-max-depth [<non-negative integer> [--global]]");
+					return;
+				}
+				const response = await sendCommandAwait("set_rlm_max_depth", { maxDepth: Number(tokens[0]), global });
+				const result = response.data || {};
+				showToast(`RLM max depth set: ${result.maxDepth}${result.globalSaved ? " and saved as global default" : ""}`);
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "logs",
+		source: "app",
+		description: "Show where daemon and client logs are saved",
+		run: async () => {
+			try {
+				const response = await sendCommandAwait("get_logs_info");
+				const { dir, files = [] } = response.data || {};
+				const lines = [`Directory: ${dir}`, ""];
+				if (files.length === 0) lines.push("No logs written yet.");
+				else for (const file of files) lines.push(`• ${file.name} (${(file.sizeBytes / 1024).toFixed(1)} KB)`);
+				lines.push("", "Daemon crashes log to <socket>.log; agent-open failures log to client-errors.log.");
+				await openInteraction({ title: "Logs", kind: "confirm", confirmLabel: "Close", message: lines.join("\n") });
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "changelog",
+		source: "app",
+		description: "Show changelog entries",
+		run: async () => {
+			try {
+				const response = await sendCommandAwait("get_changelog");
+				await openInteraction({
+					title: "What's New",
+					kind: "editor",
+					prefill: response.data?.markdown || "No changelog entries found.",
+					confirmLabel: "Close",
+				});
+			} catch (error) {
+				showToast(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "heartbeat",
+		source: "app",
+		description: "Set or view a persistent heartbeat",
+		argumentHint: "[status|pause|resume|stop|[every <duration>] [--steer|--follow-up] <instruction>]",
+		run: (args) => void runHeartbeatSlashCommand(args),
+	},
+	{
+		name: "heartbeats",
+		source: "app",
+		description: "View all heartbeats across conversations",
+		run: () => void showAllHeartbeats(),
 	},
 	{
 		name: "hotkeys",
@@ -3928,10 +4593,32 @@ const CLIENT_COMMANDS = [
 				].join("\n"),
 			}),
 	},
+	{
+		name: "fullscreen",
+		source: "app",
+		description: "Toggle fullscreen window mode",
+		argumentHint: "[on|off]",
+		run: async (args) => {
+			const arg = args.trim().toLowerCase();
+			if (arg && arg !== "on" && arg !== "off") {
+				showToast("Usage: /fullscreen [on|off]");
+				return;
+			}
+			const enable = arg === "on" ? true : arg === "off" ? false : !document.fullscreenElement;
+			try {
+				if (enable) await document.documentElement.requestFullscreen();
+				else if (document.fullscreenElement) await document.exitFullscreen();
+			} catch (error) {
+				showToast(error?.message || "Could not toggle fullscreen.");
+			}
+		},
+	},
+	{ name: "quit", source: "app", description: "Quit Prometheus", run: () => window.close() },
 ];
 
 function findClientCommand(name) {
-	return CLIENT_COMMANDS.find((command) => command.name === name.toLowerCase());
+	const lower = name.toLowerCase();
+	return CLIENT_COMMANDS.find((command) => command.name === lower || command.aliases?.includes(lower));
 }
 
 // Slash-command autocomplete. Only the leading token completes: the agent parses a
@@ -4006,8 +4693,12 @@ function updateCommandMenu() {
 		closeCommandMenu();
 		return;
 	}
-	const knownNames = new Set(state.commands.map((command) => command.name));
-	const merged = [...state.commands, ...CLIENT_COMMANDS.filter((command) => !knownNames.has(command.name))];
+	// Desktop-native entries win on name collision so /export, /model and friends
+	// keep their local `run` now that the server advertises the builtin set too;
+	// all other server commands (extensions, prompts, skills, builtins) flow
+	// through so a new command needs no desktop edit to appear.
+	const clientByName = new Map(CLIENT_COMMANDS.map((command) => [command.name, command]));
+	const merged = [...state.commands.filter((command) => !clientByName.has(command.name)), ...CLIENT_COMMANDS];
 	const pool = merged
 		.map((command, index) => ({ command, index }))
 		.sort((a, b) => commandSortWeight(a.command) - commandSortWeight(b.command) || a.index - b.index)
@@ -5401,14 +6092,35 @@ function switchSettingsTab(tabKey) {
 	});
 }
 
+async function refreshOutputStyleOptions(currentValue) {
+	const select = $("settings-output-style");
+	let names = [];
+	try {
+		const snapshot = await sendCommandAwait("get_resource_snapshot");
+		names = (snapshot.data?.outputStyles || []).filter((name) => name && name !== "default");
+	} catch (error) {
+		names = [];
+	}
+	if (currentValue && currentValue !== "default" && !names.includes(currentValue)) names.push(currentValue);
+	select.innerHTML = '<option value="">Default</option>';
+	for (const name of names) {
+		const option = document.createElement("option");
+		option.value = name;
+		option.textContent = name;
+		select.appendChild(option);
+	}
+}
+
 async function openSettingsDialog() {
 	settingsStatus.textContent = "";
 	settingsStatus.classList.remove("error");
 	try {
 		const { settings, path: loadedPath } = await window.desktopAgent.getSettings();
 		settingsPath = loadedPath;
+		await refreshOutputStyleOptions(settingsPathGet(settings || {}, "outputStyle"));
 		populateSettingsForm(settings || {});
 		settingsLoaded = true;
+		void refreshPluginsTab();
 	} catch (error) {
 		settingsStatus.textContent = `Could not load settings: ${error?.message || error}`;
 		settingsStatus.classList.add("error");
@@ -5437,6 +6149,7 @@ async function saveSettingsFromDialog() {
 		renderMessages();
 		settingsStatus.textContent = "Saved. Some changes apply to new sessions.";
 		showToast("Settings saved.");
+		void refreshPluginsTab();
 	} catch (error) {
 		settingsStatus.textContent = `Could not save settings: ${error?.message || error}`;
 		settingsStatus.classList.add("error");
@@ -5479,6 +6192,404 @@ settingsDialog.addEventListener("cancel", (event) => {
 	event.preventDefault();
 	closeSettingsDialog();
 });
+
+
+// ---------------------------------------------------------------------------
+// Settings dialog: plugins
+// ---------------------------------------------------------------------------
+
+let settingsPluginList = null; // AgentConnectionPluginList
+let settingsPluginDetail = null; // AgentConnectionPluginDetail
+
+function formatPluginDate(timestamp) {
+	if (!timestamp) return "—";
+	const date = new Date(timestamp);
+	return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+async function pluginCommand(type, payload = {}) {
+	const response = await sendCommandAwait(type, payload);
+	return response.data;
+}
+
+async function refreshPluginsTab() {
+	const tableWrap = $("plugins-table-wrap");
+	const empty = $("plugins-empty");
+	const unsupported = $("plugins-unsupported");
+	try {
+		settingsPluginList = await pluginCommand("plugin_list");
+	} catch (error) {
+		tableWrap.hidden = true;
+		empty.hidden = true;
+		unsupported.textContent = error?.message || "Plugin management is not available on this connection.";
+		unsupported.hidden = false;
+		return;
+	}
+	unsupported.hidden = true;
+	const packages = settingsPluginList.packages || [];
+	empty.hidden = packages.length === 0;
+	tableWrap.hidden = packages.length === 0;
+	renderPluginTable(packages);
+	renderPluginMarketplaces(settingsPluginList.marketplaces || []);
+	// An open detail view must reflect the state just mutated.
+	if (settingsPluginDetail?.entry?.source) void openPluginDetail(settingsPluginDetail.entry.source);
+}
+
+async function togglePluginEnabled(source, enabled) {
+	try {
+		await pluginCommand("plugin_set_enabled", { source, enabled });
+		showToast(enabled ? "Enabled plugin." : "Disabled plugin.");
+		await refreshPluginsTab();
+	} catch (error) {
+		showToast(error?.message || "Could not toggle plugin.");
+	}
+}
+
+async function removePlugin(pkg) {
+	try {
+		await pluginCommand("plugin_remove", { spec: pkg.source });
+		showToast(`Removed ${pkg.name || pkg.source}.`);
+		settingsPluginDetail = null;
+		$("plugins-detail-view").hidden = true;
+		$("plugins-list-view").hidden = false;
+		await refreshPluginsTab();
+	} catch (error) {
+		showToast(error?.message || "Could not remove plugin.");
+	}
+}
+
+async function openPluginDetail(source) {
+	let detail;
+	try {
+		detail = await pluginCommand("plugin_details", { source });
+	} catch (error) {
+		showToast(error?.message || "Could not load plugin details.");
+		return;
+	}
+	settingsPluginDetail = detail;
+	$("plugins-list-view").hidden = true;
+	$("plugins-detail-view").hidden = false;
+	renderPluginDetail(detail);
+}
+
+function closePluginDetail() {
+	settingsPluginDetail = null;
+	$("plugins-detail-view").hidden = true;
+	$("plugins-list-view").hidden = false;
+}
+
+async function setHookEnabled(extensionPath, event, enabled) {
+	try {
+		await pluginCommand("plugin_set_hook_enabled", { extensionPath, event, enabled });
+		showToast(enabled ? "Enabled hook." : "Disabled hook. Takes effect on reload.");
+		await refreshPluginsTab();
+	} catch (error) {
+		showToast(error?.message || "Could not toggle hook.");
+	}
+}
+
+async function setAllHookEnabled(extensionPath, hooks, enabled) {
+	try {
+		await Promise.all(hooks.map((hook) => pluginCommand("plugin_set_hook_enabled", { extensionPath, event: hook.event, enabled })));
+		showToast(enabled ? "Enabled all hooks." : "Disabled all hooks. Takes effect on reload.");
+		await refreshPluginsTab();
+	} catch (error) {
+		showToast(error?.message || "Could not toggle hooks.");
+	}
+}
+
+function renderPluginTable(packages) {
+	const wrap = $("plugins-table-wrap");
+	wrap.replaceChildren();
+
+	const table = document.createElement("table");
+	table.className = "plugins-table";
+	const thead = document.createElement("thead");
+	const headRow = document.createElement("tr");
+	for (const label of ["Name", "Author", "Skills", "Updated", "", ""]) {
+		const th = document.createElement("th");
+		th.textContent = label;
+		if (!label) th.className = "plugins-table-action";
+		headRow.appendChild(th);
+	}
+	thead.appendChild(headRow);
+	table.appendChild(thead);
+
+	const tbody = document.createElement("tbody");
+	for (const pkg of packages) {
+		const row = document.createElement("tr");
+		row.className = "plugins-table-row" + (pkg.enabled === false ? " disabled" : "");
+		row.addEventListener("click", () => void openPluginDetail(pkg.source));
+
+		const nameCell = document.createElement("td");
+		const nameBlock = document.createElement("div");
+		nameBlock.className = "plugin-name-cell";
+		const nameButton = document.createElement("button");
+		nameButton.type = "button";
+		nameButton.className = "plugin-name-link";
+		nameButton.textContent = pkg.name || pkg.source;
+		nameButton.addEventListener("click", (event) => {
+			event.stopPropagation();
+			void openPluginDetail(pkg.source);
+		});
+		nameBlock.appendChild(nameButton);
+		if (pkg.version) {
+			const version = document.createElement("span");
+			version.className = "plugin-version";
+			version.textContent = `v${pkg.version}`;
+			nameBlock.appendChild(version);
+		}
+		nameCell.appendChild(nameBlock);
+
+		const authorCell = document.createElement("td");
+		const author = document.createElement("span");
+		author.className = "plugin-author";
+		author.textContent = pkg.author || "—";
+		authorCell.appendChild(author);
+
+		const skillsCell = document.createElement("td");
+		skillsCell.textContent = String(pkg.skillCount ?? 0);
+
+		const updatedCell = document.createElement("td");
+		updatedCell.textContent = formatPluginDate(pkg.lastUpdated);
+
+		const enableCell = document.createElement("td");
+		const enable = document.createElement("input");
+		enable.type = "checkbox";
+		enable.checked = pkg.enabled !== false;
+		enable.setAttribute("aria-label", `Enable ${pkg.name || pkg.source}`);
+		enable.addEventListener("click", (event) => event.stopPropagation());
+		enable.addEventListener("change", () => void togglePluginEnabled(pkg.source, enable.checked));
+		enableCell.appendChild(enable);
+
+		const removeCell = document.createElement("td");
+		removeCell.className = "plugins-table-action";
+		const remove = document.createElement("button");
+		remove.type = "button";
+		remove.className = "row-remove-button plugin-trash-button";
+		remove.setAttribute("aria-label", `Remove ${pkg.name || pkg.source}`);
+		remove.innerHTML =
+			'<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4.5h11M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4 4.5l.7 8.3a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.3M6.8 7.5v4.5M9.2 7.5v4.5"/></svg>';
+		remove.addEventListener("click", (event) => {
+			event.stopPropagation();
+			void removePlugin(pkg);
+		});
+		removeCell.appendChild(remove);
+
+		row.append(nameCell, authorCell, skillsCell, updatedCell, enableCell, removeCell);
+		tbody.appendChild(row);
+	}
+	table.appendChild(tbody);
+	wrap.appendChild(table);
+}
+
+function renderPluginMarketplaces(marketplaces) {
+	const container = $("plugins-marketplaces");
+	container.replaceChildren();
+	if (marketplaces.length === 0) return;
+	const heading = document.createElement("p");
+	heading.className = "marketplace-heading";
+	heading.textContent = "Available from marketplaces";
+	container.appendChild(heading);
+	for (const marketplace of marketplaces) {
+		const card = document.createElement("div");
+		card.className = "marketplace-card";
+		const header = document.createElement("div");
+		header.className = "marketplace-card-header";
+		const title = document.createElement("strong");
+		title.textContent = marketplace.name;
+		header.appendChild(title);
+		if (marketplace.description) {
+			const desc = document.createElement("span");
+			desc.className = "marketplace-description";
+			desc.textContent = marketplace.description;
+			header.appendChild(desc);
+		}
+		card.appendChild(header);
+		for (const plugin of marketplace.plugins || []) {
+			const rowEl = document.createElement("div");
+			rowEl.className = "marketplace-plugin-row";
+			const label = document.createElement("span");
+			const name = document.createElement("strong");
+			name.textContent = plugin.name;
+			label.appendChild(name);
+			if (plugin.version) {
+				label.appendChild(document.createTextNode(` v${plugin.version}`));
+			}
+			rowEl.appendChild(label);
+			const install = document.createElement("button");
+			install.type = "button";
+			install.className = "chip-add-button";
+			if (plugin.installed) {
+				install.disabled = true;
+				install.textContent = "Installed";
+			} else {
+				install.textContent = "Install";
+				install.addEventListener("click", () => {
+					void (async () => {
+						try {
+							await pluginCommand("plugin_install", { spec: plugin.source });
+							showToast(`Installed ${plugin.name}.`);
+							await refreshPluginsTab();
+						} catch (error) {
+							showToast(error?.message || "Could not install plugin.");
+						}
+					})();
+				});
+			}
+			rowEl.appendChild(install);
+			card.appendChild(rowEl);
+		}
+		container.appendChild(card);
+	}
+}
+
+function renderPluginDetail(detail) {
+	const container = $("plugins-detail-view");
+	container.replaceChildren();
+
+	const header = document.createElement("div");
+	header.className = "settings-subsection-header";
+	const back = document.createElement("button");
+	back.type = "button";
+	back.className = "chip-add-button";
+	back.textContent = "← Plugins";
+	back.addEventListener("click", closePluginDetail);
+	const title = document.createElement("h3");
+	title.textContent = detail.entry.name || detail.entry.source;
+	header.append(back, title);
+	container.appendChild(header);
+
+	const meta = document.createElement("p");
+	meta.className = "settings-section-note";
+	meta.textContent = [detail.entry.source, detail.entry.version ? `v${detail.entry.version}` : "", detail.entry.author, detail.entry.scope]
+		.filter(Boolean)
+		.join(" · ");
+	container.appendChild(meta);
+
+	const description = document.createElement("p");
+	description.className = "plugin-detail-description";
+	description.textContent = detail.entry.description || "No description.";
+	container.appendChild(description);
+
+	const enableLabel = document.createElement("label");
+	enableLabel.className = "plugin-enable-label";
+	const enable = document.createElement("input");
+	enable.type = "checkbox";
+	enable.checked = detail.entry.enabled !== false;
+	enable.addEventListener("change", () => void togglePluginEnabled(detail.entry.source, enable.checked));
+	const enableText = document.createElement("span");
+	enableText.textContent = "Enabled";
+	enableLabel.append(enable, enableText);
+	container.appendChild(enableLabel);
+
+	const skillsHeading = document.createElement("h4");
+	skillsHeading.className = "plugin-detail-heading";
+	skillsHeading.textContent = `Skills (${detail.skills.length})`;
+	container.appendChild(skillsHeading);
+	if (detail.skills.length === 0) {
+		const none = document.createElement("p");
+		none.className = "settings-empty-note";
+		none.textContent = "No skills.";
+		container.appendChild(none);
+	} else {
+		const skillList = document.createElement("ul");
+		skillList.className = "plugin-detail-list";
+		for (const skill of detail.skills) {
+			const item = document.createElement("li");
+			const name = document.createElement("strong");
+			name.textContent = skill.name;
+			item.appendChild(name);
+			if (skill.description) {
+				const desc = document.createElement("span");
+				desc.textContent = ` — ${skill.description}`;
+				item.appendChild(desc);
+			}
+			const here = document.createElement("code");
+			here.textContent = skill.path;
+			item.appendChild(document.createTextNode(" "));
+			item.appendChild(here);
+			skillList.appendChild(item);
+		}
+		container.appendChild(skillList);
+	}
+
+	const hookCount = detail.extensions.reduce((total, extension) => total + extension.hooks.length, 0);
+	if (hookCount > 0) {
+		const extHeading = document.createElement("h4");
+		extHeading.className = "plugin-detail-heading";
+		extHeading.textContent = `Hooks (${hookCount})`;
+		container.appendChild(extHeading);
+		for (const extension of detail.extensions) {
+			const card = document.createElement("div");
+			card.className = "plugin-extension-card";
+			const pathEl = document.createElement("code");
+			pathEl.className = "plugin-extension-path";
+			pathEl.textContent = extension.path;
+			card.appendChild(pathEl);
+			if (extension.hooks.length > 1) {
+				const allRow = document.createElement("label");
+				allRow.className = "plugin-hook-row plugin-hook-all";
+				const allToggle = document.createElement("input");
+				allToggle.type = "checkbox";
+				allToggle.checked = extension.hooks.every((hook) => hook.enabled);
+				allToggle.setAttribute("aria-label", "All hooks");
+				allToggle.addEventListener("change", () =>
+					void setAllHookEnabled(extension.path, extension.hooks, allToggle.checked),
+				);
+				const allText = document.createElement("span");
+				allText.textContent = "All hooks";
+				allRow.append(allToggle, allText);
+				card.appendChild(allRow);
+			}
+			for (const hook of extension.hooks) {
+				const hookRow = document.createElement("label");
+				hookRow.className = "plugin-hook-row";
+				const hookToggle = document.createElement("input");
+				hookToggle.type = "checkbox";
+				hookToggle.checked = hook.enabled;
+				hookToggle.addEventListener("click", (event) => event.stopPropagation());
+				hookToggle.addEventListener("change", () => void setHookEnabled(extension.path, hook.event, hookToggle.checked));
+				const hookText = document.createElement("span");
+				hookText.textContent = `${hook.event} (${hook.handlerCount} handler${hook.handlerCount === 1 ? "" : "s"})`;
+				hookRow.append(hookToggle, hookText);
+				card.appendChild(hookRow);
+			}
+			container.appendChild(card);
+		}
+	}
+}
+
+function toggleInstallRow(open) {
+	$("plugins-install-ui").hidden = !open;
+	$("plugins-marketplaces").hidden = !open;
+}
+
+async function runPluginInstall() {
+	const sourceInput = $("plugins-install-source");
+	const spec = sourceInput.value.trim();
+	if (!spec) return;
+	try {
+		await pluginCommand("plugin_install", { spec });
+		sourceInput.value = "";
+		toggleInstallRow(false);
+		showToast(`Installed ${spec}.`);
+		await refreshPluginsTab();
+	} catch (error) {
+		showToast(error?.message || "Could not install plugin.");
+	}
+}
+
+$("plugins-install").addEventListener("click", () => {
+	const opening = $("plugins-install-ui").hidden;
+	toggleInstallRow(opening);
+	if (opening) $("plugins-install-source").focus();
+});
+$("plugins-install-run").addEventListener("click", () => void runPluginInstall());
+$("plugins-install-source").addEventListener("keydown", (event) => {
+	if (event.key === "Enter") void runPluginInstall();
+});
+$("plugins-install-cancel").addEventListener("click", () => toggleInstallRow(false));
 
 
 // ---------------------------------------------------------------------------

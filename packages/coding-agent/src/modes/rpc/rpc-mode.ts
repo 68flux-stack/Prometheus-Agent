@@ -2,8 +2,12 @@
  * RPC mode: headless operation with JSON commands on stdin and JSON responses/events on stdout.
  */
 
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { getChangelogPath, getLogsDir } from "../../config.js";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { parseChangelog } from "../../utils/changelog.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { InProcessAgentConnection } from "../agent-connection/in-process-agent-connection.js";
 import type {
@@ -72,6 +76,10 @@ async function runRpcModeWithConnectionInternal(
 		success: false,
 		error: message,
 	});
+
+	// Pre-warm the model catalog so the first get_available_models round trip
+	// doesn't block on provider fetches (Prime authorization, models.json).
+	void connection.getAvailableModels().catch(() => {});
 
 	let shutdownRequested = false;
 	let shuttingDown = false;
@@ -217,6 +225,32 @@ async function runRpcModeWithConnectionInternal(
 
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
+		const PLUGIN_METHODS = [
+			"listPlugins",
+			"getPluginDetail",
+			"installPlugin",
+			"removePlugin",
+			"updatePlugins",
+			"addMarketplace",
+			"removeMarketplace",
+			"updateMarketplaces",
+			"setPackageEnabled",
+			"setExtensionHookEnabled",
+		] as const;
+		const requirePluginConnection = (method: (typeof PLUGIN_METHODS)[number]): Required<AgentConnection> => {
+			if (!connection[method]) {
+				throw new Error(`Plugin management (${method}) is not supported by this connection`);
+			}
+			return connection as Required<AgentConnection>;
+		};
+		const reloadBestEffort = async () => {
+			try {
+				await connection.reload();
+			} catch {
+				// Resource reload is best-effort after a package mutation; the
+				// mutation itself already succeeded and is persisted.
+			}
+		};
 		switch (command.type) {
 			case "prompt":
 				await connection.prompt(command.message, {
@@ -248,6 +282,7 @@ async function runRpcModeWithConnectionInternal(
 					cwd: state.cwd,
 					model: state.model,
 					thinkingLevel: state.thinkingLevel,
+					serviceTier: state.serviceTier,
 					isStreaming: state.isStreaming,
 					isCompacting: state.isCompacting,
 					steeringMode: state.steeringMode,
@@ -291,6 +326,8 @@ async function runRpcModeWithConnectionInternal(
 				return success(id, command.type, (await connection.cycleModel()) ?? null);
 			case "get_available_models":
 				return success(id, command.type, { models: await connection.getAvailableModels() });
+			case "get_resource_snapshot":
+				return success(id, command.type, await connection.getResourceSnapshot());
 			case "set_thinking_level":
 				await connection.setThinkingLevel(command.level);
 				return success(id, command.type);
@@ -332,6 +369,43 @@ async function runRpcModeWithConnectionInternal(
 				return success(id, command.type);
 			case "get_session_stats":
 				return success(id, command.type, await connection.getSessionStats());
+			case "get_system_prompt":
+				return success(id, command.type, { systemPrompt: await connection.getSystemPrompt() });
+			case "get_changelog": {
+				const entries = parseChangelog(getChangelogPath());
+				const markdown =
+					entries.length > 0
+						? entries
+								.slice()
+								.reverse()
+								.map((entry) => entry.content)
+								.join("\n\n")
+						: "No changelog entries found.";
+				return success(id, command.type, { markdown });
+			}
+			case "get_logs_info": {
+				const dir = getLogsDir();
+				const files = existsSync(dir)
+					? readdirSync(dir)
+							.filter((name) => !name.startsWith("."))
+							.sort()
+							.map((name) => ({ name, sizeBytes: statSync(join(dir, name)).size }))
+					: [];
+				return success(id, command.type, { dir, files });
+			}
+			case "get_rlm_max_depth":
+				return success(id, command.type, await connection.getRlmMaxDepthStatus());
+			case "set_rlm_max_depth":
+				return success(
+					id,
+					command.type,
+					await connection.setRlmMaxDepth(command.maxDepth, { global: command.global }),
+				);
+			case "set_service_tier":
+				await connection.setServiceTier(command.serviceTier);
+				return success(id, command.type);
+			case "import_session":
+				return success(id, command.type, await connection.importFromJsonl(command.path, command.cwd));
 			case "export_html":
 				return success(id, command.type, { path: await connection.exportToHtml(command.outputPath) });
 			case "switch_session":
@@ -460,9 +534,79 @@ async function runRpcModeWithConnectionInternal(
 					description: available.description,
 					source: available.source,
 					sourceInfo: available.sourceInfo,
+					execution: available.execution,
+					aliases: available.aliases,
 				}));
 				return success(id, command.type, { commands });
 			}
+			case "reload":
+				await connection.reload();
+				return success(id, command.type);
+			// Plugin / package management. Optional on the connection: daemon-backed
+			// transports do not implement it (see the pluginManagement runtime
+			// feature flag). After a mutating operation the runtime reloads so the
+			// UI sees fresh resources; a reload failure must not fail the command.
+			case "plugin_list":
+				return success(id, command.type, await requirePluginConnection("listPlugins").listPlugins());
+			case "plugin_details":
+				return success(
+					id,
+					command.type,
+					await requirePluginConnection("getPluginDetail").getPluginDetail(command.source),
+				);
+			case "plugin_install": {
+				const result = await requirePluginConnection("installPlugin").installPlugin(command.spec, {
+					local: command.local,
+				});
+				await reloadBestEffort();
+				return success(id, command.type, result);
+			}
+			case "plugin_remove": {
+				const removed = await requirePluginConnection("removePlugin").removePlugin(command.spec, {
+					local: command.local,
+				});
+				if (!removed) return error(id, command.type, `No matching plugin found for "${command.spec}"`);
+				await reloadBestEffort();
+				return success(id, command.type);
+			}
+			case "plugin_update":
+				await requirePluginConnection("updatePlugins").updatePlugins(command.spec);
+				await reloadBestEffort();
+				return success(id, command.type);
+			case "plugin_marketplace_add": {
+				const result = await requirePluginConnection("addMarketplace").addMarketplace(command.source, {
+					local: command.local,
+					name: command.name,
+				});
+				return success(id, command.type, result);
+			}
+			case "plugin_marketplace_remove": {
+				const removed = await requirePluginConnection("removeMarketplace").removeMarketplace(command.nameOrSource, {
+					local: command.local,
+				});
+				if (!removed) return error(id, command.type, `No matching marketplace found for "${command.nameOrSource}"`);
+				return success(id, command.type);
+			}
+			case "plugin_marketplace_update":
+				return success(
+					id,
+					command.type,
+					await requirePluginConnection("updateMarketplaces").updateMarketplaces(command.name),
+				);
+			case "plugin_set_enabled":
+				await requirePluginConnection("setPackageEnabled").setPackageEnabled(command.source, command.enabled, {
+					local: command.local,
+				});
+				await reloadBestEffort();
+				return success(id, command.type);
+			case "plugin_set_hook_enabled":
+				await requirePluginConnection("setExtensionHookEnabled").setExtensionHookEnabled(
+					command.extensionPath,
+					command.event,
+					command.enabled,
+				);
+				await reloadBestEffort();
+				return success(id, command.type);
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);

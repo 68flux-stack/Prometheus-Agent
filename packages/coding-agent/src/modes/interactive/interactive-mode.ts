@@ -116,6 +116,7 @@ import { DefaultPackageManager } from "../../core/package-manager.js";
 import { resolvePrometheusTracesBaseUrl } from "../../core/prime-inference-auth.js";
 import { resolvePrimeInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
 import { parseCommandArgs } from "../../core/prompt-templates.js";
+import { getAvailableOutputStyles } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { SessionImportFileNotFoundError } from "../../core/session-import-errors.js";
 import { parseSkillBlock } from "../../core/skill-blocks.js";
@@ -7278,6 +7279,8 @@ export class InteractiveMode {
 					availableThinkingLevels: state.availableThinkingLevels,
 					currentTheme: this.settingsManager.getTheme() || "prime",
 					availableThemes: getAvailableThemes(),
+					currentOutputStyle: this.settingsManager.getOutputStyle() || "default",
+					availableOutputStyles: getAvailableOutputStyles(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -7365,6 +7368,10 @@ export class InteractiveMode {
 							this.ui.invalidate();
 							this.ui.requestRender();
 						}
+					},
+					onOutputStyleChange: (outputStyle) => {
+						this.settingsManager.setOutputStyle(outputStyle);
+						void this.handleReloadCommand();
 					},
 					onHideThinkingBlockChange: (hidden) => {
 						this.hideThinkingBlock = hidden;

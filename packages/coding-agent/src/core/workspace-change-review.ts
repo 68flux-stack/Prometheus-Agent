@@ -165,8 +165,22 @@ export class WorkspaceChangeReview {
 	private readonly manifestPath: string;
 	private readonly pendingPath: string;
 	private readonly objectsDir: string;
+	/** Where this session's own objects used to live; still read so older sessions keep their previews. */
+	private readonly legacyObjectsDir: string;
+	/** True when objectsDir is the agent-wide store rather than this session's own folder. */
+	private readonly sharedObjects: boolean;
+	private readonly hashCachePath: string;
 	private manifest: Manifest;
 	private pending: PendingManifest;
+	/**
+	 * path -> last known hash with the stat identity it was taken from, shared by every
+	 * conversation in this workspace. A scan that sees the same size and mtime reuses the
+	 * hash instead of re-reading the bytes. Without a shared cache each new conversation
+	 * re-hashes the entire workspace on its first turn.
+	 */
+	private hashCache: Record<string, ManifestEntry> = {};
+	/** Object hashes known to be on disk, so a scan does not stat the store once per file. */
+	private storedHashes?: Set<string>;
 
 	// artifactDir is always "<agentDataDir>/session-artifacts/<sessionId>" (session-manager.ts,
 	// daemon-mode.ts, daemon-supervisor.ts, cron-jobs.ts all build it this way), so two levels up
@@ -186,14 +200,55 @@ export class WorkspaceChangeReview {
 		this.pending = pending;
 		this.manifestPath = join(artifactDir, "change-review.json");
 		this.pendingPath = join(artifactDir, "change-review-pending.json");
-		this.objectsDir = join(artifactDir, "change-review-objects");
+		this.legacyObjectsDir = join(artifactDir, "change-review-objects");
 		const artifactParent = dirname(artifactDir);
 		this.agentDataRoot = resolve(
 			basename(artifactParent) === "session-artifacts" ? dirname(artifactParent) : artifactDir,
 		);
+		// Objects are content-addressed, so one store per agent directory dedupes across every
+		// conversation. A per-session store made each new chat copy the whole workspace into its
+		// own folder before the first token — the same bytes, once per conversation.
+		this.sharedObjects = this.agentDataRoot !== resolve(artifactDir);
+		this.objectsDir = this.sharedObjects ? join(this.agentDataRoot, "change-review-objects") : this.legacyObjectsDir;
+		this.hashCachePath = this.sharedObjects
+			? join(
+					this.agentDataRoot,
+					"change-review-cache",
+					`${createHash("sha256").update(this.cwd).digest("hex").slice(0, 32)}.json`,
+				)
+			: join(artifactDir, "change-review-hash-cache.json");
+		this.loadHashCache();
 	}
 
-	static openOrCreate(cwd: string, artifactDir: string): WorkspaceChangeReview {
+	private loadHashCache(): void {
+		try {
+			const parsed = JSON.parse(readFileSync(this.hashCachePath, "utf8")) as {
+				version?: number;
+				entries?: Record<string, ManifestEntry>;
+			};
+			if (parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") {
+				this.hashCache = parsed.entries;
+			}
+		} catch {
+			// No cache yet, or a torn concurrent write. Either way the next scan rebuilds it.
+		}
+	}
+
+	private saveHashCache(): void {
+		try {
+			mkdirSync(dirname(this.hashCachePath), { recursive: true });
+			writeFileSync(this.hashCachePath, JSON.stringify({ version: 1, entries: this.hashCache }), "utf8");
+		} catch {
+			// ponytail: last write wins between concurrent conversations. This only ever costs a
+			// rehash, never correctness, so it does not need a lock.
+		}
+	}
+
+	static openOrCreate(
+		cwd: string,
+		artifactDir: string,
+		options: { deferBaseline?: boolean } = {},
+	): WorkspaceChangeReview {
 		const manifestPath = join(artifactDir, "change-review.json");
 		const pendingPath = join(artifactDir, "change-review-pending.json");
 		let pending: PendingManifest = { version: 2, deltas: [] };
@@ -215,7 +270,12 @@ export class WorkspaceChangeReview {
 			}
 		}
 		const review = new WorkspaceChangeReview(resolve(cwd), artifactDir, { version: 1, entries: {} }, pending);
-		review.captureBaseline();
+		// The first baseline hashes and byte-copies every non-ignored workspace
+		// file, which can take seconds on a large tree. Session attach must not
+		// pay it: the durable baseline is deferred to the first beginTurn, when
+		// the same scan doubles as the pre-run state and the user is already
+		// waiting on the agent rather than on the UI connecting.
+		if (!options.deferBaseline) review.captureBaseline();
 		review.savePending();
 		return review;
 	}
@@ -223,6 +283,26 @@ export class WorkspaceChangeReview {
 	private captureBaseline(): void {
 		this.manifest.entries = this.scanWorkspace(true);
 		this.save();
+	}
+
+	/**
+	 * Capture the workspace at a scope boundary. A review opened with deferBaseline has an
+	 * empty durable manifest until here, and the scope's own scan seeds it — scanning twice
+	 * to produce the same answer is what made the first turn of a new chat the slowest one.
+	 *
+	 * The scan has to be fresh at every boundary rather than carried over from the previous
+	 * finalize: conversations run concurrently in one workspace, so another one's edit can
+	 * land between two tool calls and must not be attributed to this scope.
+	 */
+	private beginScope(): void {
+		const scan = this.scanWorkspace(true);
+		if (Object.keys(this.manifest.entries).length === 0) {
+			this.manifest.entries = scan;
+			this.save();
+		}
+		this.pending.activeBaseline = scan;
+		this.pending.activePaths = [];
+		this.savePending();
 	}
 
 	private scanWorkspace(storeBytes: boolean): Record<string, ManifestEntry> {
@@ -264,14 +344,16 @@ export class WorkspaceChangeReview {
 						continue;
 					}
 					if (!stat.isFile()) continue;
-					const baseline = this.manifest.entries[key];
+					const cached = this.hashCache[key];
 					const unchanged =
-						baseline?.kind === "file" &&
-						baseline.hash !== undefined &&
-						baseline.size === stat.size &&
-						baseline.mtimeMs === stat.mtimeMs;
-					const digest = unchanged ? baseline.hash! : hashFile(path);
-					entries[key] = { kind: "file", hash: digest, size: stat.size, mtimeMs: stat.mtimeMs };
+						cached?.kind === "file" &&
+						cached.hash !== undefined &&
+						cached.size === stat.size &&
+						cached.mtimeMs === stat.mtimeMs;
+					const digest = unchanged ? cached.hash! : hashFile(path);
+					const entry: ManifestEntry = { kind: "file", hash: digest, size: stat.size, mtimeMs: stat.mtimeMs };
+					entries[key] = entry;
+					this.hashCache[key] = entry;
 					if (storeBytes) this.storeObject(digest, path);
 				} catch {
 					preserveBaseline(key);
@@ -279,13 +361,43 @@ export class WorkspaceChangeReview {
 			}
 		};
 		visit(this.cwd);
+		this.saveHashCache();
 		return entries;
 	}
 
+	/**
+	 * Hashes already in the object store, read once per instance. The old code ran a
+	 * recursive mkdir and an existsSync for every file in the workspace on every scan,
+	 * which cost seconds on a large tree even when nothing had to be copied.
+	 */
+	private knownObjects(): Set<string> {
+		if (!this.storedHashes) {
+			let names: string[] = [];
+			try {
+				names = readdirSync(this.objectsDir);
+			} catch {
+				// No store yet; the first storeObject creates it.
+			}
+			this.storedHashes = new Set(names);
+		}
+		return this.storedHashes;
+	}
+
 	private storeObject(digest: string, source: string): void {
+		const known = this.knownObjects();
+		if (known.has(digest)) return;
 		mkdirSync(this.objectsDir, { recursive: true });
 		const path = join(this.objectsDir, digest);
 		if (!existsSync(path)) copyFileSync(source, path);
+		known.add(digest);
+	}
+
+	/** Objects written before the store was shared still live in the session's own folder. */
+	private objectPath(hash: string): string {
+		const shared = join(this.objectsDir, hash);
+		if (!this.sharedObjects || existsSync(shared)) return shared;
+		const legacy = join(this.legacyObjectsDir, hash);
+		return existsSync(legacy) ? legacy : shared;
 	}
 
 	private save(): void {
@@ -300,15 +412,11 @@ export class WorkspaceChangeReview {
 
 	/** Capture the workspace immediately before an agent run starts. */
 	beginTurn(): void {
-		this.pending.activeBaseline = this.scanWorkspace(true);
-		this.pending.activePaths = [];
-		this.savePending();
+		this.beginScope();
 	}
 
 	beginMutationScope(): void {
-		this.pending.activeBaseline = this.scanWorkspace(true);
-		this.pending.activePaths = [];
-		this.savePending();
+		this.beginScope();
 	}
 
 	recordMutatedPaths(paths: readonly string[]): void {
@@ -478,12 +586,12 @@ export class WorkspaceChangeReview {
 				const pendingEntry = this.aggregatePendingEntries().find((entry) => entry.path === change.path);
 				const baseline = pendingEntry?.before ?? this.manifest.entries[change.path];
 				const current = pendingEntry?.after;
-				const afterPath = current?.hash ? join(this.objectsDir, current.hash) : resolve(this.cwd, change.path);
+				const afterPath = current?.hash ? this.objectPath(current.hash) : resolve(this.cwd, change.path);
 				// Both sides land in memory twice over (Buffer, then string) before diff
 				// walks them line by line, so an unbounded read here is the same trap as
 				// hashing by readFileSync. Oversized files fall through to the status line.
-				if (baseline?.hash && this.diffableSize(join(this.objectsDir, baseline.hash), afterPath)) {
-					const before = readFileSync(join(this.objectsDir, baseline.hash));
+				if (baseline?.hash && this.diffableSize(this.objectPath(baseline.hash), afterPath)) {
+					const before = readFileSync(this.objectPath(baseline.hash));
 					const after = readFileSync(afterPath);
 					if (!before.includes(0) && !after.includes(0)) {
 						return textPatch(change.path, before.toString("utf8"), after.toString("utf8"));
@@ -522,7 +630,7 @@ export class WorkspaceChangeReview {
 	private objectContent(entry: ManifestEntry | undefined): Buffer | undefined {
 		if (entry?.kind !== "file" || !entry.hash) return undefined;
 		try {
-			return readFileSync(join(this.objectsDir, entry.hash));
+			return readFileSync(this.objectPath(entry.hash));
 		} catch {
 			return undefined;
 		}
@@ -644,6 +752,11 @@ export class WorkspaceChangeReview {
 	}
 
 	private pruneFinalizedObjects(): void {
+		// ponytail: a shared store is reachable by every conversation, so this session's
+		// retention set cannot decide what is garbage in it. Content-addressing already keeps
+		// it far smaller than the per-session copies it replaced; add an agent-wide sweep if
+		// it ever grows enough to matter.
+		if (this.sharedObjects) return;
 		if (this.changes().length > 0 || !existsSync(this.objectsDir)) return;
 		const retained = new Set(
 			Object.values(this.manifest.entries).flatMap((entry) =>
@@ -653,6 +766,10 @@ export class WorkspaceChangeReview {
 		for (const name of readdirSync(this.objectsDir)) {
 			if (!retained.has(name)) unlinkSync(join(this.objectsDir, name));
 		}
+		// The in-memory index is a fast path for "already on disk", so it has to be dropped
+		// whenever objects are removed. Keeping stale membership would make a later scan skip
+		// storing bytes it no longer has, and reject() would then fail to restore the file.
+		this.storedHashes = undefined;
 	}
 
 	private validatePath(path: string): string {
@@ -683,6 +800,6 @@ export class WorkspaceChangeReview {
 			return;
 		}
 		if (!entry.hash) throw new Error(`Missing snapshot content for ${key}`);
-		writeFileSync(path, readFileSync(join(this.objectsDir, entry.hash)));
+		writeFileSync(path, readFileSync(this.objectPath(entry.hash)));
 	}
 }
