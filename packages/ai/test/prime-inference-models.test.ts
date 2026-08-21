@@ -2,18 +2,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.js";
 import { getModel, getModels, getSupportedThinkingLevels } from "../src/models.js";
 
-const originalPrimeApiKey = process.env.PRIME_API_KEY;
+const originalPrometheusApiKey = process.env.PRIME_API_KEY;
 
 afterEach(() => {
-	if (originalPrimeApiKey === undefined) {
+	if (originalPrometheusApiKey === undefined) {
 		delete process.env.PRIME_API_KEY;
 	} else {
-		process.env.PRIME_API_KEY = originalPrimeApiKey;
+		process.env.PRIME_API_KEY = originalPrometheusApiKey;
 	}
 });
 
-describe("Prime Inference models", () => {
-	it("registers the Prime Inference catalog", () => {
+describe("Prometheus Inference models", () => {
+	it("registers the Prometheus Inference catalog", () => {
 		const modelIds = getModels("prime-inference").map((model) => model.id);
 
 		// Lower bound, not an exact count — the catalog grows with each release and an
@@ -63,7 +63,7 @@ describe("Prime Inference models", () => {
 		expect(getModel("prime-inference", "openai/gpt-4o").featured).toBeUndefined();
 	});
 
-	it("registers Kimi K3 on Prime Inference and OpenRouter", () => {
+	it("registers Kimi K3 on Prometheus Inference and OpenRouter", () => {
 		for (const provider of ["prime-inference", "openrouter"] as const) {
 			const model = getModel(provider, "moonshotai/kimi-k3");
 
@@ -95,7 +95,7 @@ describe("Prime Inference models", () => {
 		expect(gemini.reasoning).toBe(true);
 
 		// Modality and reasoning are read from OpenRouter's published spec for the
-		// same upstream model, but the Prime route enforces a smaller window and
+		// same upstream model, but the Prometheus route enforces a smaller window and
 		// output cap than that spec lists (1M/16k), so the curated override wins
 		// for contextWindow and maxTokens.
 		const nemotronSuper = getModel("prime-inference", "nvidia/nemotron-3-super-120b-a12b");
@@ -138,7 +138,7 @@ describe("Prime Inference models", () => {
 		});
 	});
 
-	it("marks known reasoning-capable Prime Inference model families", () => {
+	it("marks known reasoning-capable Prometheus Inference model families", () => {
 		const opus48 = getModel("prime-inference", "anthropic/claude-opus-4.8");
 		expect(opus48.reasoning).toBe(true);
 		expect(opus48.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
@@ -185,7 +185,7 @@ describe("Prime Inference models", () => {
 		expect(getModel("prime-inference", "moonshotai/kimi-k2.7-code").reasoning).toBe(true);
 	});
 
-	it("uses route-specific context windows for Prime Inference Claude routes", () => {
+	it("uses route-specific context windows for Prometheus Inference Claude routes", () => {
 		const fable = getModel("prime-inference", "anthropic/claude-fable-5");
 		expect(fable.contextWindow).toBe(1000000);
 		expect(fable.cost).toEqual({
@@ -212,7 +212,7 @@ describe("Prime Inference models", () => {
 		expect(getEnvApiKey("prime-inference")).toBe("test-prime-key");
 	});
 
-	it("requires an explicit Prime Inference API key", () => {
+	it("requires an explicit Prometheus Inference API key", () => {
 		delete process.env.PRIME_API_KEY;
 
 		expect(findEnvKeys("prime-inference")).toBeUndefined();

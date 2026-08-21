@@ -812,7 +812,7 @@ function detectTerminalBackground(): "dark" | "light" {
 }
 
 function getDefaultTheme(): string {
-	// Prime brand is dark-first; only fall back to light when the terminal is light.
+	// Prometheus brand is dark-first; only fall back to light when the terminal is light.
 	return detectTerminalBackground() === "light" ? "light" : "prime";
 }
 

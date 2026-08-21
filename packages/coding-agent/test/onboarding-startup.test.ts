@@ -5,7 +5,7 @@ import { PRIME_INFERENCE_PROVIDER_ID } from "../src/core/prime-inference-auth.js
 import {
 	type OnboardingStartupState,
 	shouldRunOnboarding,
-	shouldRunPrimeCliOnboardingSplash,
+	shouldRunPrometheusCliOnboardingSplash,
 } from "../src/modes/interactive/onboarding.js";
 
 function makeModel(provider: string): Model<Api> {
@@ -35,14 +35,14 @@ function makeState(overrides: {
 }
 
 describe("startup onboarding decision", () => {
-	test("runs onboarding on first launch with Prime CLI auth", () => {
+	test("runs onboarding on first launch with Prometheus CLI auth", () => {
 		const state = makeState({
 			onboardingShown: false,
 			model: makeModel(PRIME_INFERENCE_PROVIDER_ID),
 			modelHasAuth: true,
 			primeAuthSource: "prime_cli",
 		});
-		expect(shouldRunPrimeCliOnboardingSplash(state)).toBe(true);
+		expect(shouldRunPrometheusCliOnboardingSplash(state)).toBe(true);
 		expect(shouldRunOnboarding(state)).toBe(true);
 	});
 
@@ -67,18 +67,18 @@ describe("startup onboarding decision", () => {
 			modelHasAuth: true,
 			primeAuthSource: "prime_cli",
 		});
-		expect(shouldRunPrimeCliOnboardingSplash(state)).toBe(false);
+		expect(shouldRunPrometheusCliOnboardingSplash(state)).toBe(false);
 		expect(shouldRunOnboarding(state)).toBe(false);
 	});
 
-	test("skips the Prime CLI splash for non-Prime providers with ready auth", () => {
+	test("skips the Prometheus CLI splash for non-Prometheus providers with ready auth", () => {
 		const state = makeState({
 			onboardingShown: false,
 			model: makeModel("anthropic"),
 			modelHasAuth: true,
 			primeAuthSource: "stored",
 		});
-		expect(shouldRunPrimeCliOnboardingSplash(state)).toBe(false);
+		expect(shouldRunPrometheusCliOnboardingSplash(state)).toBe(false);
 		expect(shouldRunOnboarding(state)).toBe(false);
 	});
 });

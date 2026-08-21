@@ -23,11 +23,11 @@ const PRIVATE_PRIME_INFERENCE_MODELS: readonly Model<"openai-completions">[] = [
 	},
 ];
 
-export function isPrivatePrimeInferenceModel(model: Pick<Model<string>, "provider" | "id">): boolean {
+export function isPrivatePrometheusInferenceModel(model: Pick<Model<string>, "provider" | "id">): boolean {
 	return model.provider === "prime-inference" && model.id.startsWith("internal/");
 }
 
-export function getPrivatePrimeInferenceModels(): Model<"openai-completions">[] {
+export function getPrivatePrometheusInferenceModels(): Model<"openai-completions">[] {
 	return PRIVATE_PRIME_INFERENCE_MODELS.map((model) => ({
 		...model,
 		input: [...model.input],
@@ -36,13 +36,13 @@ export function getPrivatePrimeInferenceModels(): Model<"openai-completions">[] 
 	}));
 }
 
-export async function fetchAuthorizedPrivatePrimeInferenceModelIds(
+export async function fetchAuthorizedPrivatePrometheusInferenceModelIds(
 	apiKey: string,
 	teamHeaders: Record<string, string>,
 	fetchFn: typeof fetch = fetch,
 	timeoutMs: number = PRIVATE_MODEL_REFRESH_TIMEOUT_MS,
 ): Promise<Set<string>> {
-	if (!teamHeaders["X-Prime-Team-ID"]) {
+	if (!teamHeaders["X-Prometheus-Team-ID"]) {
 		return new Set();
 	}
 
@@ -57,12 +57,12 @@ export async function fetchAuthorizedPrivatePrimeInferenceModelIds(
 		return new Set();
 	}
 	if (!response.ok) {
-		throw new Error(`Prime Inference model catalog request failed with status ${response.status}`);
+		throw new Error(`Prometheus Inference model catalog request failed with status ${response.status}`);
 	}
 
 	const payload = (await response.json()) as unknown;
 	if (!payload || typeof payload !== "object" || !("data" in payload) || !Array.isArray(payload.data)) {
-		throw new Error("Prime Inference model catalog response is invalid");
+		throw new Error("Prometheus Inference model catalog response is invalid");
 	}
 
 	const knownPrivateIds = new Set(PRIVATE_PRIME_INFERENCE_MODELS.map((model) => model.id));

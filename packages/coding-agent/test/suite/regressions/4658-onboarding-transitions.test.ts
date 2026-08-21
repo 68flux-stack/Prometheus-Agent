@@ -15,14 +15,14 @@ interface OnboardingSplashHandle {
 }
 
 interface InteractiveOnboardingHarness {
-	runOnboardingFlow(showPrimeCliSplash?: boolean): Promise<void>;
+	runOnboardingFlow(showPrometheusCliSplash?: boolean): Promise<void>;
 	uiServices: {
 		modelRegistry: ModelRegistry;
 	};
 	getModelCandidates(): Promise<AgentConnectionModel[]>;
 	showOnboardingSplash(continueActionLabel?: string): Promise<OnboardingSplashHandle | undefined>;
 	createAuthFlows(): {
-		runPrimeInferenceLogin(): Promise<AuthenticationResult>;
+		runPrometheusInferenceLogin(): Promise<AuthenticationResult>;
 	};
 	prepareForModelSelectionAfterLogin(authResult: AuthenticationResult): Promise<boolean>;
 	showConfigurationMenu(tab: "providers" | "models" | "mcp-connections"): Promise<void>;
@@ -84,12 +84,12 @@ describe("ENG-4658 onboarding transitions", () => {
 		fakeThis.getModelCandidates = vi.fn(async () => []);
 		fakeThis.showOnboardingSplash = vi.fn(async () => splash);
 		fakeThis.createAuthFlows = vi.fn(() => ({
-			runPrimeInferenceLogin: async (): Promise<AuthenticationResult> => {
+			runPrometheusInferenceLogin: async (): Promise<AuthenticationResult> => {
 				order.push("login");
 				return {
 					status: "success",
 					providerId: "prime-inference",
-					providerName: "Prime Inference",
+					providerName: "Prometheus Inference",
 					authType: "api_key",
 					kind: "provider",
 				};
@@ -113,7 +113,7 @@ describe("ENG-4658 onboarding transitions", () => {
 
 		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith();
 		expect(order).toEqual([
-			"progress:Signing in to Prime Intellect...",
+			"progress:Signing in to Prometheus Intellect...",
 			"login",
 			"progress:Preparing models...",
 			"prepare",

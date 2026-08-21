@@ -30,7 +30,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 
 		expect(lines).toHaveLength(36);
 		expect(output).toContain("Welcome to Prometheus");
-		expect(output).toContain("Press Enter to login with Prime Intellect");
+		expect(output).toContain("Press Enter to login with Prometheus Intellect");
 		expect(output).toContain("·");
 		expect(output).not.toContain("prime agent");
 		expect(output).not.toContain("Research and infrastructure assistant for high-context work.");
@@ -38,7 +38,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		expect(output).not.toContain("• Keep context alive in Python state and artifacts.");
 		expect(output).not.toContain("• Delegate focused work through recursive RLM calls.");
 		expect(output).not.toContain("long-context coding tasks");
-		expect(output).not.toContain("Login with Prime Intellect");
+		expect(output).not.toContain("Login with Prometheus Intellect");
 		expect(output).not.toContain("████▀▀▀██▄");
 		expect(output).not.toContain("Get Started");
 		expect(output).not.toContain("One account for models, inference, and coding sessions.");
@@ -46,16 +46,16 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		expect(output).not.toContain("╭───╮");
 		expect(output).not.toContain("PRIME INTELLECT");
 		expect(output).not.toContain("cancel");
-		expect(output).not.toContain("A coding agent connected to Prime Intellect.");
-		expect(output).not.toContain("Continue with Prime Intellect");
+		expect(output).not.toContain("A coding agent connected to Prometheus Intellect.");
+		expect(output).not.toContain("Continue with Prometheus Intellect");
 		expect(output).not.toContain("Use one account for managed inference, model access, and usage.");
 		expect(output).not.toContain("/* BUILD */");
 		expect(output).not.toContain("/* EVALUATE */");
 		expect(output).not.toContain("/* TRAIN */");
 		expect(output).not.toContain("/* DEPLOY */");
 		expect(output).not.toContain("required for first-time setup");
-		expect(output).not.toContain("Start with your Prime Intellect account.");
-		expect(output).not.toContain("Log in with Prime Intellect");
+		expect(output).not.toContain("Start with your Prometheus Intellect account.");
+		expect(output).not.toContain("Log in with Prometheus Intellect");
 		expect(output).not.toContain("→");
 		expect(output).not.toContain("Use a subscription");
 		expect(output).not.toContain("Use an API key");
@@ -65,7 +65,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		}
 	});
 
-	it("starts Prime login on confirm", () => {
+	it("starts Prometheus login on confirm", () => {
 		let selected = false;
 		const component = new PrometheusOnboardingSplashComponent(
 			() => {
@@ -88,7 +88,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		const output = stripAnsi(component.render(100).join("\n"));
 
 		expect(output).toContain("Press Enter to choose a model");
-		expect(output).not.toContain("Press Enter to login with Prime Intellect");
+		expect(output).not.toContain("Press Enter to login with Prometheus Intellect");
 	});
 
 	it("shows progress and ignores input while onboarding advances", () => {
@@ -130,7 +130,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		expect(renderRequests).toBe(3);
 		expect(secondRender).not.toBe(firstRender);
 		expect(secondRender).toContain("Welcome to Prometheus");
-		expect(secondRender).toContain("Press Enter to login with Prime Intellect");
+		expect(secondRender).toContain("Press Enter to login with Prometheus Intellect");
 	});
 
 	it("centers stacked content in narrow terminals", () => {
@@ -142,7 +142,7 @@ describe("PrometheusOnboardingSplashComponent", () => {
 		const rendered = component.render(60).map((line) => stripAnsi(line));
 		const logoLine = rendered.find((line) => line.includes(PRIME_BUTTERFLY_LOGO.split("\n")[0].trim()));
 		const brandLine = rendered.find((line) => line.includes("Welcome to Prometheus"));
-		const hintLine = rendered.find((line) => line.includes("Press Enter to login with Prime Intellect"));
+		const hintLine = rendered.find((line) => line.includes("Press Enter to login with Prometheus Intellect"));
 
 		expect(logoLine?.search(/\S/)).toBeGreaterThan(0);
 		expect(brandLine?.search(/\S/)).toBeGreaterThan(0);

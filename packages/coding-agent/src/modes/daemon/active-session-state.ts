@@ -31,6 +31,14 @@ export interface DaemonSocketClient {
 	capabilitiesByActiveSessionId?: Map<string, Set<DaemonClientCapability>>;
 }
 
+export function daemonClientSupportsCapability(
+	client: DaemonSocketClient,
+	activeSessionId: string,
+	capability: DaemonClientCapability,
+): boolean {
+	return (client.capabilitiesByActiveSessionId?.get(activeSessionId) ?? client.capabilities).has(capability);
+}
+
 export interface ActiveSessionState {
 	activeSessionId: string;
 	runtime: AgentSessionRuntime;

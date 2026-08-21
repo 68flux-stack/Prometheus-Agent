@@ -472,7 +472,7 @@ describe("default model selection", () => {
 		expect(result.thinkingLevel).toBe("medium");
 	});
 
-	test("findInitialModel prefers GLM 5.2 when Prime Inference is configured", async () => {
+	test("findInitialModel prefers GLM 5.2 when Prometheus Inference is configured", async () => {
 		const anthropicModel: Model<"anthropic-messages"> = {
 			...mockModels[0],
 			id: "claude-opus-4-7",
@@ -503,7 +503,7 @@ describe("default model selection", () => {
 		expect(result.model).toBe(primeModel);
 	});
 
-	test("findInitialModel uses another provider default when Prime Inference is not configured", async () => {
+	test("findInitialModel uses another provider default when Prometheus Inference is not configured", async () => {
 		const anthropicModel: Model<"anthropic-messages"> = {
 			...mockModels[0],
 			id: "claude-opus-4-7",
@@ -554,7 +554,7 @@ describe("default model selection", () => {
 		const savedDefault = mockModels[0];
 		const primeModel: Model<"anthropic-messages"> = {
 			id: "openai/gpt-5.5",
-			name: "GPT 5.5 (Prime Inference)",
+			name: "GPT 5.5 (Prometheus Inference)",
 			api: "anthropic-messages",
 			provider: "prime-inference",
 			baseUrl: "https://api.pinference.ai/api/v1",
@@ -586,7 +586,7 @@ describe("default model selection", () => {
 	test("findInitialModel rebuilds a saved default missing from the model snapshot when the provider is authed", async () => {
 		const primeSnapshotModel: Model<"anthropic-messages"> = {
 			id: "openai/gpt-5.5",
-			name: "GPT 5.5 (Prime Inference)",
+			name: "GPT 5.5 (Prometheus Inference)",
 			api: "anthropic-messages",
 			provider: "prime-inference",
 			baseUrl: "https://api.pinference.ai/api/v1",
@@ -618,7 +618,7 @@ describe("default model selection", () => {
 	test("findInitialModel does not rebuild a saved default for an unauthed provider", async () => {
 		const primeSnapshotModel: Model<"anthropic-messages"> = {
 			id: "openai/gpt-5.5",
-			name: "GPT 5.5 (Prime Inference)",
+			name: "GPT 5.5 (Prometheus Inference)",
 			api: "anthropic-messages",
 			provider: "prime-inference",
 			baseUrl: "https://api.pinference.ai/api/v1",

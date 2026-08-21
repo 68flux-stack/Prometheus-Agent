@@ -16,7 +16,7 @@ import { basename, dirname, join } from "node:path";
 import type { OAuthAuthInfo } from "@earendil-works/pi-ai";
 
 export const PRIME_INFERENCE_PROVIDER_ID = "prime-inference";
-export const PRIME_INFERENCE_PROVIDER_NAME = "Prime Inference";
+export const PRIME_INFERENCE_PROVIDER_NAME = "Prometheus Inference";
 export const PROMETHEUS_TRACES_PROVIDER_ID = "prometheus-traces";
 export const PROMETHEUS_TRACES_PROVIDER_NAME = "Prometheus Traces";
 
@@ -26,14 +26,14 @@ const DEFAULT_PRIME_INFERENCE_URL = "https://api.pinference.ai/api/v1";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
-export type PrimeInferenceAuthSource = "prime-cli" | "browser";
+export type PrometheusInferenceAuthSource = "prime-cli" | "browser";
 
-export type PrimeInferenceLoginResult = {
+export type PrometheusInferenceLoginResult = {
 	apiKey: string;
-	source: PrimeInferenceAuthSource;
+	source: PrometheusInferenceAuthSource;
 };
 
-export type PrimeCliConfig = {
+export type PrometheusCliConfig = {
 	apiKey?: string;
 	baseUrl: string;
 	frontendUrl: string;
@@ -45,30 +45,30 @@ export type PrimeCliConfig = {
 	teamIdFromEnv: boolean;
 };
 
-export type PrimeInferenceLoginCallbacks = {
+export type PrometheusInferenceLoginCallbacks = {
 	onAuth: (info: OAuthAuthInfo) => void;
 	onProgress?: (message: string) => void;
 	signal?: AbortSignal;
 };
 
-export type PrimeInferenceLoginOptions = {
+export type PrometheusInferenceLoginOptions = {
 	configPath?: string;
 	fetchFn?: typeof fetch;
 	pollIntervalMs?: number;
 	requestTimeoutMs?: number;
 };
 
-type PrimeChallengeConfig = {
+type PrometheusChallengeConfig = {
 	baseUrl: string;
 	frontendUrl: string;
 };
 
-type PrimeChallengeResponse = {
+type PrometheusChallengeResponse = {
 	challenge: string;
 	statusAuthToken: string;
 };
 
-export type PrimeInferenceAccessResult =
+export type PrometheusInferenceAccessResult =
 	| { ok: true }
 	| {
 			ok: false;
@@ -76,9 +76,9 @@ export type PrimeInferenceAccessResult =
 			message: string;
 	  };
 
-type PrimeAccessScope = "inference" | "agent_traces";
+type PrometheusAccessScope = "inference" | "agent_traces";
 
-export type PrimeTeam = {
+export type PrometheusTeam = {
 	teamId: string;
 	name: string;
 	slug?: string;
@@ -86,12 +86,12 @@ export type PrimeTeam = {
 	createdAt?: string;
 };
 
-function defaultPrimeCliConfigPath(): string {
+function defaultPrometheusCliConfigPath(): string {
 	return join(homedir(), ".prime", "config.json");
 }
 
-export function getPrimeCliConfigPath(configPath?: string): string {
-	return configPath ?? defaultPrimeCliConfigPath();
+export function getPrometheusCliConfigPath(configPath?: string): string {
+	return configPath ?? defaultPrometheusCliConfigPath();
 }
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -121,7 +121,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readPrimeCliConfigData(configPath: string): Record<string, unknown> {
+function readPrometheusCliConfigData(configPath: string): Record<string, unknown> {
 	let data: Record<string, unknown> = {};
 	if (existsSync(configPath)) {
 		try {
@@ -136,7 +136,7 @@ function readPrimeCliConfigData(configPath: string): Record<string, unknown> {
 	return data;
 }
 
-function writePrimeCliConfigData(configPath: string, data: Record<string, unknown>): void {
+function writePrometheusCliConfigData(configPath: string, data: Record<string, unknown>): void {
 	const dir = dirname(configPath);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -163,18 +163,18 @@ function writePrimeCliConfigData(configPath: string, data: Record<string, unknow
 	}
 }
 
-function clearPrimeTeamFields(data: Record<string, unknown>): void {
+function clearPrometheusTeamFields(data: Record<string, unknown>): void {
 	delete data.team_id;
 	delete data.team_name;
 	delete data.team_role;
 }
 
-export function loadPrimeCliConfig(configPath: string = defaultPrimeCliConfigPath()): PrimeCliConfig {
-	const data = readPrimeCliConfigData(configPath);
+export function loadPrometheusCliConfig(configPath: string = defaultPrometheusCliConfigPath()): PrometheusCliConfig {
+	const data = readPrometheusCliConfigData(configPath);
 	const teamIdFromEnv = stringEnv("PRIME_TEAM_ID");
 	const teamId = teamIdFromEnv ?? stringField(data, "team_id");
 
-	const config: PrimeCliConfig = {
+	const config: PrometheusCliConfig = {
 		baseUrl: normalizeBaseUrl(stringField(data, "base_url")),
 		frontendUrl: normalizeUrl(stringField(data, "frontend_url"), DEFAULT_PRIME_FRONTEND_URL),
 		inferenceUrl: normalizeUrl(stringField(data, "inference_url"), DEFAULT_PRIME_INFERENCE_URL),
@@ -201,27 +201,32 @@ export function loadPrimeCliConfig(configPath: string = defaultPrimeCliConfigPat
 	return config;
 }
 
-export function savePrimeCliApiKey(apiKey: string, configPath: string = defaultPrimeCliConfigPath()): PrimeCliConfig {
-	const data = readPrimeCliConfigData(configPath);
+export function savePrometheusCliApiKey(
+	apiKey: string,
+	configPath: string = defaultPrometheusCliConfigPath(),
+): PrometheusCliConfig {
+	const data = readPrometheusCliConfigData(configPath);
 	data.api_key = apiKey;
-	clearPrimeTeamFields(data);
-	writePrimeCliConfigData(configPath, data);
-	return loadPrimeCliConfig(configPath);
+	clearPrometheusTeamFields(data);
+	writePrometheusCliConfigData(configPath, data);
+	return loadPrometheusCliConfig(configPath);
 }
 
-export function clearPrimeCliCredentials(configPath: string = defaultPrimeCliConfigPath()): PrimeCliConfig {
-	const data = readPrimeCliConfigData(configPath);
+export function clearPrometheusCliCredentials(
+	configPath: string = defaultPrometheusCliConfigPath(),
+): PrometheusCliConfig {
+	const data = readPrometheusCliConfigData(configPath);
 	delete data.api_key;
-	clearPrimeTeamFields(data);
-	writePrimeCliConfigData(configPath, data);
-	return loadPrimeCliConfig(configPath);
+	clearPrometheusTeamFields(data);
+	writePrometheusCliConfigData(configPath, data);
+	return loadPrometheusCliConfig(configPath);
 }
 
-export function savePrimeCliTeamSelection(
-	team: PrimeTeam | null,
-	configPath: string = defaultPrimeCliConfigPath(),
-): PrimeCliConfig {
-	const data = readPrimeCliConfigData(configPath);
+export function savePrometheusCliTeamSelection(
+	team: PrometheusTeam | null,
+	configPath: string = defaultPrometheusCliConfigPath(),
+): PrometheusCliConfig {
+	const data = readPrometheusCliConfigData(configPath);
 	if (team) {
 		data.team_id = team.teamId;
 		data.team_name = team.name;
@@ -231,17 +236,17 @@ export function savePrimeCliTeamSelection(
 			delete data.team_role;
 		}
 	} else {
-		clearPrimeTeamFields(data);
+		clearPrometheusTeamFields(data);
 	}
-	writePrimeCliConfigData(configPath, data);
-	return loadPrimeCliConfig(configPath);
+	writePrometheusCliConfigData(configPath, data);
+	return loadPrometheusCliConfig(configPath);
 }
 
 export function resolvePrometheusTracesBaseUrl(baseUrl?: string): string {
 	return normalizeBaseUrl(baseUrl ?? stringEnv("PROMETHEUS_TRACES_BASE_URL"));
 }
 
-function resolvePrometheusTracesChallengeConfig(config: PrimeCliConfig): PrimeChallengeConfig {
+function resolvePrometheusTracesChallengeConfig(config: PrometheusCliConfig): PrometheusChallengeConfig {
 	return {
 		baseUrl: resolvePrometheusTracesBaseUrl(),
 		frontendUrl: stringEnv("PROMETHEUS_TRACES_BASE_URL") ? config.frontendUrl : DEFAULT_PRIME_FRONTEND_URL,
@@ -295,7 +300,7 @@ async function fetchWithTimeout(
 			throw new Error("Login cancelled");
 		}
 		if (controller.signal.aborted) {
-			throw new Error("Prime Inference request timed out");
+			throw new Error("Prometheus Inference request timed out");
 		}
 		throw error;
 	} finally {
@@ -343,7 +348,7 @@ async function readJsonObject(response: Response, context: string): Promise<Reco
 	return parsed;
 }
 
-function parsePrimeTeam(value: unknown): PrimeTeam | undefined {
+function parsePrometheusTeam(value: unknown): PrometheusTeam | undefined {
 	if (!isRecord(value)) {
 		return undefined;
 	}
@@ -352,7 +357,7 @@ function parsePrimeTeam(value: unknown): PrimeTeam | undefined {
 		return undefined;
 	}
 
-	const team: PrimeTeam = {
+	const team: PrometheusTeam = {
 		teamId,
 		name: stringField(value, "name") ?? "Unknown",
 	};
@@ -371,7 +376,7 @@ function parsePrimeTeam(value: unknown): PrimeTeam | undefined {
 	return team;
 }
 
-export async function fetchPrimeTeams(
+export async function fetchPrometheusTeams(
 	apiKey: string,
 	baseUrl: string,
 	options: {
@@ -379,10 +384,10 @@ export async function fetchPrimeTeams(
 		requestTimeoutMs?: number;
 		signal?: AbortSignal;
 	} = {},
-): Promise<PrimeTeam[]> {
+): Promise<PrometheusTeam[]> {
 	const fetchFn = options.fetchFn ?? fetch;
 	const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-	const teams: PrimeTeam[] = [];
+	const teams: PrometheusTeam[] = [];
 	let offset = 0;
 	const limit = 100;
 
@@ -405,17 +410,17 @@ export async function fetchPrimeTeams(
 		);
 
 		if (!response.ok) {
-			throw new Error(`Failed to fetch Prime teams: ${await readResponseMessage(response)}`);
+			throw new Error(`Failed to fetch Prometheus teams: ${await readResponseMessage(response)}`);
 		}
 
-		const data = await readJsonObject(response, "Prime teams");
+		const data = await readJsonObject(response, "Prometheus teams");
 		const batch = data.data;
 		if (!Array.isArray(batch)) {
-			throw new Error("Prime teams response missing team data");
+			throw new Error("Prometheus teams response missing team data");
 		}
 
 		for (const item of batch) {
-			const team = parsePrimeTeam(item);
+			const team = parsePrometheusTeam(item);
 			if (team) {
 				teams.push(team);
 			}
@@ -431,7 +436,7 @@ export async function fetchPrimeTeams(
 	return teams;
 }
 
-function createPrimeChallengeKeypair(): { privateKey: string; publicKey: string } {
+function createPrometheusChallengeKeypair(): { privateKey: string; publicKey: string } {
 	const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 		modulusLength: 2048,
 		publicExponent: 0x10001,
@@ -447,7 +452,7 @@ function createPrimeChallengeKeypair(): { privateKey: string; publicKey: string 
 	return { privateKey, publicKey };
 }
 
-function decryptPrimeChallengeResult(privateKey: string, encryptedResult: string): string {
+function decryptPrometheusChallengeResult(privateKey: string, encryptedResult: string): string {
 	const decrypted = privateDecrypt(
 		{
 			key: privateKey,
@@ -459,13 +464,13 @@ function decryptPrimeChallengeResult(privateKey: string, encryptedResult: string
 	return decrypted.toString("utf-8");
 }
 
-async function generatePrimeChallenge(
-	config: PrimeChallengeConfig,
+async function generatePrometheusChallenge(
+	config: PrometheusChallengeConfig,
 	publicKey: string,
 	fetchFn: typeof fetch,
 	timeoutMs: number,
 	signal?: AbortSignal,
-): Promise<PrimeChallengeResponse> {
+): Promise<PrometheusChallengeResponse> {
 	const response = await fetchWithTimeout(
 		fetchFn,
 		`${config.baseUrl}/api/v1/auth_challenge/generate`,
@@ -479,22 +484,22 @@ async function generatePrimeChallenge(
 	);
 
 	if (!response.ok) {
-		throw new Error(`Failed to generate Prime login challenge: ${await readResponseMessage(response)}`);
+		throw new Error(`Failed to generate Prometheus login challenge: ${await readResponseMessage(response)}`);
 	}
 
-	const data = await readJsonObject(response, "Prime login challenge");
+	const data = await readJsonObject(response, "Prometheus login challenge");
 	const challenge = stringField(data, "challenge");
 	const statusAuthToken = stringField(data, "status_auth_token");
 	if (!challenge || !statusAuthToken) {
-		throw new Error("Prime login challenge response missing required fields");
+		throw new Error("Prometheus login challenge response missing required fields");
 	}
 
 	return { challenge, statusAuthToken };
 }
 
-async function pollPrimeChallengeResult(
-	config: PrimeChallengeConfig,
-	challenge: PrimeChallengeResponse,
+async function pollPrometheusChallengeResult(
+	config: PrometheusChallengeConfig,
+	challenge: PrometheusChallengeResponse,
 	privateKey: string,
 	fetchFn: typeof fetch,
 	timeoutMs: number,
@@ -518,52 +523,60 @@ async function pollPrimeChallengeResult(
 		);
 
 		if (response.status === 404) {
-			throw new Error("Prime login challenge expired");
+			throw new Error("Prometheus login challenge expired");
 		}
 		if (!response.ok) {
-			throw new Error(`Failed to check Prime login status: ${await readResponseMessage(response)}`);
+			throw new Error(`Failed to check Prometheus login status: ${await readResponseMessage(response)}`);
 		}
 
-		const data = await readJsonObject(response, "Prime login status");
+		const data = await readJsonObject(response, "Prometheus login status");
 		const encryptedResult = stringField(data, "result");
 		if (encryptedResult) {
-			return decryptPrimeChallengeResult(privateKey, encryptedResult);
+			return decryptPrometheusChallengeResult(privateKey, encryptedResult);
 		}
 
 		await abortableSleep(pollIntervalMs, signal);
 	}
 }
 
-async function runPrimeBrowserLogin(
-	config: PrimeChallengeConfig,
-	callbacks: PrimeInferenceLoginCallbacks,
+async function runPrometheusBrowserLogin(
+	config: PrometheusChallengeConfig,
+	callbacks: PrometheusInferenceLoginCallbacks,
 	fetchFn: typeof fetch,
 	timeoutMs: number,
 	pollIntervalMs: number,
-	scope?: PrimeAccessScope,
+	scope?: PrometheusAccessScope,
 ): Promise<string> {
-	const { privateKey, publicKey } = createPrimeChallengeKeypair();
-	const challenge = await generatePrimeChallenge(config, publicKey, fetchFn, timeoutMs, callbacks.signal);
+	const { privateKey, publicKey } = createPrometheusChallengeKeypair();
+	const challenge = await generatePrometheusChallenge(config, publicKey, fetchFn, timeoutMs, callbacks.signal);
 	const url = new URL(`${config.frontendUrl}/dashboard/tokens/challenge`);
 	url.searchParams.set("code", challenge.challenge);
 	if (scope) {
 		url.searchParams.set("scope", scope);
 	}
 	callbacks.onAuth({ url: url.toString(), instructions: `Code: ${challenge.challenge}` });
-	return pollPrimeChallengeResult(config, challenge, privateKey, fetchFn, timeoutMs, pollIntervalMs, callbacks.signal);
+	return pollPrometheusChallengeResult(
+		config,
+		challenge,
+		privateKey,
+		fetchFn,
+		timeoutMs,
+		pollIntervalMs,
+		callbacks.signal,
+	);
 }
 
-async function checkPrimeScopeAccess(
+async function checkPrometheusScopeAccess(
 	apiKey: string,
 	baseUrl: string,
-	scopeName: PrimeAccessScope,
+	scopeName: PrometheusAccessScope,
 	scopeLabel: string,
 	options: {
 		fetchFn?: typeof fetch;
 		requestTimeoutMs?: number;
 		signal?: AbortSignal;
 	} = {},
-): Promise<PrimeInferenceAccessResult> {
+): Promise<PrometheusInferenceAccessResult> {
 	const fetchFn = options.fetchFn ?? fetch;
 	const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 	const url = `${normalizeBaseUrl(baseUrl)}/api/v1/user/whoami`;
@@ -589,30 +602,30 @@ async function checkPrimeScopeAccess(
 		};
 	}
 
-	const data = await readJsonObject(response, "Prime whoami");
+	const data = await readJsonObject(response, "Prometheus whoami");
 	const user = data.data;
 	if (!isRecord(user)) {
-		return { ok: false, message: "Prime whoami response missing user data" };
+		return { ok: false, message: "Prometheus whoami response missing user data" };
 	}
 
 	const scope = user.scope;
 	if (!isRecord(scope)) {
-		return { ok: false, message: "Prime token is missing permission scope data" };
+		return { ok: false, message: "Prometheus token is missing permission scope data" };
 	}
 
 	const scopedPermission = scope[scopeName];
 	if (!isRecord(scopedPermission)) {
-		return { ok: false, message: `Prime token is missing ${scopeLabel} permissions` };
+		return { ok: false, message: `Prometheus token is missing ${scopeLabel} permissions` };
 	}
 
 	if (scopedPermission.write === true) {
 		return { ok: true };
 	}
 
-	return { ok: false, message: `Prime token does not have ${scopeLabel} write permission` };
+	return { ok: false, message: `Prometheus token does not have ${scopeLabel} write permission` };
 }
 
-export async function checkPrimeInferenceAccess(
+export async function checkPrometheusInferenceAccess(
 	apiKey: string,
 	baseUrl: string,
 	options: {
@@ -620,8 +633,8 @@ export async function checkPrimeInferenceAccess(
 		requestTimeoutMs?: number;
 		signal?: AbortSignal;
 	} = {},
-): Promise<PrimeInferenceAccessResult> {
-	return checkPrimeScopeAccess(apiKey, baseUrl, "inference", "inference", options);
+): Promise<PrometheusInferenceAccessResult> {
+	return checkPrometheusScopeAccess(apiKey, baseUrl, "inference", "inference", options);
 }
 
 export async function checkPrometheusTracesAccess(
@@ -632,27 +645,27 @@ export async function checkPrometheusTracesAccess(
 		requestTimeoutMs?: number;
 		signal?: AbortSignal;
 	} = {},
-): Promise<PrimeInferenceAccessResult> {
-	return checkPrimeScopeAccess(apiKey, baseUrl, "agent_traces", "agent trace", options);
+): Promise<PrometheusInferenceAccessResult> {
+	return checkPrometheusScopeAccess(apiKey, baseUrl, "agent_traces", "agent trace", options);
 }
 
-function formatAccessFailure(result: Exclude<PrimeInferenceAccessResult, { ok: true }>): string {
+function formatAccessFailure(result: Exclude<PrometheusInferenceAccessResult, { ok: true }>): string {
 	const status = result.status === undefined ? "" : `HTTP ${result.status}: `;
 	return `${status}${result.message}`;
 }
 
-export async function loginPrimeInference(
-	callbacks: PrimeInferenceLoginCallbacks,
-	options: PrimeInferenceLoginOptions = {},
-): Promise<PrimeInferenceLoginResult> {
-	const config = loadPrimeCliConfig(options.configPath);
+export async function loginPrometheusInference(
+	callbacks: PrometheusInferenceLoginCallbacks,
+	options: PrometheusInferenceLoginOptions = {},
+): Promise<PrometheusInferenceLoginResult> {
+	const config = loadPrometheusCliConfig(options.configPath);
 	const fetchFn = options.fetchFn ?? fetch;
 	const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 	const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
 	if (config.apiKey) {
-		callbacks.onProgress?.("Checking existing Prime CLI credentials...");
-		const access = await checkPrimeInferenceAccess(config.apiKey, config.baseUrl, {
+		callbacks.onProgress?.("Checking existing Prometheus CLI credentials...");
+		const access = await checkPrometheusInferenceAccess(config.apiKey, config.baseUrl, {
 			fetchFn,
 			requestTimeoutMs,
 			signal: callbacks.signal,
@@ -662,22 +675,22 @@ export async function loginPrimeInference(
 			return { apiKey: config.apiKey, source: "prime-cli" };
 		}
 		callbacks.onProgress?.(
-			`Existing Prime CLI key cannot access Prime Inference (${formatAccessFailure(access)}). Starting browser login...`,
+			`Existing Prometheus CLI key cannot access Prometheus Inference (${formatAccessFailure(access)}). Starting browser login...`,
 		);
 	} else {
-		callbacks.onProgress?.("No Prime CLI API key found. Starting browser login...");
+		callbacks.onProgress?.("No Prometheus CLI API key found. Starting browser login...");
 	}
 
-	const apiKey = await runPrimeBrowserLogin(config, callbacks, fetchFn, requestTimeoutMs, pollIntervalMs);
+	const apiKey = await runPrometheusBrowserLogin(config, callbacks, fetchFn, requestTimeoutMs, pollIntervalMs);
 	throwIfCancelled(callbacks.signal);
-	callbacks.onProgress?.("Checking Prime Inference access...");
-	const access = await checkPrimeInferenceAccess(apiKey, config.baseUrl, {
+	callbacks.onProgress?.("Checking Prometheus Inference access...");
+	const access = await checkPrometheusInferenceAccess(apiKey, config.baseUrl, {
 		fetchFn,
 		requestTimeoutMs,
 		signal: callbacks.signal,
 	});
 	if (!access.ok) {
-		throw new Error(`Prime API key does not have Prime Inference access (${formatAccessFailure(access)})`);
+		throw new Error(`Prometheus API key does not have Prometheus Inference access (${formatAccessFailure(access)})`);
 	}
 
 	throwIfCancelled(callbacks.signal);
@@ -685,17 +698,17 @@ export async function loginPrimeInference(
 }
 
 export async function loginPrometheusTraces(
-	callbacks: PrimeInferenceLoginCallbacks,
-	options: PrimeInferenceLoginOptions = {},
-): Promise<PrimeInferenceLoginResult> {
-	const config = loadPrimeCliConfig(options.configPath);
+	callbacks: PrometheusInferenceLoginCallbacks,
+	options: PrometheusInferenceLoginOptions = {},
+): Promise<PrometheusInferenceLoginResult> {
+	const config = loadPrometheusCliConfig(options.configPath);
 	const traceConfig = resolvePrometheusTracesChallengeConfig(config);
 	const fetchFn = options.fetchFn ?? fetch;
 	const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 	const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
 	if (config.apiKey) {
-		callbacks.onProgress?.("Checking existing Prime CLI credentials...");
+		callbacks.onProgress?.("Checking existing Prometheus CLI credentials...");
 		const access = await checkPrometheusTracesAccess(config.apiKey, traceConfig.baseUrl, {
 			fetchFn,
 			requestTimeoutMs,
@@ -706,13 +719,13 @@ export async function loginPrometheusTraces(
 			return { apiKey: config.apiKey, source: "prime-cli" };
 		}
 		callbacks.onProgress?.(
-			`Existing Prime CLI key cannot upload Prometheus traces (${formatAccessFailure(access)}). Starting browser login...`,
+			`Existing Prometheus CLI key cannot upload Prometheus traces (${formatAccessFailure(access)}). Starting browser login...`,
 		);
 	} else {
-		callbacks.onProgress?.("No Prime CLI API key found. Starting browser login...");
+		callbacks.onProgress?.("No Prometheus CLI API key found. Starting browser login...");
 	}
 
-	const apiKey = await runPrimeBrowserLogin(
+	const apiKey = await runPrometheusBrowserLogin(
 		traceConfig,
 		callbacks,
 		fetchFn,
@@ -728,7 +741,7 @@ export async function loginPrometheusTraces(
 		signal: callbacks.signal,
 	});
 	if (!access.ok) {
-		throw new Error(`Prime API key does not have Prometheus trace access (${formatAccessFailure(access)})`);
+		throw new Error(`Prometheus API key does not have Prometheus trace access (${formatAccessFailure(access)})`);
 	}
 
 	throwIfCancelled(callbacks.signal);

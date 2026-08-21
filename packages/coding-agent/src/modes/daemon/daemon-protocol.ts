@@ -63,7 +63,7 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 17 adds plugin (package/marketplace) management exposed through the
 // plugin_control session command, gated by the plugin_management capability.
 export const DAEMON_SCHEMA_REVISION = 17;
-export const DAEMON_SCHEMA_ID = "protocol-7-schema-17-e9bb7b405b7d";
+export const DAEMON_SCHEMA_ID = "protocol-7-schema-17-59c140b92803";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -79,6 +79,7 @@ export type DaemonClientCapability =
 	| "attach_snapshot"
 	| "event_sequence"
 	| "extension_ui"
+	| "question_ui"
 	| "slim_attach"
 	| "chunked_snapshot"
 	| "client_owned_sessions";
@@ -103,6 +104,7 @@ export type DaemonServerCapability =
 	| "session_input_admission"
 	| "prompt_admission_cancellation"
 	| "runtime_controls"
+	| "compaction_threshold"
 	| "rlm_child_limits"
 	// The daemon executes package/marketplace management (plugin_control)
 	// against its session runtime, so clients connected through the daemon get
@@ -130,6 +132,7 @@ export const DAEMON_SUPPORTED_CLIENT_CAPABILITIES: readonly DaemonClientCapabili
 	"attach_snapshot",
 	"event_sequence",
 	"extension_ui",
+	"question_ui",
 	"slim_attach",
 	"chunked_snapshot",
 	"client_owned_sessions",
@@ -146,6 +149,7 @@ export const DAEMON_DEFAULT_SERVER_CAPABILITIES: readonly DaemonServerCapability
 	"session_input_admission",
 	"prompt_admission_cancellation",
 	"runtime_controls",
+	"compaction_threshold",
 	"rlm_child_limits",
 	"plugin_management",
 ];
@@ -597,7 +601,13 @@ export type DaemonCommand =
 	| { id?: string; type: "set_transport"; activeSessionId: string; transport: Transport }
 	| { id?: string; type: "set_steering_mode"; activeSessionId: string; mode: AgentConnectionQueueMode }
 	| { id?: string; type: "set_follow_up_mode"; activeSessionId: string; mode: AgentConnectionQueueMode }
-	| { id?: string; type: "set_auto_compaction"; activeSessionId: string; enabled: boolean }
+	| {
+			id?: string;
+			type: "set_auto_compaction";
+			activeSessionId: string;
+			enabled: boolean;
+			thresholdPercent?: number;
+	  }
 	| { id?: string; type: "set_auto_retry"; activeSessionId: string; enabled: boolean }
 	| { id?: string; type: "compact"; activeSessionId: string; customInstructions?: string }
 	| {
@@ -821,10 +831,16 @@ export type DaemonErrorInfo =
 export type DaemonSessionClosedReason = "killed" | "shutdown" | "completed" | "replaced" | "update";
 export type DaemonClosingReason = "shutdown" | "update";
 
-export type DaemonExtensionUIResponse = { value: string } | { confirmed: boolean } | { cancelled: true };
+export type DaemonExtensionUIResponse =
+	| { value: string }
+	| { answers: string[] }
+	| { confirmed: boolean }
+	| { cancelled: true };
 
 export function isDaemonDialogExtensionUiRequest(method: string): boolean {
-	return method === "select" || method === "confirm" || method === "input" || method === "editor";
+	return (
+		method === "select" || method === "confirm" || method === "input" || method === "question" || method === "editor"
+	);
 }
 
 /**

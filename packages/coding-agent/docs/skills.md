@@ -48,7 +48,7 @@ Disable discovery with `--no-skills` (explicit `--skill` paths still load).
 
 Prometheus ships with built-in skills that load by default:
 
-- `prime-intellect` - Prime Intellect products and workflows via the prime CLI: verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, sandboxes, tunnels, Prime Inference, GPU compute, and storage. Reference docs for each area load on demand from the skill's `references/` directory.
+- `prime-intellect` - Prometheus Intellect products and workflows via the prime CLI: verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, sandboxes, tunnels, Prometheus Inference, GPU compute, and storage. Reference docs for each area load on demand from the skill's `references/` directory.
 - `skill-creator` - teaches the agent to create new skills: markdown skill layout, frontmatter rules, placement and precedence, and the full Python-backed skill contract (package layout, `run()` convention, optional CLI, kernel venv behavior) with a working template in `references/python-skills.md`.
 - `websearch` - a Python-backed web search skill using [Exa](https://exa.ai)'s remote MCP server. Searches the web and reads whole pages.
 - `research` - deep research: decomposes a question, fans out subagents, triangulates across independent sources, and writes a citation-verified report. Invoke with `/research <question>`. Its quota mode handles "find N things that pass these filters" briefs: candidates are scored against explicit criteria, rounds rotate source classes, rejected ideas cannot be rediscovered under a new name, and the report refuses to render while the run is short of the quota.
@@ -137,14 +137,54 @@ For project-level Claude Code skills, add to `.prometheus/agent/settings.json`:
 
 ## How Skills Work
 
-1. At startup, Prometheus scans skill locations and extracts names, descriptions, type, and file locations
-2. The system prompt includes visible skills in XML format per the [specification](https://agentskills.io/integrate-skills)
-3. When a task matches, the agent uses `ipython` to load the full `SKILL.md` (models don't always do this; use prompting or `/skill:name` to force it)
+1. At startup, Prometheus scans skill locations and extracts names, descriptions, type, eagerness, and file locations
+2. The system prompt includes only **eager** skills in XML format per the [specification](https://agentskills.io/integrate-skills)
+3. When a task matches an eager skill, the agent uses `ipython` to load the full `SKILL.md` (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions, using relative paths to reference scripts and assets
 
-This is progressive disclosure: only descriptions are always in context, full instructions load on-demand.
+This is progressive disclosure: only descriptions of eager skills are always in context, full instructions load on-demand.
 
-Skills with `disable-model-invocation: true` are hidden from the startup skill list. They can still be invoked explicitly with `/skill:name`.
+### Three visibility tiers
+
+| Tier | Set by | In system prompt? | Discoverable via `skills.list()`? | Who can invoke it? |
+| --- | --- | --- | --- | --- |
+| **hidden** | `disable-model-invocation: true` | No | No | Human only, via `/skill:name` |
+| **lazy** | `eager: false`, or the default for markdown skills | No | Yes | Model, via `skills.list()` then `skills.read(name)` |
+| **eager** | `eager: true`, or the default for python skills | Yes (name + description) | No — already shown | Model, directly |
+
+Markdown skills default to lazy; python-backed skills default to eager, since the
+model has no other way to learn a pre-imported module exists. Override either
+with an explicit `eager: true` or `eager: false` in frontmatter — for example, a
+python skill whose correct use requires reading a multi-step procedure rather
+than just a call signature (see the bundled `research` skill) should stay
+lazy despite being python-backed.
+
+A handful of first-party skills (`edit`, `refine`, `compact`, `goal`, `todo`,
+`websearch`, `attach-image`, `agent-observe`, `agent-message`, `rlm-heartbeat`,
+`skills`) skip both the eager and lazy paths: their exact call syntax is
+written directly into the base system prompt instead of a name+description
+lookup, since they are used in nearly every session and their usage fits in
+one or two sentences. They are excluded from both the `<available_skills>`
+block and `skills.list()` — the model already knows their syntax without a
+lookup. Their `SKILL.md` files still exist as reference docs for `/skill:name`
+and this documentation.
+
+Skills with `disable-model-invocation: true` are hidden from the startup skill list and from `skills.list()`. They can still be invoked explicitly with `/skill:name`.
+
+### On-demand discovery: `skills.list()` / `skills.read()`
+
+Lazy skills are not free to discover — they cost nothing until the agent needs
+one. The bundled `skills` meta-skill (itself always eager) is how the model
+finds and loads them from IPython:
+
+```python
+await skills.list()                    # every lazy skill: name, kind, description, python_import
+await skills.list(query="frontend")    # optional case-insensitive substring filter
+await skills.read("impeccable")        # full SKILL.md body for one skill, by name
+```
+
+`skills.read()` works for any non-hidden installed skill, not only ones
+returned by `list()`.
 
 ## Python-Backed Skills
 
@@ -314,7 +354,8 @@ Per the [Agent Skills specification](https://agentskills.io/specification#frontm
 | `compatibility` | No | Max 500 chars. Environment requirements. |
 | `metadata` | No | Arbitrary key-value mapping. |
 | `allowed-tools` | No | Space-delimited list of pre-approved tools (experimental). |
-| `disable-model-invocation` | No | When `true`, skill is hidden from system prompt. Users must use `/skill:name`. |
+| `disable-model-invocation` | No | When `true`, skill is hidden from system prompt and from `skills.list()`. Users must use `/skill:name`. |
+| `eager` | No | `true` always shows name+description in the system prompt; `false` withholds it, discoverable via `skills.list()`/`skills.read()`. Defaults to `true` for python skills, `false` for markdown skills. |
 
 ### Name Rules
 

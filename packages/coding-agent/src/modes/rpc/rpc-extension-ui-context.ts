@@ -114,6 +114,10 @@ export function createRpcExtensionUiBridge(output: (request: RpcExtensionUIReque
 		},
 		setEditorText: (text) => fireAndForget({ method: "set_editor_text", text }),
 		getEditorText: () => "",
+		question: (questions, opts) =>
+			createDialogPromise(opts, undefined, { method: "question", questions, timeout: opts?.timeout }, (response) =>
+				"answers" in response ? response.answers : undefined,
+			),
 		editor: (title, prefill) =>
 			createDialogPromise(undefined, undefined, { method: "editor", title, prefill }, (response) =>
 				"cancelled" in response && response.cancelled

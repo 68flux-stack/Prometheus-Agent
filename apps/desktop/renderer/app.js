@@ -49,8 +49,10 @@ const state = {
 	waitingJobs: new Set(),
 	jobBannerExpanded: false,
 	busySessions: new Set(),
+	finishedSessions: new Set(),
 	subagents: new Map(),
 	approval: undefined,
+	question: undefined,
 	subagentView: undefined,
 	attachments: [],
 	preparingPrompt: false,
@@ -69,6 +71,7 @@ const state = {
 	todo: undefined,
 	todoExpanded: true,
 	contextUsage: undefined,
+	usageLimitMessage: "",
 	sessionStartedAt: Date.now(),
 	// Milestones reached during the current handshake, used to show a real
 	// progress percentage instead of an indefinite "Connecting…" label.
@@ -129,6 +132,8 @@ const todoCardCounter = $("todo-card-counter");
 const todoCardToggle = $("todo-card-toggle");
 const todoCardList = $("todo-card-list");
 const composerMetrics = $("composer-metrics");
+const usageLimitBanner = $("usage-limit-banner");
+const usageLimitMessage = $("usage-limit-message");
 const composerMetricContext = $("composer-metric-context");
 const composerMetricTokens = $("composer-metric-tokens");
 const composerMetricBarFill = $("composer-metric-bar-fill");
@@ -236,6 +241,7 @@ function renderWorkspaceList() {
 				session.dataset.sessionWorkspace = workspace;
 				if (active) session.setAttribute("aria-current", "page");
 				if (isSessionWorking(chat.path)) session.append(createWorkingIndicator());
+				else if (!active && state.finishedSessions.has(sessionPathKey(chat.path))) session.append(createFinishedIndicator());
 				const sessionName = document.createElement("div");
 				sessionName.className = "workspace-card-session-name";
 				sessionName.textContent = chat.name;
@@ -254,9 +260,11 @@ function sessionPathKey(sessionPath) {
 
 function isSessionWorking(sessionPath) {
 	if (!sessionPath) return false;
-	// The attached chat reports itself live; the others are only known from the
-	// poll, which is up to a poll interval behind.
-	if (sessionPathKey(sessionPath) === sessionPathKey(state.activeSessionPath)) return state.busy;
+	// Keep the poll result while a clicked chat attaches. The live state takes
+	// over as soon as get_state arrives for that chat.
+	if (sessionPathKey(sessionPath) === sessionPathKey(state.activeSessionPath)) {
+		return state.busy || (state.switchingSession && state.busySessions.has(sessionPathKey(sessionPath)));
+	}
 	return state.busySessions.has(sessionPathKey(sessionPath));
 }
 
@@ -266,6 +274,15 @@ function createWorkingIndicator() {
 	indicator.title = "Still working";
 	indicator.setAttribute("aria-label", "Still working");
 	indicator.innerHTML = "<i></i>".repeat(9);
+	return indicator;
+}
+
+function createFinishedIndicator() {
+	const indicator = document.createElement("span");
+	indicator.className = "session-finished";
+	indicator.title = "Finished";
+	indicator.setAttribute("aria-label", "Finished");
+	indicator.innerHTML = "<i></i>";
 	return indicator;
 }
 
@@ -343,7 +360,7 @@ function rememberWorkspace(workspace) {
 }
 
 const API_KEY_PROVIDERS = [
-	{ id: "prime-inference", name: "Prime Inference", description: "Use a Prime API key for Prime Inference models.", mark: "PI", color: "#e98262" },
+	{ id: "prime-inference", name: "Prometheus Inference", description: "Use a Prometheus API key for Prometheus Inference models.", mark: "PI", color: "#e98262" },
 	{ id: "openai", name: "OpenAI", description: "Use an OpenAI API key for GPT models.", oauthProvider: "openai-codex", mark: "O", color: "#74aa9c" },
 	{ id: "anthropic", name: "Anthropic", description: "Use an Anthropic API key for Claude models.", oauthProvider: "anthropic", mark: "A", color: "#d5a786" },
 	{ id: "google", name: "Google Gemini", description: "Use a Gemini API key for Google models.", mark: "G", color: "#8e75b2" },
@@ -631,6 +648,128 @@ function handleProviderLoginEvent(event) {
 	}
 }
 
+function currentQuestionAnswer(questionState) {
+	const question = questionState.questions[questionState.index];
+	const selected = questionState.selected[questionState.index];
+	if (!question || selected === undefined) return "";
+	if (selected === question.options.length) return questionState.customValue.trim();
+	return question.options[selected]?.label || "";
+}
+
+function updateQuestionSubmit() {
+	const questionState = state.question;
+	if (!questionState) return;
+	const answer = currentQuestionAnswer(questionState);
+	questionSubmit.disabled = !answer;
+	questionSubmit.textContent = questionState.index === questionState.questions.length - 1 ? "Submit" : "Next";
+}
+
+function renderQuestionPanel() {
+	const questionState = state.question;
+	if (!questionState) {
+		questionPanel.hidden = true;
+		return;
+	}
+	const question = questionState.questions[questionState.index];
+	if (!question) return;
+	questionPanel.hidden = false;
+	questionProgress.textContent = `${questionState.index + 1} of ${questionState.questions.length} questions`;
+	questionTitle.textContent = question.question;
+	questionDescription.textContent = question.description || "Select one answer.";
+	questionOptions.replaceChildren();
+	const selected = questionState.selected[questionState.index];
+	const controls = [];
+	question.options.forEach((option, index) => {
+		const label = document.createElement("label");
+		label.className = "question-option";
+		const radio = document.createElement("input");
+		radio.type = "radio";
+		radio.name = `question-${questionState.id}-${questionState.index}`;
+		radio.checked = selected === index;
+		radio.addEventListener("change", () => {
+			questionState.selected[questionState.index] = index;
+			questionState.customValue = "";
+			updateQuestionSubmit();
+		});
+		const text = document.createElement("span");
+		const title = document.createElement("strong");
+		title.textContent = `${option.label}${option.recommended ? " (Recommended)" : ""}`;
+		text.appendChild(title);
+		if (option.description) {
+			const description = document.createElement("small");
+			description.textContent = option.description;
+			text.appendChild(description);
+		}
+		label.append(radio, text);
+		questionOptions.appendChild(label);
+		controls.push(radio);
+	});
+	const customLabel = document.createElement("label");
+	customLabel.className = "question-option";
+	const customRadio = document.createElement("input");
+	customRadio.type = "radio";
+	customRadio.name = `question-${questionState.id}-${questionState.index}`;
+	customRadio.checked = selected === question.options.length;
+	const customText = document.createElement("span");
+	const customTitle = document.createElement("strong");
+	customTitle.textContent = "Type your own answer";
+	const customInput = document.createElement("input");
+	customInput.className = "question-custom-input";
+	customInput.type = "text";
+	customInput.placeholder = "Type your answer…";
+	customInput.value = selected === question.options.length ? questionState.customValue : "";
+	customInput.disabled = !customRadio.checked;
+	customRadio.addEventListener("change", () => {
+		questionState.selected[questionState.index] = question.options.length;
+		customInput.disabled = false;
+		customInput.focus();
+		updateQuestionSubmit();
+	});
+	customInput.addEventListener("input", () => {
+		questionState.customValue = customInput.value;
+		if (questionState.selected[questionState.index] !== question.options.length) {
+			questionState.selected[questionState.index] = question.options.length;
+			customRadio.checked = true;
+		}
+		updateQuestionSubmit();
+	});
+	customText.append(customTitle, customInput);
+	customLabel.append(customRadio, customText);
+	questionOptions.appendChild(customLabel);
+	questionSubmit.textContent = questionState.index === questionState.questions.length - 1 ? "Submit" : "Next";
+	updateQuestionSubmit();
+	if (selected === question.options.length) customInput.focus();
+}
+
+function finishQuestion(response) {
+	const questionState = state.question;
+	if (!questionState) return;
+	state.question = undefined;
+	renderQuestionPanel();
+	syncComposer();
+	void window.desktopAgent.send({ type: "extension_ui_response", id: questionState.id, ...response }).catch((error) => {
+		showToast(error instanceof Error ? error.message : String(error));
+	});
+}
+
+function openQuestionRequest(event) {
+	if (!Array.isArray(event.questions) || !event.questions.length) {
+		void window.desktopAgent.send({ type: "extension_ui_response", id: event.id, cancelled: true });
+		return;
+	}
+	if (state.question) finishQuestion({ cancelled: true });
+	state.question = {
+		id: event.id,
+		questions: event.questions,
+		index: 0,
+		selected: [],
+		answers: [],
+		customValue: "",
+	};
+	renderQuestionPanel();
+	syncComposer();
+}
+
 async function handleExtensionUIRequest(event) {
 	if (event.method === "notify") {
 		showToast(event.message);
@@ -649,6 +788,10 @@ async function handleExtensionUIRequest(event) {
 		return;
 	}
 	if (event.method === "setWidget") return;
+	if (event.method === "question") {
+		openQuestionRequest(event);
+		return;
+	}
 	if (event.method === "confirm") {
 		const approval = { id: event.id, title: event.title || "Approval needed", message: event.message || "" };
 		state.approval = approval;
@@ -731,7 +874,10 @@ function isSessionActionBlocked() {
 }
 
 function syncComposer() {
-	const canPrompt = !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
+	const questionActive = Boolean(state.question);
+	questionPanel.hidden = !questionActive;
+	composerBox.hidden = questionActive;
+	const canPrompt = !questionActive && !state.subagentView && ((state.ready && hasConfiguredModel()) || isEngineConnecting());
 	input.disabled = !canPrompt;
 	sendButton.disabled = state.preparingPrompt || !canPrompt || (!input.value.trim() && state.attachments.length === 0);
 	$("attach-button").disabled = !canPrompt;
@@ -785,6 +931,25 @@ function formatSessionElapsed(elapsedMs) {
 	return hours > 0 ? `${hours}:${pad(minutes % 60)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
 }
 
+const USAGE_LIMIT_PATTERN = /usage[_ -]?limit|usage[_ -]?not[_ -]?included|rate[_ -]?limit[_ -]?exceeded|insufficient[_ -]?quota|quota[_ -]?(?:exceeded|reached|exhausted)|resource[_ -]?exhausted/i;
+
+function usageLimitMessageFor(message) {
+	if (message?.role !== "assistant" || message.stopReason !== "error") return "";
+	const errorText = [message.errorMessage, message.stopReasonRaw].filter(Boolean).join(" ");
+	return USAGE_LIMIT_PATTERN.test(errorText) ? message.errorMessage || "The provider usage limit was reached." : "";
+}
+
+function renderUsageLimitBanner() {
+	usageLimitBanner.hidden = !state.usageLimitMessage;
+	usageLimitMessage.textContent = state.usageLimitMessage;
+}
+
+function refreshUsageLimitBanner(messages) {
+	const latestAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
+	state.usageLimitMessage = usageLimitMessageFor(latestAssistant);
+	renderUsageLimitBanner();
+}
+
 function renderComposerMetrics() {
 	composerMetrics.hidden = !state.ready;
 	composerMetricSession.textContent = `Session ${formatSessionElapsed(Date.now() - state.sessionStartedAt)}`;
@@ -815,6 +980,7 @@ async function refreshContextUsage() {
 }
 
 function setDisconnected(label) {
+	if (state.question) finishQuestion({ cancelled: true });
 	state.ready = false;
 	state.busy = false;
 	state.switchingSession = false;
@@ -922,6 +1088,8 @@ function applyState(data) {
 	if (sessionFile !== state.activeSessionPath) {
 		state.sessionStartedAt = Date.now();
 		state.contextUsage = undefined;
+		state.usageLimitMessage = "";
+		renderUsageLimitBanner();
 	}
 	state.activeSessionPath = sessionFile;
 	// The sidebar selection is optimistic; the agent's own cwd is the truth about
@@ -951,7 +1119,7 @@ function applyState(data) {
 	renderWorkspaceList();
 	if (!data.isStreaming) {
 		setBusy(false, "Ready");
-	} else if (!state.ready || state.switchingSession || state.busy) {
+	} else {
 		setBusy(true, "Working · send a message to steer");
 	}
 	renderComposerMetrics();
@@ -2734,7 +2902,8 @@ function renderTodoCard() {
 	if (!todoCard) return;
 	const todo = state.todo;
 	const hasItems = todo && Array.isArray(todo.items) && (todo.items.length > 0 || Boolean(todo.title));
-	if (!hasItems) {
+	const allItemsCompleted = todo && todo.items.length > 0 && todo.items.every((item) => item.status === "completed");
+	if (!hasItems || allItemsCompleted) {
 		todoCard.hidden = true;
 		return;
 	}
@@ -2775,10 +2944,7 @@ function renderTodoCard() {
 			const newStatus = checkbox.checked ? "completed" : "pending";
 			item.status = newStatus;
 			row.dataset.status = newStatus;
-			const newCompleted = todo.items.filter((i) => i.status === "completed").length;
-			if (todoCardCounter) {
-				todoCardCounter.textContent = `${newCompleted} of ${total} todos completed`;
-			}
+			renderTodoCard();
 		});
 
 		const textSpan = document.createElement("span");
@@ -3024,12 +3190,18 @@ function handleResponse(event) {
 		const optimistic = state.messages.filter((message) => message._optimistic);
 		state.messages = [...(event.data?.messages || []).map(normalizeMessage), ...optimistic];
 		state.streamIndex = -1;
+		refreshUsageLimitBanner(state.messages);
 		renderMessages();
 	}
 	if (event.command === "list_busy_sessions") {
 		const busySessions = new Set((event.data?.sessionFiles || []).map(sessionPathKey));
-		if (!state.busy) {
+		if (!state.busy && !state.switchingSession) {
 			busySessions.delete(sessionPathKey(state.activeSessionPath));
+		}
+		for (const sessionPath of state.busySessions) {
+			if (!busySessions.has(sessionPath) && sessionPath !== sessionPathKey(state.activeSessionPath)) {
+				state.finishedSessions.add(sessionPath);
+			}
 		}
 		// Re-render only on a real change: the sidebar rebuilds every row, which
 		// would restart the indicator animation on every poll.
@@ -3124,6 +3296,7 @@ function handleAgentEvent(event) {
 		return;
 	}
 	if (event.type === "agent_end") {
+		if (state.question) finishQuestion({ cancelled: true });
 		state.busySessions.delete(sessionPathKey(state.activeSessionPath));
 		setBusy(false, "Ready");
 		renderWorkspaceList();
@@ -3179,6 +3352,10 @@ function handleAgentEvent(event) {
 			state.streamIndex = -1;
 			if (message.role === "assistant") {
 				state.messages[index]._finishedAt = Date.now();
+				const usageLimit = usageLimitMessageFor(state.messages[index]);
+				if (usageLimit) state.usageLimitMessage = usageLimit;
+				else if (message.stopReason === "error" || assistantHasFinalAnswer(state.messages[index])) state.usageLimitMessage = "";
+				renderUsageLimitBanner();
 				const hasToolCalls = Array.isArray(message.content) && message.content.some((block) => block?.type === "toolCall");
 				if (!hasToolCalls || assistantHasFinalAnswer(state.messages[index])) {
 					state.busySessions.delete(sessionPathKey(state.activeSessionPath));
@@ -3516,7 +3693,7 @@ async function deleteConversation(workspace, sessionPath) {
 			input.dispatchEvent(new Event("input"));
 			state.switchingSession = true;
 			state.openedWorkspace = workspace;
-			const switchToken = showSessionLocally(replacementPath, "New conversation");
+			const switchToken = await showSessionLocally(replacementPath, "New conversation");
 			setBusy(false, "Opening conversation");
 			const response = await sendCommandAwait("switch_session", { sessionPath: replacementPath });
 			if (switchToken !== state.switchToken || response.data?.cancelled === true) {
@@ -3723,6 +3900,46 @@ async function forkAtEntry(entryId, position, options = {}) {
 	}
 }
 
+// Replacing a message changes the branch inside the current session file. Do not
+// use fork() here: fork() creates a second session file, which appears as a
+// duplicate chat in the desktop sidebar.
+async function navigateTreeAtEntry(entryId, options = {}) {
+	if (state.switchingSession) {
+		showToast("Still finishing the previous change — try again in a moment.");
+		return { cancelled: true };
+	}
+	state.switchingSession = true;
+	if (options.anchorMessage) truncateConversationBefore(options.anchorMessage);
+	setBusy(false, "Updating conversation");
+	const switchToken = ++state.switchToken;
+	try {
+		const response = await sendCommandAwait("navigate_tree", { targetId: entryId });
+		const result = response.data || {};
+		if (switchToken !== state.switchToken) return result;
+		state.switchingSession = false;
+		if (result.cancelled || result.aborted) {
+			returnQueuedPromptToComposer();
+			sendCommand("get_messages");
+			setBusy(false, "Ready");
+			return result;
+		}
+		sendCommand("get_state");
+		sendCommand("get_messages");
+		sendCommand("get_available_models");
+		refreshRuntimeFeatures();
+		flushQueuedPrompt();
+		flushPendingSessionSettings();
+		return result;
+	} catch (error) {
+		if (switchToken === state.switchToken) {
+			state.switchingSession = false;
+			returnQueuedPromptToComposer();
+			setBusy(false, "Ready");
+		}
+		throw error;
+	}
+}
+
 // Editing happens inline in the chat, not the composer: clicking "Edit and
 // resend" swaps that message's bubble for an editable card (see the isEditing
 // branch in renderMessageRow) instead of prefilling the input at the bottom.
@@ -3782,10 +3999,10 @@ async function saveAndResendEdit(message, rawText) {
 			showToast("Could not find that message to edit.");
 			return;
 		}
-		// Not awaited: forkAtEntry marks the engine connecting before it returns
-		// control here, so this resend queues behind the fork like any prompt typed
-		// while it runs, instead of waiting for the fork to finish first.
-		void forkAtEntry(entryId, "before", { anchorMessage: message }).catch((error) =>
+		// Not awaited: navigateTreeAtEntry marks the engine connecting before it
+		// returns control here, so this resend queues behind the navigation like any
+		// prompt typed while it runs.
+		void navigateTreeAtEntry(entryId, { anchorMessage: message }).catch((error) =>
 			showToast(error instanceof Error ? error.message : String(error)),
 		);
 		await submitPrompt(text);
@@ -3842,10 +4059,10 @@ async function retryAssistantMessage(message) {
 			showToast("Could not find that message to retry.");
 			return;
 		}
-		// Not awaited: forkAtEntry marks the engine connecting before it returns
-		// control here, so this resend queues behind the fork like any prompt typed
-		// while it runs, instead of waiting for the fork to finish first.
-		void forkAtEntry(entryId, "before", { anchorMessage: userMessage }).catch((error) =>
+		// Not awaited: navigateTreeAtEntry marks the engine connecting before it
+		// returns control here, so this resend queues behind the navigation like any
+		// prompt typed while it runs.
+		void navigateTreeAtEntry(entryId, { anchorMessage: userMessage }).catch((error) =>
 			showToast(error instanceof Error ? error.message : String(error)),
 		);
 		await submitPrompt(contentText(userMessage));
@@ -4900,6 +5117,28 @@ input.addEventListener("paste", async (event) => {
 });
 
 const composerBox = document.querySelector(".composer-box");
+const questionPanel = $("question-panel");
+const questionProgress = $("question-progress");
+const questionTitle = $("question-title");
+const questionDescription = $("question-description");
+const questionOptions = $("question-options");
+const questionSubmit = $("question-submit");
+$("question-dismiss").addEventListener("click", () => finishQuestion({ cancelled: true }));
+$("question-collapse").addEventListener("click", () => finishQuestion({ cancelled: true }));
+questionSubmit.addEventListener("click", () => {
+	const questionState = state.question;
+	if (!questionState) return;
+	const answer = currentQuestionAnswer(questionState);
+	if (!answer) return;
+	questionState.answers[questionState.index] = answer;
+	if (questionState.index < questionState.questions.length - 1) {
+		questionState.index++;
+		questionState.customValue = "";
+		renderQuestionPanel();
+		return;
+	}
+	finishQuestion({ answers: questionState.answers });
+});
 for (const type of ["dragenter", "dragover"]) {
 	composerBox.addEventListener(type, (event) => {
 		if (input.disabled || !event.dataTransfer?.types.includes("Files")) return;
@@ -5005,57 +5244,62 @@ async function confirmDiscard(title, message, confirmLabel) {
 // disk is the same message list, so the chat paints now and the engine's copy
 // reconciles when open_session lands.
 function showSessionLocally(sessionPath, sessionName) {
+	if (state.question) finishQuestion({ cancelled: true });
 	closeSubagentConversation();
 	const token = ++state.switchToken;
-	state.activeSessionPath = sessionPath;
-	// A prompt still held for this chat keeps its row. Every caller that navigates
-	// somewhere else drops the held prompt first, so anything left here belongs to
-	// the session being opened — blanking it would erase what the user just sent.
-	state.messages = heldPromptMessages();
-	state.tools = [];
-	state.streamIndex = -1;
-	state.runtimeFeatures = undefined;
-	state.jobOutputs.clear();
-	state.waitingJobs.clear();
-	state.subagents.clear();
-	state.approval = undefined;
-	state.editingKey = undefined;
-	state.workspaceChanges = [];
-	renderWorkspaceChanges();
-	// The composer metrics belong to whichever chat is on screen. Reset them here,
-	// synchronously with the local blank, instead of waiting on the engine's
-	// applyState round trip — otherwise the previous chat's session clock and
-	// context usage linger visibly until the new session finishes attaching.
-	state.sessionStartedAt = Date.now();
-	state.contextUsage = undefined;
-	renderComposerMetrics();
-	// See startWorkspace: without this the execution-mode picker stays stuck in
-	// the outgoing conversation's disabled/loading state until the new one
-	// finishes attaching, instead of being ready to take a choice right away.
-	renderRuntimeFeatures();
-	const chat = (state.workspaceChats.get(state.workspace) || []).find((entry) => entry.path === sessionPath);
-	state.sessionName = sessionName || chat?.name || "New conversation";
-	$("header-title").textContent = state.sessionName;
-	renderMessages();
-	renderWorkspaceList();
-	// A session that has not been minted yet has nothing to read.
-	if (!sessionPath) return token;
-	void refreshWorkspaceChanges();
-	void window.desktopAgent
-		.readSessionMessages({ sessionPath })
-		.then(({ messages }) => {
-			if (token !== state.switchToken) return;
-			state.messages = [...(messages || []).map(normalizeMessage), ...heldPromptMessages()];
-			renderMessages();
-			void restoreSubagents(sessionPath);
-		})
-		.catch(() => {
-			// An unreadable transcript just means the engine's copy shows first.
-		});
+	const apply = (messages = []) => {
+		if (token !== state.switchToken) return token;
+		state.activeSessionPath = sessionPath;
+		// A prompt still held for this chat keeps its row. Every caller that navigates
+		// somewhere else drops the held prompt first, so anything left here belongs to
+		// the session being opened — blanking it would erase what the user just sent.
+		state.messages = [...messages.map(normalizeMessage), ...heldPromptMessages()];
+		refreshUsageLimitBanner(state.messages);
+		state.tools = [];
+		state.streamIndex = -1;
+		state.runtimeFeatures = undefined;
+		state.jobOutputs.clear();
+		state.waitingJobs.clear();
+		state.subagents.clear();
+		state.approval = undefined;
+		state.editingKey = undefined;
+		state.workspaceChanges = [];
+		renderWorkspaceChanges();
+		// The composer metrics belong to whichever chat is on screen. Reset them here,
+		// synchronously with the local blank, instead of waiting on the engine's
+		// applyState round trip — otherwise the previous chat's session clock and
+		// context usage linger visibly until the new one finishes attaching.
+		state.sessionStartedAt = Date.now();
+		state.contextUsage = undefined;
+		state.usageLimitMessage = "";
+		renderUsageLimitBanner();
+		renderComposerMetrics();
+		// See startWorkspace: without this the execution-mode picker stays stuck in
+		// the outgoing conversation's disabled/loading state until the new one
+		// finishes attaching, instead of being ready to take a choice right away.
+		renderRuntimeFeatures();
+		const chat = (state.workspaceChats.get(state.workspace) || []).find((entry) => entry.path === sessionPath);
+		state.sessionName = sessionName || chat?.name || "New conversation";
+		$("header-title").textContent = state.sessionName;
+		renderMessages();
+		renderWorkspaceList();
+		if (!sessionPath) return token;
+		void refreshWorkspaceChanges();
+		void restoreSubagents(sessionPath);
+		return token;
+	};
+
+	if (!sessionPath) return apply();
+	// Show the target immediately. Reading a large transcript must not delay the switch.
+	apply();
+	void window.desktopAgent.readSessionMessages({ sessionPath }).then(
+		({ messages }) => apply(messages || []),
+		() => apply(),
+	);
 	return token;
 }
 
-function requestSessionSwitch(sessionPath, options = {}) {
+async function requestSessionSwitch(sessionPath, options = {}) {
 	if (!sessionPath) return;
 	state.switchingSession = true;
 	state.deferredSwitch = undefined;
@@ -5063,11 +5307,11 @@ function requestSessionSwitch(sessionPath, options = {}) {
 	// Callers point the sidebar at the target workspace before switching, so this
 	// is the workspace the opened conversation is expected to run in.
 	state.openedWorkspace = state.workspace;
-	// Read before showSessionLocally: it makes this session the active one, and
-	// isSessionWorking then reports the outgoing chat's live state instead.
+	// Check before loading the transcript: it still describes the outgoing chat,
+	// so the working indicator stays correct until the target is shown.
 	const targetIsWorking = state.busySessions.has(sessionPathKey(sessionPath));
-	const switchToken = showSessionLocally(sessionPath, options.sessionName);
 	setBusy(false, "Opening conversation");
+	const switchToken = await showSessionLocally(sessionPath, options.sessionName);
 	// Attaching to a conversation the daemon has no worker for costs a process
 	// spawn of a few seconds, and those attaches are serialized, so a chat opened
 	// only to read it makes the next one wait behind its spawn. An idle
@@ -5137,6 +5381,7 @@ async function openConversation(workspace, sessionPath) {
 	if (!workspace || !sessionPath) return;
 	if (state.subagentView) closeSubagentConversation();
 	if (workspace === state.workspace && sessionPath === state.activeSessionPath) return;
+	state.finishedSessions.delete(sessionPathKey(sessionPath));
 	// Leaving for another chat abandons anything typed for this one, queued included.
 	state.queuedPrompt = undefined;
 	input.value = "";
@@ -6097,12 +6342,12 @@ async function refreshOutputStyleOptions(currentValue) {
 	let names = [];
 	try {
 		const snapshot = await sendCommandAwait("get_resource_snapshot");
-		names = (snapshot.data?.outputStyles || []).filter((name) => name && name !== "default");
+		names = (snapshot.data?.outputStyles || []).filter((name) => name && name !== "none");
 	} catch (error) {
 		names = [];
 	}
-	if (currentValue && currentValue !== "default" && !names.includes(currentValue)) names.push(currentValue);
-	select.innerHTML = '<option value="">Default</option>';
+	if (currentValue && currentValue !== "none" && !names.includes(currentValue)) names.push(currentValue);
+	select.innerHTML = '<option value="">Default (ELI5)</option><option value="none">None</option>';
 	for (const name of names) {
 		const option = document.createElement("option");
 		option.value = name;

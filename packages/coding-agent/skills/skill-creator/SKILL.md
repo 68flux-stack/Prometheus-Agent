@@ -51,7 +51,8 @@ description: What this skill does and when to use it. Be specific.
 |---|---|---|
 | `name` | Yes | Max 64 chars. Lowercase a-z, 0-9, hyphens. No leading/trailing/consecutive hyphens. Must match the parent directory name. |
 | `description` | Yes | Max 1024 chars. A skill with a missing or empty description is **silently not loaded**. |
-| `disable-model-invocation` | No | `true` hides the skill from the system prompt; only explicit `/skill:<name>` invokes it. |
+| `disable-model-invocation` | No | `true` hides the skill from the system prompt and from `skills.list()`; only explicit `/skill:<name>` invokes it. |
+| `eager` | No | `true` always shows name+description in the system prompt; `false` withholds it, discoverable via `skills.list()`/`skills.read()` instead. Defaults to `true` for python skills, `false` for markdown skills — set explicitly to override, e.g. a python skill whose correct use needs a procedure, not just a call signature. |
 | `license` | No | License name or reference to a bundled file. |
 | `compatibility` | No | Max 500 chars. Environment requirements. |
 | `metadata` | No | Arbitrary key-value mapping. |

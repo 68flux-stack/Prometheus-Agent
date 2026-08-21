@@ -2921,7 +2921,7 @@ describe("InteractiveMode session switch command catalog", () => {
 	});
 });
 
-describe("InteractiveMode Prime CLI onboarding", () => {
+describe("InteractiveMode Prometheus CLI onboarding", () => {
 	type OnboardingSplashHandle = {
 		showProgress(message: string): void;
 		dismiss(): void;
@@ -2930,7 +2930,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		shouldRunOnboarding(): boolean;
 		markOnboardingShown(): void;
 		runStartupOnboarding(): Promise<boolean>;
-		runOnboardingFlow(showPrimeCliSplash?: boolean): Promise<void>;
+		runOnboardingFlow(showPrometheusCliSplash?: boolean): Promise<void>;
 		applySelectedModel(model: AgentConnectionModel): Promise<void>;
 		prepareForModelSelectionAfterLogin(authResult: AuthenticationResult): Promise<boolean>;
 		setupAutocompleteProvider(): void;
@@ -2965,7 +2965,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		checkDaxnutsEasterEgg?: (model: { provider: string; id: string }) => void;
 		findExactModelMatch?: (searchTerm: string) => Promise<AgentConnectionModel | undefined>;
 		showOnboardingSplash?: (continueActionLabel?: string) => Promise<OnboardingSplashHandle | undefined>;
-		createAuthFlows?: () => { runPrimeInferenceLogin(): Promise<AuthenticationResult> };
+		createAuthFlows?: () => { runPrometheusInferenceLogin(): Promise<AuthenticationResult> };
 		showConfigurationMenu?: (tab: "providers" | "models" | "mcp-connections") => Promise<void>;
 		getModelCandidates?: () => Promise<AgentConnectionModel[]>;
 	};
@@ -3608,7 +3608,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
-	function createPrimeCliHarness(shown: boolean): OnboardingFake {
+	function createPrometheusCliHarness(shown: boolean): OnboardingFake {
 		const fakeThis = Object.create(InteractiveMode.prototype) as OnboardingFake;
 		fakeThis.connectionState = createConnectionState({ model: primeModel });
 		fakeThis.connectionModels = [primeModel];
@@ -3638,21 +3638,21 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		return fakeThis;
 	}
 
-	test("shows onboarding when the selected Prime model is backed by Prime CLI auth", () => {
-		const fakeThis = createPrimeCliHarness(false);
+	test("shows onboarding when the selected Prometheus model is backed by Prometheus CLI auth", () => {
+		const fakeThis = createPrometheusCliHarness(false);
 
 		expect(shouldRunOnboarding.call(fakeThis)).toBe(true);
 		expect(fakeThis.uiServices.modelRegistry.refresh).toHaveBeenCalledTimes(1);
 	});
 
-	test("skips Prime CLI onboarding after it has been shown", () => {
-		const fakeThis = createPrimeCliHarness(true);
+	test("skips Prometheus CLI onboarding after it has been shown", () => {
+		const fakeThis = createPrometheusCliHarness(true);
 
 		expect(shouldRunOnboarding.call(fakeThis)).toBe(false);
 	});
 
 	test("persists that onboarding was shown once", () => {
-		const fakeThis = createPrimeCliHarness(false);
+		const fakeThis = createPrometheusCliHarness(false);
 
 		markOnboardingShown.call(fakeThis);
 
@@ -3662,7 +3662,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 	test("persists onboarding before opening the one-shot flow", async () => {
 		let shown = false;
 		let flushed = false;
-		const fakeThis = createPrimeCliHarness(false);
+		const fakeThis = createPrometheusCliHarness(false);
 		fakeThis.uiServices.settingsManager.getOnboardingShown = vi.fn(() => shown);
 		fakeThis.uiServices.settingsManager.setOnboardingShown = vi.fn((nextShown: boolean) => {
 			shown = nextShown;
@@ -3670,8 +3670,8 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		fakeThis.uiServices.settingsManager.flush = vi.fn(async () => {
 			flushed = true;
 		});
-		fakeThis.runOnboardingFlow = vi.fn(async (showPrimeCliSplash?: boolean) => {
-			expect(showPrimeCliSplash).toBe(true);
+		fakeThis.runOnboardingFlow = vi.fn(async (showPrometheusCliSplash?: boolean) => {
+			expect(showPrometheusCliSplash).toBe(true);
 			expect(shown).toBe(true);
 			expect(flushed).toBe(true);
 		});
@@ -3683,8 +3683,8 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		expect(fakeThis.runOnboardingFlow).toHaveBeenCalledWith(true);
 	});
 
-	test("cancelled Prime CLI splash exits onboarding before opening configuration", async () => {
-		const fakeThis = createPrimeCliHarness(false);
+	test("cancelled Prometheus CLI splash exits onboarding before opening configuration", async () => {
+		const fakeThis = createPrometheusCliHarness(false);
 		fakeThis.showOnboardingSplash = vi.fn(async () => undefined);
 		fakeThis.showConfigurationMenu = vi.fn(async () => {});
 
@@ -3693,8 +3693,8 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		expect(fakeThis.showConfigurationMenu).not.toHaveBeenCalled();
 	});
 
-	test("opens the Models tab after the Prime CLI splash", async () => {
-		const fakeThis = createPrimeCliHarness(false);
+	test("opens the Models tab after the Prometheus CLI splash", async () => {
+		const fakeThis = createPrometheusCliHarness(false);
 		const configuration = createDeferred<void>();
 		const dismiss = vi.fn();
 		fakeThis.showOnboardingSplash = vi.fn(async () => ({ showProgress: vi.fn(), dismiss }));
@@ -3713,7 +3713,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 	});
 
 	test("opens the Models tab when models are already available", async () => {
-		const fakeThis = createPrimeCliHarness(false);
+		const fakeThis = createPrometheusCliHarness(false);
 		fakeThis.connectionState = createConnectionState({ model: undefined });
 		fakeThis.getModelCandidates = vi.fn(async () => [primeModel]);
 		fakeThis.showConfigurationMenu = vi.fn(async () => {});
@@ -3724,18 +3724,18 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("models");
 	});
 
-	test("opens Prime login before the Models tab when no models are available", async () => {
-		const fakeThis = createPrimeCliHarness(false);
+	test("opens Prometheus login before the Models tab when no models are available", async () => {
+		const fakeThis = createPrometheusCliHarness(false);
 		fakeThis.connectionState = createConnectionState({ model: undefined });
 		fakeThis.getModelCandidates = vi.fn(async () => []);
 		const showProgress = vi.fn();
 		const dismiss = vi.fn();
 		fakeThis.showOnboardingSplash = vi.fn(async () => ({ showProgress, dismiss }));
 		fakeThis.createAuthFlows = vi.fn(() => ({
-			runPrimeInferenceLogin: vi.fn(async () => ({
+			runPrometheusInferenceLogin: vi.fn(async () => ({
 				status: "success" as const,
 				providerId: PRIME_INFERENCE_PROVIDER_ID,
-				providerName: "Prime Inference",
+				providerName: "Prometheus Inference",
 				authType: "api_key" as const,
 				kind: "provider" as const,
 			})),
@@ -3748,7 +3748,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		await flushAsyncWork();
 
 		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith();
-		expect(showProgress).toHaveBeenNthCalledWith(1, "Signing in to Prime Intellect...");
+		expect(showProgress).toHaveBeenNthCalledWith(1, "Signing in to Prometheus Intellect...");
 		expect(showProgress).toHaveBeenNthCalledWith(2, "Preparing models...");
 		expect(fakeThis.prepareForModelSelectionAfterLogin).toHaveBeenCalledTimes(1);
 		expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("models");
@@ -3778,7 +3778,7 @@ describe("InteractiveMode post-login model preparation", () => {
 
 	const prepareForModelSelectionAfterLogin = (InteractiveMode.prototype as unknown as LoginHarness)
 		.prepareForModelSelectionAfterLogin;
-	const loginPrimeModel: AgentConnectionModel = {
+	const loginPrometheusModel: AgentConnectionModel = {
 		id: "openai/gpt-5.5",
 		name: "GPT-5.5",
 		api: "openai-completions",
@@ -3791,8 +3791,8 @@ describe("InteractiveMode post-login model preparation", () => {
 		maxTokens: 128000,
 	} as AgentConnectionModel;
 
-	test("persists GLM 5.2 before model selection after Prime Inference login", async () => {
-		const fallbackModel = { ...loginPrimeModel, id: "z-ai/glm-5.2", name: "GLM 5.2" };
+	test("persists GLM 5.2 before model selection after Prometheus Inference login", async () => {
+		const fallbackModel = { ...loginPrometheusModel, id: "z-ai/glm-5.2", name: "GLM 5.2" };
 		const flushSettings = vi.fn(async () => {});
 		const fakeThis = Object.create(InteractiveMode.prototype) as LoginHarness;
 		fakeThis.invalidateConnectionModels = vi.fn();
@@ -3812,7 +3812,7 @@ describe("InteractiveMode post-login model preparation", () => {
 			prepareForModelSelectionAfterLogin.call(fakeThis, {
 				status: "success",
 				providerId: PRIME_INFERENCE_PROVIDER_ID,
-				providerName: "Prime Inference",
+				providerName: "Prometheus Inference",
 				authType: "api_key",
 				kind: "provider",
 			}),
@@ -3826,7 +3826,7 @@ describe("InteractiveMode post-login model preparation", () => {
 	test("preserves refreshed models after any model-provider login", async () => {
 		const fakeThis = Object.create(InteractiveMode.prototype) as LoginHarness;
 		fakeThis.invalidateConnectionModels = vi.fn();
-		fakeThis.getCurrentModel = vi.fn(() => loginPrimeModel);
+		fakeThis.getCurrentModel = vi.fn(() => loginPrometheusModel);
 		fakeThis.applySelectedModel = vi.fn(async () => {});
 		fakeThis.showError = vi.fn();
 		fakeThis.uiServices = {

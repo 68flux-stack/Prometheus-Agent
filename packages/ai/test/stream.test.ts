@@ -450,7 +450,7 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe.skipIf(!primeInferenceApiKey)("Prime Inference Provider (openai/gpt-5.5)", () => {
+	describe.skipIf(!primeInferenceApiKey)("Prometheus Inference Provider (openai/gpt-5.5)", () => {
 		const llm = getModel("prime-inference", "openai/gpt-5.5");
 
 		it("should complete basic text generation", { retry: 3 }, async () => {

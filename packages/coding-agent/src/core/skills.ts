@@ -74,6 +74,7 @@ export interface SkillFrontmatter {
 	name?: string;
 	description?: string;
 	"disable-model-invocation"?: boolean;
+	eager?: boolean;
 	[key: string]: unknown;
 }
 
@@ -92,6 +93,16 @@ interface BaseSkill {
 	baseDir: string;
 	sourceInfo: SourceInfo;
 	disableModelInvocation: boolean;
+	/**
+	 * Whether this skill's name/description are always injected into the system
+	 * prompt (Level 1 of progressive disclosure). Defaults to `true` for
+	 * python-backed skills (the model has no other way to learn a pre-imported
+	 * module exists) and `false` for markdown skills (discoverable on demand via
+	 * `skills.list()` / `skills.read()` instead). Override with `eager: true|false`
+	 * in frontmatter, e.g. a python skill whose correct use requires reading a
+	 * multi-step procedure, not just a call signature.
+	 */
+	eager: boolean;
 }
 
 export interface MarkdownSkill extends BaseSkill {
@@ -442,6 +453,7 @@ function loadSkillFromFile(
 			baseDir: skillDir,
 			sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
 			disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+			eager: typeof frontmatter.eager === "boolean" ? frontmatter.eager : python !== null,
 		};
 
 		return {
@@ -456,15 +468,42 @@ function loadSkillFromFile(
 }
 
 /**
+ * First-party skills with hand-written usage documentation baked directly into
+ * the base RLM prompt (see prompts/rlm.ts's INLINE_DOCUMENTED_IMPORT_NAMES).
+ * The model already knows their exact call syntax without a lookup, so they
+ * are excluded from both the `<available_skills>` prompt block below and from
+ * `skills.list()` / `skills.read()` — listing them again would be redundant.
+ */
+export const INLINE_DOCUMENTED_SKILL_NAMES: ReadonlySet<string> = new Set([
+	"edit",
+	"refine",
+	"compact",
+	"goal",
+	"todo",
+	"websearch",
+	"attach-image",
+	"agent-observe",
+	"agent-message",
+	"rlm-heartbeat",
+	"skills",
+]);
+
+/**
  * Format skills for inclusion in a system prompt.
  * Uses XML format per Agent Skills standard.
  * See: https://agentskills.io/integrate-skills
  *
- * Skills with disableModelInvocation=true are excluded from the prompt
- * (they can only be invoked explicitly via /skill:name commands).
+ * Excludes:
+ * - hidden skills (`disableModelInvocation`), invocable only via /skill:name
+ * - lazy skills (`eager: false`), discoverable on demand via `skills.list()` /
+ *   `skills.read()` instead of paying their description cost on every turn
+ * - inline-documented first-party skills (see INLINE_DOCUMENTED_SKILL_NAMES),
+ *   whose usage is already baked into the base prompt
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
-	const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
+	const visibleSkills = skills.filter(
+		(s) => !s.disableModelInvocation && s.eager && !INLINE_DOCUMENTED_SKILL_NAMES.has(s.name),
+	);
 
 	if (visibleSkills.length === 0) {
 		return "";
@@ -503,6 +542,33 @@ function escapeXml(str: string): string {
 		.replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;")
 		.replace(/'/g, "&apos;");
+}
+
+/**
+ * Skills discoverable on demand via `skills.list()` / `skills.read()`: not
+ * hidden, not eager, and not already baked into the base prompt. Backs both
+ * the lazy-skill count hint in the base prompt and the `skills.list` host
+ * request handler.
+ */
+export function getLazySkills(skills: readonly Skill[]): Skill[] {
+	return skills.filter((s) => !s.disableModelInvocation && !s.eager && !INLINE_DOCUMENTED_SKILL_NAMES.has(s.name));
+}
+
+/** Compact summary of a skill for `skills.list()` — name, kind, and description only. */
+export interface SkillSummary {
+	name: string;
+	kind: SkillKind;
+	description: string;
+	python_import?: string;
+}
+
+export function summarizeSkill(skill: Skill): SkillSummary {
+	return {
+		name: skill.name,
+		kind: skill.kind,
+		description: skill.description,
+		...(skill.kind === "python" ? { python_import: skill.python.importName } : {}),
+	};
 }
 
 export interface LoadSkillsOptions {

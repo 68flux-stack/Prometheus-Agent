@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+- Added the `ask_user` tool with CLI and desktop question panels, custom answers, dismissal, and one recommended option per question.
+- Changed auto-compaction to start at 75% of the model context by default, with a configurable threshold in settings.
+- Fixed editing a desktop message creating a duplicate chat; edited messages now stay in the current session.
+- Added a three-tier skill visibility model: hidden (`disable-model-invocation: true`, unchanged), lazy (`eager: false`, the new default for markdown skills — discoverable on demand via the new `skills.list()` / `skills.read()` skill instead of costing tokens on every turn), and eager (`eager: true`, the default for python skills, shown in the system prompt as before).
+- Added the `skills` skill: `await skills.list(query=None)` lists installed skills withheld from the system prompt, `await skills.read(name)` loads one's full `SKILL.md` on demand.
+- Changed `research` to lazy by default (`eager: false`): its correct use is a multi-step procedure, not a single call signature, so it is now discovered via `skills.list()`/`skills.read()` instead of an always-injected description.
+- Changed `edit`, `refine`, `compact`, `goal`, `todo`, `websearch`, `attach-image`, `agent-observe`, `agent-message`, and `rlm-heartbeat` to skip the skill-description lookup entirely: their exact call syntax is now written directly into the base system prompt (matching `edit`'s prior treatment), and they are excluded from both the `<available_skills>` block and `skills.list()`.
+- Fixed `edit` and `refine` being described twice in the system prompt — once via `<available_skills>` and again via their dedicated usage paragraph — now only the dedicated paragraph is shown.
 - Fixed `request_directory_access` in Windows workspace mode never showing the user an accept/deny prompt: the injected kernel helper called the async host bridge without awaiting it, so the request was never sent.
+- Fixed Windows plan mode blocking searches and commands; it now blocks only file edits and creation.
 - Fixed the desktop command summary showing "Read a file" instead of the actual path; the kernel's file-mutation audit hook now also tracks reads and reports them alongside writes.
-- Added output styles: named `*.md` behavioral presets, picked from `/settings` → Output style (or `settings.json`'s `outputStyle`). `~/.prometheus/agent/output-styles/` is auto-created and seeded with a built-in `ELI5` style on first run; drop more `*.md` files in there to add your own (a custom style wins over a bundled one of the same name). By default a style's content is appended to the system prompt so tool-use instructions are preserved; a style file can opt into fully replacing the system prompt instead with `keep-coding-instructions: false` frontmatter.
+- Added output styles: named `*.md` behavioral presets, picked from `/settings` → Output style (or `settings.json`'s `outputStyle`). `~/.prometheus/agent/output-styles/` is auto-created and seeded with a built-in `ELI5` style on first run; drop more `*.md` files in there to add your own (a custom style wins over a bundled one of the same name). By default, Prometheus uses `ELI5`; set `outputStyle` to `none` to disable style instructions. A style's content is appended to the system prompt so tool-use instructions are preserved, and a style file can opt into fully replacing the system prompt instead with `keep-coding-instructions: false` frontmatter.
 
 - Fixed the long pause before the first token in a new conversation: workspace change review no longer re-hashes and re-copies the whole workspace at every turn, and stores file snapshots once per agent directory instead of once per conversation.
 - Sped up desktop startup by booting the engine before the window opens, reusing a warm engine process for the first workspace, and serving the renderer with ETag revalidation so reloads skip re-downloading the app bundle.
@@ -55,16 +64,16 @@
 - Fixed change review to keep empty conversations empty and stay scoped to each conversation's mutations, including subprocess writes, across concurrent runs and restarts while preserving compatible later edits and ignoring incidental line-ending normalization.
 - Fixed desktop command summaries and diff statistics to combine file reads, creations, and edits using complete per-command before/after data.
 - Fixed explicit sequential file-operation requests being collapsed into a single final-state write.
-- Added a configurable copy action to login dialogs so raw sign-in URLs can be copied without selecting wrapped text ([#643](https://github.com/PrimeIntellect-ai/prometheus/issues/643)).
+- Added a configurable copy action to login dialogs so raw sign-in URLs can be copied without selecting wrapped text ([#643](https://github.com/PrometheusIntellect-ai/prometheus/issues/643)).
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prometheus)).
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
-- Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prometheus` ([#844](https://github.com/PrimeIntellect-ai/prometheus/issues/844))
+- Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prometheus` ([#844](https://github.com/PrometheusIntellect-ai/prometheus/issues/844))
 - Added a kernel file-mutation ledger that records Python-level writes, renames, and deletes under the working directory via `sys.addaudithook` and reports them on the `ipython` tool result.
 - Fixed compaction and branch summaries always reporting empty `<read-files>` and `<modified-files>` sections, because file operations were extracted from an `edit` tool that the single-tool agent never registers.
 - Added automatic session naming that titles an unnamed session from its first exchange after the turn completes, using the session's current model with thinking disabled (`autoSessionName`, default on).
 - Fixed new sessions waiting for opt-in trace uploads to finish before becoming usable.
 - Fixed desktop conversation switching on Windows by recognizing lease collisions and reattaching to active sessions through the shared daemon.
-- Fixed execution modes being unavailable on Windows; plan mode now provides read-only IPython and web search while workspace mode uses Prime's permission boundary.
+- Fixed execution modes being unavailable on Windows; plan mode now provides read-only IPython and web search while workspace mode uses Prometheus's permission boundary.
 - Changed plain `%%bash` cells to run in independent processes so commands from the agent and its subagents can execute concurrently.
 
 ## [0.7.1] - 2026-08-07
@@ -90,12 +99,12 @@
 
 - Added reverse tab navigation to the `/login` configuration menu and moved the model scope shortcut to `Alt+S`.
 - Fixed daemon startup crashes hiding their exit status and daemon log until the startup timeout.
-- Documented the global `idleEvictionMinutes` daemon setting, including its default, valid values, and eviction/passivation behavior ([#621](https://github.com/PrimeIntellect-ai/prometheus/issues/621)).
-- Fixed top-level `--help` omitting `acp` from the supported `--mode` values ([#620](https://github.com/PrimeIntellect-ai/prometheus/issues/620)).
-- Fixed `stop` and `rename` becoming prompts when `--daemon-socket` precedes the command ([#622](https://github.com/PrimeIntellect-ai/prometheus/issues/622)).
-- Fixed subagent terminal notices arriving as anonymous follow-up prompts instead of attributed agent messages, so a parent can now tell which child reported completion, failure, or cancellation, and a busy parent is steered at the next turn boundary rather than waiting to go idle ([#617](https://github.com/PrimeIntellect-ai/prometheus/issues/617)).
+- Documented the global `idleEvictionMinutes` daemon setting, including its default, valid values, and eviction/passivation behavior ([#621](https://github.com/PrometheusIntellect-ai/prometheus/issues/621)).
+- Fixed top-level `--help` omitting `acp` from the supported `--mode` values ([#620](https://github.com/PrometheusIntellect-ai/prometheus/issues/620)).
+- Fixed `stop` and `rename` becoming prompts when `--daemon-socket` precedes the command ([#622](https://github.com/PrometheusIntellect-ai/prometheus/issues/622)).
+- Fixed subagent terminal notices arriving as anonymous follow-up prompts instead of attributed agent messages, so a parent can now tell which child reported completion, failure, or cancellation, and a busy parent is steered at the next turn boundary rather than waiting to go idle ([#617](https://github.com/PrometheusIntellect-ai/prometheus/issues/617)).
 - Fixed ACP mode reporting a failed turn as a clean `end_turn`. A provider error, expired auth, or unusable model left `session/prompt` resolving with no updates at all, which reads to a client as a successful but empty turn; the turn now fails with the underlying error instead.
-- Fixed ACP cwd mismatch metadata treating symlink aliases such as macOS `/var` and `/private/var` as different directories ([#623](https://github.com/PrimeIntellect-ai/prometheus/issues/623)).
+- Fixed ACP cwd mismatch metadata treating symlink aliases such as macOS `/var` and `/private/var` as different directories ([#623](https://github.com/PrometheusIntellect-ai/prometheus/issues/623)).
 
 ## [0.6.0] - 2026-08-04
 
@@ -192,7 +201,7 @@
 - Fixed `/effort xhigh` and `/effort max` being rejected before a model is active.
 - Fixed IPython tracebacks emitting ANSI color codes.
 - Fixed selected rows and selectors becoming nearly invisible on terminals whose background matches the selected theme color.
-- Fixed startup waiting on private Prime Inference model authorization by caching authorization locally and refreshing stale entries in the background.
+- Fixed startup waiting on private Prometheus Inference model authorization by caching authorization locally and refreshing stale entries in the background.
 
 ## [0.3.3] - 2026-07-23
 
@@ -207,13 +216,13 @@
 - Changed `/context` tree connectors from `├ `/`└ ` to `├─ `/`└─ ` to match the tree selector and session picker.
 - Changed the IPython cell queued marker from `▸` to `◇` to match the subagent and context-tree status icons.
 - Changed slash-command autocomplete to separate argument hints and resource provenance, show only the selected command description, and summarize hidden results directionally.
-- Fixed cancelled extension commands remaining alive when spawned processes ignored SIGTERM ([#458](https://github.com/PrimeIntellect-ai/prometheus/pull/458) by [@snimu](https://github.com/snimu)).
+- Fixed cancelled extension commands remaining alive when spawned processes ignored SIGTERM ([#458](https://github.com/PrometheusIntellect-ai/prometheus/pull/458) by [@snimu](https://github.com/snimu)).
 - Fixed OAuth browser launch URLs being interpreted by the system shell.
-- Added agent-callable `refine` skill so the model can schedule continual harness refinement from IPython via `await refine.run()` without blocking the current turn ([#504](https://github.com/PrimeIntellect-ai/prometheus/pull/504) by [@sethkarten](https://github.com/sethkarten)).
-- Changed long live session opens to render a bounded recent transcript tail while preserving full prompt history ([#343](https://github.com/PrimeIntellect-ai/prometheus/pull/343) by [@sethkarten](https://github.com/sethkarten)).
-- Changed `/refine` to run planning in the background so the conversation is not blocked during the LLM pass ([#497](https://github.com/PrimeIntellect-ai/prometheus/pull/497) by [@sethkarten](https://github.com/sethkarten)).
-- Added serialized headless refinement and `--goal` / `--goal-token-budget` for seeding durable session goals ([#514](https://github.com/PrimeIntellect-ai/prometheus/pull/514) by [@sethkarten](https://github.com/sethkarten)).
-- Added multi-turn `/btw` side conversations with transient in-pane bash commands ([#512](https://github.com/PrimeIntellect-ai/prometheus/pull/512) by [@ilijalichkovski](https://github.com/ilijalichkovski)).
+- Added agent-callable `refine` skill so the model can schedule continual harness refinement from IPython via `await refine.run()` without blocking the current turn ([#504](https://github.com/PrometheusIntellect-ai/prometheus/pull/504) by [@sethkarten](https://github.com/sethkarten)).
+- Changed long live session opens to render a bounded recent transcript tail while preserving full prompt history ([#343](https://github.com/PrometheusIntellect-ai/prometheus/pull/343) by [@sethkarten](https://github.com/sethkarten)).
+- Changed `/refine` to run planning in the background so the conversation is not blocked during the LLM pass ([#497](https://github.com/PrometheusIntellect-ai/prometheus/pull/497) by [@sethkarten](https://github.com/sethkarten)).
+- Added serialized headless refinement and `--goal` / `--goal-token-budget` for seeding durable session goals ([#514](https://github.com/PrometheusIntellect-ai/prometheus/pull/514) by [@sethkarten](https://github.com/sethkarten)).
+- Added multi-turn `/btw` side conversations with transient in-pane bash commands ([#512](https://github.com/PrometheusIntellect-ai/prometheus/pull/512) by [@ilijalichkovski](https://github.com/ilijalichkovski)).
 
 
 ## [0.3.2] - 2026-07-20
@@ -230,7 +239,7 @@
 - Fixed daemon backpressure triggering redundant catch-up snapshots for events already queued by the socket.
 - Added dedicated stable and beta installers, with stable advancing on version bumps and beta advancing on every commit to `main`.
 - Fixed incompatible daemon builds crashing startup or respawning after shutdown, with capability negotiation, verified provenance, and convergent force shutdown ([ENG-4687](https://linear.app/primeintellect/issue/ENG-4687/make-daemon-version-mismatches-self-healing)).
-- Changed tool-result and announcement images to show compact metadata instead of terminal graphics ([#437](https://github.com/PrimeIntellect-ai/prometheus/pull/437) by [@snimu](https://github.com/snimu)).
+- Changed tool-result and announcement images to show compact metadata instead of terminal graphics ([#437](https://github.com/PrometheusIntellect-ai/prometheus/pull/437) by [@snimu](https://github.com/snimu)).
 - Changed top-level CLI help to show concise common options and commands without loading runtime resources ([ENG-4688](https://linear.app/primeintellect/issue/ENG-4688/help-command-is-obscenely-verbose)).
 - Fixed completed subagents cancelling their RLM heartbeats before the first run ([ENG-4652](https://linear.app/primeintellect/issue/ENG-4652/subagent-heartbeats-dont-work)).
 - Changed the fullscreen follow shortcut from `Alt+Down` to `Ctrl+Shift+Down` for more reliable terminal input ([ENG-4684](https://linear.app/primeintellect/issue/ENG-4684/altdown-doesnt-work)).
@@ -247,7 +256,7 @@
 - Changed `/traces upload-all` to pace requests within the platform rate limit, honor bounded `Retry-After` responses, and support interruption.
 - Fixed resuming a daemon-resident session to attach the requesting client to its existing worker without disturbing other clients ([ENG-4656](https://linear.app/primeintellect/issue/ENG-4656/resuming-prometheus-sessions-should-attach)).
 - Fixed daemon-owned updates terminating their updater before the daemon restart and session restore completed ([ENG-4606](https://linear.app/primeintellect/issue/ENG-4606/benign-error-on-prometheus-update)).
-- Fixed first-launch Prime login and kept onboarding visible between team and model selection ([ENG-4658](https://linear.app/primeintellect/issue/ENG-4658/fix-onboarding-login-enter-key-and-model-selector-flicker)).
+- Fixed first-launch Prometheus login and kept onboarding visible between team and model selection ([ENG-4658](https://linear.app/primeintellect/issue/ENG-4658/fix-onboarding-login-enter-key-and-model-selector-flicker)).
 - Fixed active heartbeat sessions appearing under Needs Input or Completed instead of a dedicated Heartbeats section ([ENG-4654](https://linear.app/primeintellect/issue/ENG-4654/categorize-heartbeat-sessions-as-working)).
 - Fixed stashed prompts being lost when leaving and reopening a session from the Agents View ([ENG-4659](https://linear.app/primeintellect/issue/ENG-4659/stashed-prompts-should-persist)).
 - Added a combined heartbeat indicator and manager for pausing, resuming, or stopping user and agent heartbeats ([ENG-4536](https://linear.app/primeintellect/issue/ENG-4536/add-heartbeat-observability-and-management-ui)).
@@ -256,7 +265,7 @@
 
 - Added `/fast` for OpenAI Fast mode on supported ChatGPT models ([ENG-4620](https://linear.app/primeintellect/issue/ENG-4620/add-support-for-gpt-fast-mode-maybe-fast)).
 - Changed wrapped diff rows to use a blank hanging gutter.
-- Fixed team-gated Prime Inference routes being missing from model selectors by merging the authenticated team catalog during model refresh ([ENG-4645](https://linear.app/primeintellect/issue/ENG-4645/internalglm-52-fast-isnt-working)).
+- Fixed team-gated Prometheus Inference routes being missing from model selectors by merging the authenticated team catalog during model refresh ([ENG-4645](https://linear.app/primeintellect/issue/ENG-4645/internalglm-52-fast-isnt-working)).
 - Added confirmation when fullscreen text selection copies to the clipboard ([ENG-4644](https://linear.app/primeintellect/issue/ENG-4644/copy-issues)).
 - Added an agent-run edit total above the recap.
 - Changed edit tool calls to always show full diffs while keeping IPython source collapsed until Ctrl+O expands it.
@@ -267,9 +276,9 @@
 - Changed provider, model, and MCP setup to use one tabbed configuration menu ([ENG-4539](https://linear.app/primeintellect/issue/ENG-4539/unify-providers-models-and-mcp-connections-menu)).
 - Changed the shared configuration menu to show prominent, responsive tabs with configurable navigation shortcuts ([ENG-4534](https://linear.app/primeintellect/issue/ENG-4534/make-login-tabs-more-obvious)).
 - Fixed IPython edit diffs replacing syntax highlighting with a single foreground color ([ENG-4616](https://linear.app/primeintellect/issue/ENG-4616/syntax-highlighting-is-overridden-in-diff-view)).
-- Fixed Prime Inference login leaving new sessions without a persisted model selection ([ENG-4573](https://linear.app/primeintellect/issue/ENG-4573/prompt-for-model-selection-after-prime-inference-login)).
+- Fixed Prometheus Inference login leaving new sessions without a persisted model selection ([ENG-4573](https://linear.app/primeintellect/issue/ENG-4573/prompt-for-model-selection-after-prime-inference-login)).
 - Fixed empty prompt placeholders hiding the input caret.
-- Fixed automatic model selection preferring other configured providers over Prime Inference's GLM 5.2 default.
+- Fixed automatic model selection preferring other configured providers over Prometheus Inference's GLM 5.2 default.
 - Fixed missing ripgrep blocking subagents and added actionable installation guidance for the optional search helper ([ENG-4572](https://linear.app/primeintellect/issue/ENG-4572/ripgrep-not-installed)).
 - Removed the shared worker snapshot spill cache to prevent concurrent workers from deleting each other's snapshot chunks ([ENG-4601](https://linear.app/primeintellect/issue/ENG-4601/remove-shared-worker-snapshot-spill-cache-directories)).
 - Fixed narrow slash-command descriptions ending abruptly or clearing the prompt background, and added a content-sized popup above the input with the same distinct surface as `/btw` ([ENG-4542](https://linear.app/primeintellect/issue/ENG-4542/command-descriptions-are-cut-off-on-narrow-screens)).
@@ -280,11 +289,11 @@
 ## [0.3.0] - 2026-07-13
 
 - Changed daemon and headless execution to isolate each root session tree in a recoverable worker process, with protocol-v2 chunked snapshots, compact streaming, attachment-local backpressure, session leases, and unchanged print, JSON, and RPC interfaces.
-- Added autonomous mode with host-side continuations, configurable limits, and quality gates for evaluator-controlled runs ([#278](https://github.com/PrimeIntellect-ai/prometheus/pull/278) by [@sethkarten](https://github.com/sethkarten)).
+- Added autonomous mode with host-side continuations, configurable limits, and quality gates for evaluator-controlled runs ([#278](https://github.com/PrometheusIntellect-ai/prometheus/pull/278) by [@sethkarten](https://github.com/sethkarten)).
 - Added `/traces preview` and `/traces upload-all` for inspecting the current payload and backfilling saved parent and subagent traces.
 - Changed `/traces upload` and `/traces upload-all` to be explicit one-shot uploads that do not enable automatic sharing.
 - Changed trace uploads to retry transient network and HTTP failures with bounded exponential backoff and jitter.
-- Fixed Prime Inference credential and team-header precedence to prefer `PRIME_API_KEY`, then the Prime CLI config, then `auth.json`.
+- Fixed Prometheus Inference credential and team-header precedence to prefer `PRIME_API_KEY`, then the Prometheus CLI config, then `auth.json`.
 - Fixed aborted autonomous gates leaving detached process trees and supervisor recovery retaining intentionally stopped workers after stale scheduler locks.
 - Fixed supervisor replacement surfacing fatal socket errors or recovering roots that were intentionally stopped ([ENG-4526](https://linear.app/primeintellect/issue/ENG-4526/reconnect-daemon-clients-transparently-after-supervisor-replacement)).
 - Fixed daemon catch-up snapshots being disposed mid-transfer or triggering resets that cleared drafts, local queues, dialogs, active UI state, or in-flight reasoning traces.
@@ -321,7 +330,7 @@
 - Changed `?` shortcut help to appear as a temporary compact panel below the transcript, while `/hotkeys` shows the full reference without Ctrl+Z ([ENG-4489](https://linear.app/primeintellect/issue/ENG-4489/rewire-prometheus-shortcuts-to-match-claude-code-flow)).
 - Fixed Escape repeats around autocomplete, queued draft restoration, whitespace-only drafts, and active background work ([ENG-4489](https://linear.app/primeintellect/issue/ENG-4489/rewire-prometheus-shortcuts-to-match-claude-code-flow)).
 - Fixed the agents-view splash shifting when opening an agent session ([ENG-4517](https://linear.app/primeintellect/issue/ENG-4517)).
-- Changed `/model` to sort featured flagship models above a provider's long tail (with a numeric-aware alphabetical tiebreak), so the full Prime Inference catalog doesn't flood the picker.
+- Changed `/model` to sort featured flagship models above a provider's long tail (with a numeric-aware alphabetical tiebreak), so the full Prometheus Inference catalog doesn't flood the picker.
 - Fixed selector prompts and choices filling their background through the terminal's right edge.
 - Changed automatic harness refinement to be enabled by default while keeping `autoRefine.enabled: false` as the opt-out.
 - Fixed non-numeric `autoRefine.turnInterval` and `autoRefine.cooldownMs` settings falling back to defaults instead of silently enabling a noisy auto-refine loop.
@@ -330,7 +339,7 @@
 ## [0.2.7] - 2026-07-08
 
 - Changed subagent and refinement guidance to favor non-blocking subagent tasks by default, use disk-backed tracking for long-running fan-out, inspect or message live subagents when agent observation/messaging skills are available, and capture reusable delegation roles, procedures, facts, preferences, and prompt addendums with `/refine`.
-- Changed `attach_image` to resize and compress large inline image attachments before storing them for rendering and replay ([#340](https://github.com/PrimeIntellect-ai/prometheus/pull/340) by [@sethkarten](https://github.com/sethkarten)).
+- Changed `attach_image` to resize and compress large inline image attachments before storing them for rendering and replay ([#340](https://github.com/PrometheusIntellect-ai/prometheus/pull/340) by [@sethkarten](https://github.com/sethkarten)).
 - Fixed heartbeat and goal continuation prompts rendering like ordinary user messages ([ENG-4482](https://linear.app/primeintellect/issue/ENG-4482/heartbeat-message-should-have-a-different-ui-from-user-message)).
 - Fixed `/heartbeat` guidance to show `stop` and the `every <duration> <instruction>` interval syntax ([ENG-4484](https://linear.app/primeintellect/issue/ENG-4484/improve-heartbeat-command-syntax-guidance-in-ui)).
 - Fixed Ctrl+C canceling the active turn, bash command, and IPython kernel execution deterministically, with a compact recovery prompt and model-visible reset notice when an interrupted IPython cell keeps running ([ENG-4490](https://linear.app/primeintellect/issue/ENG-4490)).
@@ -338,7 +347,7 @@
 - Fixed `/model` opening and selection staying blocked on live model refreshes ([ENG-4505](https://linear.app/primeintellect/issue/ENG-4505/model-ui-is-extremely-slow)).
 - Fixed provider auth failures leaving stale credentials shown as connected in `/login` ([ENG-4491](https://linear.app/primeintellect/issue/ENG-4491/mark-provider-stale-after-repeated-401s)).
 - Fixed typing into the prompt after highlighting an inline subagent ([ENG-4494](https://linear.app/primeintellect/issue/ENG-4494/allow-typing-after-highlighting-a-subagent)).
-- Fixed session-targeted heartbeat jobs staying scheduled after sessions are killed or saved sessions are deleted ([#332](https://github.com/PrimeIntellect-ai/prometheus/pull/332)).
+- Fixed session-targeted heartbeat jobs staying scheduled after sessions are killed or saved sessions are deleted ([#332](https://github.com/PrometheusIntellect-ai/prometheus/pull/332)).
 - Fixed self-updates interrupting and automatically resuming daemon sessions instead of waiting for long-running work to finish.
 - Fixed provider errors being surfaced instead of retried within the retry budget ([ENG-4503](https://linear.app/primeintellect/issue/ENG-4503/restarting-old-session-returns-empty-model-response)).
 - Fixed Agents View returning from fullscreen sessions without flashing primary scrollback ([ENG-4508](https://linear.app/primeintellect/issue/ENG-4508/fullscreen-mode-agents-view-scroll)).
@@ -346,73 +355,73 @@
 ## [0.2.6] - 2026-07-06
 
 - Fixed the installer splash flickering during animation and resize by stabilizing full-screen redraws and removing misleading synthetic percentages ([ENG-4481](https://linear.app/primeintellect/issue/ENG-4481/installer-screen-is-unstable-and-flickery)).
-- Fixed Prime Inference auth syncing with Prime CLI login and team selection.
+- Fixed Prometheus Inference auth syncing with Prometheus CLI login and team selection.
 - Fixed provider auth failures showing provider-specific `/login` commands instead of the `/login` selector.
 - Removed the legacy pi-mono `bash` and `edit` built-in tools; use IPython `%%bash` cells and the Python `edit` skill instead.
 
 ## [0.2.5] - 2026-07-06
 
-- Added daemon-backed user orchestration with agent-to-agent messaging and read-only observation of active sessions ([#207](https://github.com/PrimeIntellect-ai/prometheus/pull/207) by [@sethkarten](https://github.com/sethkarten)).
-- Added an orchestration heartbeat skill for compact multi-session progress, blocker, and action summaries ([#207](https://github.com/PrimeIntellect-ai/prometheus/pull/207) by [@sethkarten](https://github.com/sethkarten)).
-- Added an opt-in auto-refine review hook that can ask whether `/refine` should run after turn intervals or compaction checkpoints ([#201](https://github.com/PrimeIntellect-ai/prometheus/pull/201) by [@sethkarten](https://github.com/sethkarten)).
-- Added opt-in fullscreen mode with a scrollable transcript, pinned prompt bar, mouse selection, and `/fullscreen` controls ([#316](https://github.com/PrimeIntellect-ai/prometheus/pull/316)).
-- Added prompt stashing so a draft can be temporarily saved, a separate prompt or command can run, and the draft is restored afterward ([#321](https://github.com/PrimeIntellect-ai/prometheus/pull/321)).
-- Added resume support to the agents view so stored sessions can be attached and managed without leaving the view ([#318](https://github.com/PrimeIntellect-ai/prometheus/pull/318)).
-- Added subagent delegation guidance to encourage parallel and background `rlm` calls when recursion is available ([#306](https://github.com/PrimeIntellect-ai/prometheus/pull/306) by [@alexzhang13](https://github.com/alexzhang13)).
-- Changed fullscreen TUI rendering to be enabled by default ([#325](https://github.com/PrimeIntellect-ai/prometheus/pull/325)).
-- Changed `--resume` to accept an optional session path or ID ([#319](https://github.com/PrimeIntellect-ai/prometheus/pull/319)).
-- Changed the installer onboarding splash to show ordered setup phases with a percentage instead of cycling detail text ([#327](https://github.com/PrimeIntellect-ai/prometheus/pull/327), [ENG-4376](https://linear.app/primeintellect/issue/ENG-4376/onboarding-instructions-should-be-accurate-to-whats-happening)).
-- Changed provider stream failures to show classified diagnostics and request IDs, with structured agent logs for debugging ([#313](https://github.com/PrimeIntellect-ai/prometheus/pull/313)).
-- Fixed daemon-hosted extensions sharing the wrong Herdr pane environment across concurrent sessions ([#303](https://github.com/PrimeIntellect-ai/prometheus/pull/303)).
-- Fixed parallel subagent guidance failing on first use by pre-importing `asyncio` in the IPython kernel bootstrap ([#315](https://github.com/PrimeIntellect-ai/prometheus/pull/315)).
+- Added daemon-backed user orchestration with agent-to-agent messaging and read-only observation of active sessions ([#207](https://github.com/PrometheusIntellect-ai/prometheus/pull/207) by [@sethkarten](https://github.com/sethkarten)).
+- Added an orchestration heartbeat skill for compact multi-session progress, blocker, and action summaries ([#207](https://github.com/PrometheusIntellect-ai/prometheus/pull/207) by [@sethkarten](https://github.com/sethkarten)).
+- Added an opt-in auto-refine review hook that can ask whether `/refine` should run after turn intervals or compaction checkpoints ([#201](https://github.com/PrometheusIntellect-ai/prometheus/pull/201) by [@sethkarten](https://github.com/sethkarten)).
+- Added opt-in fullscreen mode with a scrollable transcript, pinned prompt bar, mouse selection, and `/fullscreen` controls ([#316](https://github.com/PrometheusIntellect-ai/prometheus/pull/316)).
+- Added prompt stashing so a draft can be temporarily saved, a separate prompt or command can run, and the draft is restored afterward ([#321](https://github.com/PrometheusIntellect-ai/prometheus/pull/321)).
+- Added resume support to the agents view so stored sessions can be attached and managed without leaving the view ([#318](https://github.com/PrometheusIntellect-ai/prometheus/pull/318)).
+- Added subagent delegation guidance to encourage parallel and background `rlm` calls when recursion is available ([#306](https://github.com/PrometheusIntellect-ai/prometheus/pull/306) by [@alexzhang13](https://github.com/alexzhang13)).
+- Changed fullscreen TUI rendering to be enabled by default ([#325](https://github.com/PrometheusIntellect-ai/prometheus/pull/325)).
+- Changed `--resume` to accept an optional session path or ID ([#319](https://github.com/PrometheusIntellect-ai/prometheus/pull/319)).
+- Changed the installer onboarding splash to show ordered setup phases with a percentage instead of cycling detail text ([#327](https://github.com/PrometheusIntellect-ai/prometheus/pull/327), [ENG-4376](https://linear.app/primeintellect/issue/ENG-4376/onboarding-instructions-should-be-accurate-to-whats-happening)).
+- Changed provider stream failures to show classified diagnostics and request IDs, with structured agent logs for debugging ([#313](https://github.com/PrometheusIntellect-ai/prometheus/pull/313)).
+- Fixed daemon-hosted extensions sharing the wrong Herdr pane environment across concurrent sessions ([#303](https://github.com/PrometheusIntellect-ai/prometheus/pull/303)).
+- Fixed parallel subagent guidance failing on first use by pre-importing `asyncio` in the IPython kernel bootstrap ([#315](https://github.com/PrometheusIntellect-ai/prometheus/pull/315)).
 
 ## [0.2.4] - 2026-07-01
 
-- Changed the agents view to list only sessions the daemon is actively holding, and stopped the daemon from auto-restoring on-disk sessions on startup, so a restarted daemon no longer surfaces a wall of weeks-old sessions; sessions come back via `/resume` or `--resume` ([#295](https://github.com/PrimeIntellect-ai/prometheus/issues/295)).
-- Changed the kernel install progress line to name the current step and show a percentage instead of a static message ([#293](https://github.com/PrimeIntellect-ai/prometheus/issues/293)).
-- Changed the CLI to honor a `--` end-of-options separator, so arguments after it are passed through instead of parsed as flags ([#296](https://github.com/PrimeIntellect-ai/prometheus/issues/296)).
-- Changed provider stream failures to retry transient errors (content filter trips and prose 5xx responses) instead of failing the turn ([#297](https://github.com/PrimeIntellect-ai/prometheus/issues/297)).
-- Fixed IPython and bash tool calls failing for the rest of a run after a session was rebuilt, by rebinding built-in tools to the live runtime at call time ([#299](https://github.com/PrimeIntellect-ai/prometheus/issues/299)).
-- Fixed the kernel venv not rebuilding when the bundled runtime source changed, by tracking a content hash of the runtime (including its `pyproject.toml`) in the staleness check ([#291](https://github.com/PrimeIntellect-ai/prometheus/issues/291)).
-- Fixed a large subagent fan-out spawning every IPython kernel at once and starving the machine, by bounding concurrent kernel boots (default `min(16, 2*cores)`, override with `PROMETHEUS_MAX_CONCURRENT_KERNEL_BOOTS`) ([#294](https://github.com/PrimeIntellect-ai/prometheus/issues/294)).
-- Added a Python forkserver (on by default on Linux, opt out with `PROMETHEUS_KERNEL_FORKSERVER=0`) that forks subagent kernels from one pre-imported template process instead of a full cold boot each time, with automatic fallback to direct spawn on any failure ([#298](https://github.com/PrimeIntellect-ai/prometheus/issues/298), [#300](https://github.com/PrimeIntellect-ai/prometheus/issues/300)).
-- Fixed empty tool results on OpenAI-style providers being sent as a literal "(see attached image)" placeholder, which made models hallucinate a nonexistent image ([#290](https://github.com/PrimeIntellect-ai/prometheus/issues/290)).
+- Changed the agents view to list only sessions the daemon is actively holding, and stopped the daemon from auto-restoring on-disk sessions on startup, so a restarted daemon no longer surfaces a wall of weeks-old sessions; sessions come back via `/resume` or `--resume` ([#295](https://github.com/PrometheusIntellect-ai/prometheus/issues/295)).
+- Changed the kernel install progress line to name the current step and show a percentage instead of a static message ([#293](https://github.com/PrometheusIntellect-ai/prometheus/issues/293)).
+- Changed the CLI to honor a `--` end-of-options separator, so arguments after it are passed through instead of parsed as flags ([#296](https://github.com/PrometheusIntellect-ai/prometheus/issues/296)).
+- Changed provider stream failures to retry transient errors (content filter trips and prose 5xx responses) instead of failing the turn ([#297](https://github.com/PrometheusIntellect-ai/prometheus/issues/297)).
+- Fixed IPython and bash tool calls failing for the rest of a run after a session was rebuilt, by rebinding built-in tools to the live runtime at call time ([#299](https://github.com/PrometheusIntellect-ai/prometheus/issues/299)).
+- Fixed the kernel venv not rebuilding when the bundled runtime source changed, by tracking a content hash of the runtime (including its `pyproject.toml`) in the staleness check ([#291](https://github.com/PrometheusIntellect-ai/prometheus/issues/291)).
+- Fixed a large subagent fan-out spawning every IPython kernel at once and starving the machine, by bounding concurrent kernel boots (default `min(16, 2*cores)`, override with `PROMETHEUS_MAX_CONCURRENT_KERNEL_BOOTS`) ([#294](https://github.com/PrometheusIntellect-ai/prometheus/issues/294)).
+- Added a Python forkserver (on by default on Linux, opt out with `PROMETHEUS_KERNEL_FORKSERVER=0`) that forks subagent kernels from one pre-imported template process instead of a full cold boot each time, with automatic fallback to direct spawn on any failure ([#298](https://github.com/PrometheusIntellect-ai/prometheus/issues/298), [#300](https://github.com/PrometheusIntellect-ai/prometheus/issues/300)).
+- Fixed empty tool results on OpenAI-style providers being sent as a literal "(see attached image)" placeholder, which made models hallucinate a nonexistent image ([#290](https://github.com/PrometheusIntellect-ai/prometheus/issues/290)).
 
 ## [0.2.3] - 2026-06-30
 
-- Added built-in Linear and Notion integrations that the agent drives from Python in the kernel (no new agent tools); each is a bundled skill that talks to the service's official MCP server and auto-discovers its tools. They ship disabled and turn on after you sign in via the Services tab in `/login` or `/mcp login`, with credentials stored in the existing `auth.json` ([#280](https://github.com/PrimeIntellect-ai/prometheus/issues/280)).
-- Added an `attach-image` skill that loads an on-disk image (PNG, JPEG, GIF, WebP) into the model's context as a viewable attachment so a vision-capable model can directly see screenshots, diagrams, charts, or scanned pages ([#274](https://github.com/PrimeIntellect-ai/prometheus/issues/274)).
-- Changed subagents to be first-class sessions: opening a subagent now attaches to its own session and renders through the same rich chat UI as the main conversation instead of a laggy parent-rebuilt transcript, finished subagents stay viewable in the list and sort below running ones, and the detail view shows the subagent's own recap and animated working status ([#282](https://github.com/PrimeIntellect-ai/prometheus/issues/282)).
-- Changed session lifecycle handling so the agents view now lists every live session (not only daemon-resident ones), fixing reports of sessions going missing; abandoned new chats that were never sent a message are discarded instead of lingering ([#269](https://github.com/PrimeIntellect-ai/prometheus/issues/269)).
-- Changed the IPython kernel to stay alive across compaction: variables, imports, and helpers the agent defined are no longer wiped, and the model is instead told which names remain defined ([#267](https://github.com/PrimeIntellect-ai/prometheus/issues/267)).
-- Changed local slash commands like `/context`, `/system-prompt`, `/logs`, `/changelog`, and `/hotkeys` to echo the typed command into the chat so their output is anchored to a visible command instead of floating ([#270](https://github.com/PrimeIntellect-ai/prometheus/issues/270)).
-- Changed session recaps to use a non-reasoning model (Qwen3-30B instruct), which reliably closes the recap tag instead of occasionally surfacing a dangling "..." ([#284](https://github.com/PrimeIntellect-ai/prometheus/issues/284)).
-- Changed the heartbeat scheduler to defer `/heartbeat` and internal heartbeat cron jobs while the target session is already working, rescheduling the next interval instead of piling a prompt onto a busy agent ([#265](https://github.com/PrimeIntellect-ai/prometheus/issues/265)).
-- Changed `Ctrl+O` on IPython and bash cells to keep the same summary line in place and just attach the full code and output beneath it (aligned under the code gutter), instead of restructuring the block on expand ([#288](https://github.com/PrimeIntellect-ai/prometheus/issues/288)).
-- Removed the "call at most one built-in tool per turn" instruction from the system prompt, allowing the agent to invoke multiple built-in tools in a single turn ([#210](https://github.com/PrimeIntellect-ai/prometheus/issues/210)).
-- Fixed historical session replay re-emitting inline terminal image escape payloads; history now shows lightweight image fallback labels while live tool results still render images inline ([#281](https://github.com/PrimeIntellect-ai/prometheus/issues/281)).
-- Fixed pressing back from a subagent opened directly from the agents view dropping you into the parent's chat; it now returns to the agents view, with a "back to agents" hint ([#271](https://github.com/PrimeIntellect-ai/prometheus/issues/271)).
-- Fixed the agents view resetting the highlight to the first row when returning to it; selection now sticks to the session you had open across reorders and reattaches ([#268](https://github.com/PrimeIntellect-ai/prometheus/issues/268)).
-- Fixed freshly created chats being titled by their session ID until their file flushed; they are now titled by their first prompt immediately ([#264](https://github.com/PrimeIntellect-ai/prometheus/issues/264)).
-- Fixed opening a session from the agents view failing when its original working directory no longer exists; it now opens in a fallback directory with a notice instead of breaking ([#287](https://github.com/PrimeIntellect-ai/prometheus/issues/287)).
+- Added built-in Linear and Notion integrations that the agent drives from Python in the kernel (no new agent tools); each is a bundled skill that talks to the service's official MCP server and auto-discovers its tools. They ship disabled and turn on after you sign in via the Services tab in `/login` or `/mcp login`, with credentials stored in the existing `auth.json` ([#280](https://github.com/PrometheusIntellect-ai/prometheus/issues/280)).
+- Added an `attach-image` skill that loads an on-disk image (PNG, JPEG, GIF, WebP) into the model's context as a viewable attachment so a vision-capable model can directly see screenshots, diagrams, charts, or scanned pages ([#274](https://github.com/PrometheusIntellect-ai/prometheus/issues/274)).
+- Changed subagents to be first-class sessions: opening a subagent now attaches to its own session and renders through the same rich chat UI as the main conversation instead of a laggy parent-rebuilt transcript, finished subagents stay viewable in the list and sort below running ones, and the detail view shows the subagent's own recap and animated working status ([#282](https://github.com/PrometheusIntellect-ai/prometheus/issues/282)).
+- Changed session lifecycle handling so the agents view now lists every live session (not only daemon-resident ones), fixing reports of sessions going missing; abandoned new chats that were never sent a message are discarded instead of lingering ([#269](https://github.com/PrometheusIntellect-ai/prometheus/issues/269)).
+- Changed the IPython kernel to stay alive across compaction: variables, imports, and helpers the agent defined are no longer wiped, and the model is instead told which names remain defined ([#267](https://github.com/PrometheusIntellect-ai/prometheus/issues/267)).
+- Changed local slash commands like `/context`, `/system-prompt`, `/logs`, `/changelog`, and `/hotkeys` to echo the typed command into the chat so their output is anchored to a visible command instead of floating ([#270](https://github.com/PrometheusIntellect-ai/prometheus/issues/270)).
+- Changed session recaps to use a non-reasoning model (Qwen3-30B instruct), which reliably closes the recap tag instead of occasionally surfacing a dangling "..." ([#284](https://github.com/PrometheusIntellect-ai/prometheus/issues/284)).
+- Changed the heartbeat scheduler to defer `/heartbeat` and internal heartbeat cron jobs while the target session is already working, rescheduling the next interval instead of piling a prompt onto a busy agent ([#265](https://github.com/PrometheusIntellect-ai/prometheus/issues/265)).
+- Changed `Ctrl+O` on IPython and bash cells to keep the same summary line in place and just attach the full code and output beneath it (aligned under the code gutter), instead of restructuring the block on expand ([#288](https://github.com/PrometheusIntellect-ai/prometheus/issues/288)).
+- Removed the "call at most one built-in tool per turn" instruction from the system prompt, allowing the agent to invoke multiple built-in tools in a single turn ([#210](https://github.com/PrometheusIntellect-ai/prometheus/issues/210)).
+- Fixed historical session replay re-emitting inline terminal image escape payloads; history now shows lightweight image fallback labels while live tool results still render images inline ([#281](https://github.com/PrometheusIntellect-ai/prometheus/issues/281)).
+- Fixed pressing back from a subagent opened directly from the agents view dropping you into the parent's chat; it now returns to the agents view, with a "back to agents" hint ([#271](https://github.com/PrometheusIntellect-ai/prometheus/issues/271)).
+- Fixed the agents view resetting the highlight to the first row when returning to it; selection now sticks to the session you had open across reorders and reattaches ([#268](https://github.com/PrometheusIntellect-ai/prometheus/issues/268)).
+- Fixed freshly created chats being titled by their session ID until their file flushed; they are now titled by their first prompt immediately ([#264](https://github.com/PrometheusIntellect-ai/prometheus/issues/264)).
+- Fixed opening a session from the agents view failing when its original working directory no longer exists; it now opens in a fallback directory with a notice instead of breaking ([#287](https://github.com/PrometheusIntellect-ai/prometheus/issues/287)).
 
 ## [0.2.2] - 2026-06-25
 
-- Added a bundled `websearch` skill (Google search via the Serper API) that loads by default. Add a Serper key via `/login` ("Serper (web search)"); it is stored with your other credentials and supplied to the skill automatically. The skill can be disabled with `bundledSkills.websearch: false` and overridden by a same-named skill in any user, project, package, or `--skill` location ([#86](https://github.com/PrimeIntellect-ai/prometheus/issues/86)).
-- Added image input support for vision-capable Prime Inference models (Claude, GPT-5.x, Grok, Kimi K2.7 Code, Qwen3-VL), which previously dropped attached images as unsupported ([#261](https://github.com/PrimeIntellect-ai/prometheus/issues/261)).
-- Added a live subagent tree above the working loader showing each in-flight subagent with a prompt excerpt, tool-use and token counts, and its recap once generated; finished subagents drop out of the tree ([#254](https://github.com/PrimeIntellect-ai/prometheus/issues/254)).
-- Changed the prompt bar to show the active model and thinking level on the left and always show context token count and percentage used on the right, instead of only surfacing context usage past the halfway point ([#252](https://github.com/PrimeIntellect-ai/prometheus/issues/252)).
-- Changed the `/model` picker to rank results by most-recently-used, so models you actually pick float to the top and break ties among equally-good fuzzy matches ([#251](https://github.com/PrimeIntellect-ai/prometheus/issues/251)).
-- Changed the collapsed bash and IPython tool previews to pick the most informative line via a shared heuristic, skipping low-signal setup lines and redacting long blobs and secret-looking values ([#248](https://github.com/PrimeIntellect-ai/prometheus/issues/248)).
-- Changed subagents to render as an inline, scrollable list below the prompt with arrow-key navigation and prompts that elide shared prefixes, replacing the full-screen subagent viewer; running subagents and in-progress markers now animate so the agent never looks crashed ([#247](https://github.com/PrimeIntellect-ai/prometheus/issues/247)).
-- Fixed context overflow appearing at ~50% remaining for Prime Inference Claude models by correcting their context window to 200k and counting prompt tokens only (excluding output) for the context indicator and compaction trigger ([#246](https://github.com/PrimeIntellect-ai/prometheus/issues/246)).
+- Added a bundled `websearch` skill (Google search via the Serper API) that loads by default. Add a Serper key via `/login` ("Serper (web search)"); it is stored with your other credentials and supplied to the skill automatically. The skill can be disabled with `bundledSkills.websearch: false` and overridden by a same-named skill in any user, project, package, or `--skill` location ([#86](https://github.com/PrometheusIntellect-ai/prometheus/issues/86)).
+- Added image input support for vision-capable Prometheus Inference models (Claude, GPT-5.x, Grok, Kimi K2.7 Code, Qwen3-VL), which previously dropped attached images as unsupported ([#261](https://github.com/PrometheusIntellect-ai/prometheus/issues/261)).
+- Added a live subagent tree above the working loader showing each in-flight subagent with a prompt excerpt, tool-use and token counts, and its recap once generated; finished subagents drop out of the tree ([#254](https://github.com/PrometheusIntellect-ai/prometheus/issues/254)).
+- Changed the prompt bar to show the active model and thinking level on the left and always show context token count and percentage used on the right, instead of only surfacing context usage past the halfway point ([#252](https://github.com/PrometheusIntellect-ai/prometheus/issues/252)).
+- Changed the `/model` picker to rank results by most-recently-used, so models you actually pick float to the top and break ties among equally-good fuzzy matches ([#251](https://github.com/PrometheusIntellect-ai/prometheus/issues/251)).
+- Changed the collapsed bash and IPython tool previews to pick the most informative line via a shared heuristic, skipping low-signal setup lines and redacting long blobs and secret-looking values ([#248](https://github.com/PrometheusIntellect-ai/prometheus/issues/248)).
+- Changed subagents to render as an inline, scrollable list below the prompt with arrow-key navigation and prompts that elide shared prefixes, replacing the full-screen subagent viewer; running subagents and in-progress markers now animate so the agent never looks crashed ([#247](https://github.com/PrometheusIntellect-ai/prometheus/issues/247)).
+- Fixed context overflow appearing at ~50% remaining for Prometheus Inference Claude models by correcting their context window to 200k and counting prompt tokens only (excluding output) for the context indicator and compaction trigger ([#246](https://github.com/PrometheusIntellect-ai/prometheus/issues/246)).
 
 ## [0.2.1] - 2026-06-23
 
 ### Fixed
 
-- Fixed daemon session recaps disappearing while a new turn regenerated them ([#239](https://github.com/PrimeIntellect-ai/prometheus/issues/239)).
-- Fixed bundled built-in skills missing from the packaged release layouts ([#240](https://github.com/PrimeIntellect-ai/prometheus/issues/240)).
+- Fixed daemon session recaps disappearing while a new turn regenerated them ([#239](https://github.com/PrometheusIntellect-ai/prometheus/issues/239)).
+- Fixed bundled built-in skills missing from the packaged release layouts ([#240](https://github.com/PrometheusIntellect-ai/prometheus/issues/240)).
 
 ## [0.2.0] - 2026-06-23
 
@@ -447,7 +456,7 @@
 
 ### Added
 
-- Added the Prime brand splash to the new-chat view.
+- Added the Prometheus brand splash to the new-chat view.
 
 ### Changed
 
@@ -468,7 +477,7 @@
 
 - Changed `prometheus` to open a new chat by default at launch instead of the previous session, with the daemon session created lazily on the first message and empty chats discarded on quit.
 - Changed sending a message from the Agents View to open the chat for that session.
-- Changed model resolution to persist the selected model across updates and default Prime Inference to Claude Opus 4.8 when no model has been chosen.
+- Changed model resolution to persist the selected model across updates and default Prometheus Inference to Claude Opus 4.8 when no model has been chosen.
 
 ### Fixed
 
@@ -489,7 +498,7 @@
 ### Added
 
 - Added a `daemon ps` CLI command that lists every Prometheus daemon running on the machine, with confirmation before shutdown and guards against killing a shared or still-reachable daemon.
-- Added opt-in trace uploads: `/traces` enables background upload of persisted session JSONL files to the Prime Inference trace endpoint.
+- Added opt-in trace uploads: `/traces` enables background upload of persisted session JSONL files to the Prometheus Inference trace endpoint.
 - Added agent summaries and live status to Agents View, generated daemon-side per session and refreshed on sweep.
 - Added crash-stack capture for the daemon: output routes to a rotating per-socket log file under `<agentDir>/logs/`, client-side crashes write to `client-errors.log`, and a `/logs` command shows the log directory.
 
@@ -554,15 +563,15 @@
 
 ### Fixed
 
-- Fixed the model selector showing no models after logging in with Prime Inference during onboarding by reloading auth storage from disk when the model registry refreshes ([#151](https://github.com/PrimeIntellect-ai/prometheus/issues/151)).
+- Fixed the model selector showing no models after logging in with Prometheus Inference during onboarding by reloading auth storage from disk when the model registry refreshes ([#151](https://github.com/PrometheusIntellect-ai/prometheus/issues/151)).
 
 ## [0.1.1] - 2026-06-11
 
 ### Fixed
 
-- Fixed first launch to run onboarding before opening the Agents View ([#147](https://github.com/PrimeIntellect-ai/prometheus/issues/147)).
-- Fixed multiline status errors in Agents View to render as a single flattened line so they cannot overlap the input ([#146](https://github.com/PrimeIntellect-ai/prometheus/issues/146)).
-- Fixed slash commands in the main Agents View ([#149](https://github.com/PrimeIntellect-ai/prometheus/issues/149)).
+- Fixed first launch to run onboarding before opening the Agents View ([#147](https://github.com/PrometheusIntellect-ai/prometheus/issues/147)).
+- Fixed multiline status errors in Agents View to render as a single flattened line so they cannot overlap the input ([#146](https://github.com/PrometheusIntellect-ai/prometheus/issues/146)).
+- Fixed slash commands in the main Agents View ([#149](https://github.com/PrometheusIntellect-ai/prometheus/issues/149)).
 
 ## [0.1.0] - 2026-06-11
 
@@ -628,7 +637,7 @@
 
 - Changed the IPython system prompt to the upstream rlm-harness `IPYTHON_CONTROL_PROMPT`: IPython is framed as a persistent control environment rather than the target project's runtime, shell commands use `%%bash` cells instead of `!cmd`, and project imports, tests, and dependency checks run through the project's own environment. Removed the `.venv` interpreter hint.
 - Changed interactive `Ctrl+C` to interrupt the current operation first and exit only on a second press while the exit hint is visible; `Escape` now clears the input bar without interrupting the agent.
-- Changed the Prime theme to tone down the flashy neon purple and lime green in favor of a calmer dusty lavender and sage green.
+- Changed the Prometheus theme to tone down the flashy neon purple and lime green in favor of a calmer dusty lavender and sage green.
 
 ### Fixed
 
@@ -645,7 +654,7 @@
 
 ### Added
 
-- Added an `onboardingCompleted` setting and a dedicated Prime Inference onboarding splash that prompts users authenticated only via the Prime CLI to choose a model before their first turn.
+- Added an `onboardingCompleted` setting and a dedicated Prometheus Inference onboarding splash that prompts users authenticated only via the Prometheus CLI to choose a model before their first turn.
 
 ### Changed
 
@@ -660,36 +669,36 @@
 
 ### Added
 
-- Added Prime team selection during Prime Inference login so team inference costs use the selected Prime CLI context.
+- Added Prometheus team selection during Prometheus Inference login so team inference costs use the selected Prometheus CLI context.
 - Added Python-backed skills that install into the persistent IPython kernel and are exposed alongside markdown skills.
 
 ### Changed
 
-- Changed the Prometheus install script to use a bounded animated Prime Lab splash with centered progress and confirmation prompts.
+- Changed the Prometheus install script to use a bounded animated Prometheus Lab splash with centered progress and confirmation prompts.
 - Changed startup onboarding to guide unauthenticated users through login and model selection before the first agent turn.
 - Changed installer npm and Node.js setup progress to keep command output hidden behind the splash and rotate detail text.
 
 ### Fixed
 
 - Fixed update notifications and package docs to point at `prometheus update` and use compact one-line alerts.
-- Fixed Prime CLI credentials from `prime login` to make Prime Inference models available on startup.
+- Fixed Prometheus CLI credentials from `prime login` to make Prometheus Inference models available on startup.
 - Fixed first-run search helper downloads to run quietly instead of printing over onboarding.
 - Fixed stale no-model and tmux/update startup notices from appearing during successful onboarding.
 
 ### Removed
 
-- Removed the unused small Prime logo export.
+- Removed the unused small Prometheus logo export.
 
 ## [0.0.6] - 2026-05-27
 
 ### Changed
 
-- Changed installer startup so npm and Node.js setup output stays hidden behind the bounded Prime splash with rotating detail text.
+- Changed installer startup so npm and Node.js setup output stays hidden behind the bounded Prometheus splash with rotating detail text.
 - Changed `postinstall` to optionally bootstrap the `fd` and `rg` search helpers (gated by an env flag) alongside the kernel, and made search-helper downloads default to silent.
 
 ### Fixed
 
-- Fixed Prime Inference auth so credentials from `prime login` are read from the Prime CLI config and surfaced as a `prime_cli` auth source, making Prime Inference models available on startup without a separate login.
+- Fixed Prometheus Inference auth so credentials from `prime login` are read from the Prometheus CLI config and surfaced as a `prime_cli` auth source, making Prometheus Inference models available on startup without a separate login.
 - Fixed initial model selection to skip a saved default model that no longer has configured auth.
 - Fixed first-run search-helper downloads to run quietly instead of printing over onboarding.
 
@@ -697,7 +706,7 @@
 
 ### Added
 
-- Added a centered-overlay menu system for onboarding and a redesigned Prime onboarding splash and Prime Inference login dialog with browser sign-in plus a manual API-key fallback.
+- Added a centered-overlay menu system for onboarding and a redesigned Prometheus onboarding splash and Prometheus Inference login dialog with browser sign-in plus a manual API-key fallback.
 - Added theme support for adapting interactive surfaces to the detected terminal foreground/background colors.
 
 ### Changed
@@ -727,8 +736,8 @@
 - Added subagent UI surfaces for recursive runs, including compact tray status, full-width detail views, and structured child transcripts rendered like the main chat.
 - Added `/goal` for long-running objectives that continue after normal follow-ups drain until the model marks the goal complete.
 - Added a pi-style installer script and R2-backed private npm tarball release pipeline for Prometheus.
-- Added Prime Inference as a selectable built-in OpenAI-compatible provider with `PRIME_API_KEY` authentication and `openai/gpt-5.5` as the default model.
-- Added a first-class `/login` Prime Inference browser auth flow that imports usable Prime CLI credentials or obtains a new key through the Prime challenge flow.
+- Added Prometheus Inference as a selectable built-in OpenAI-compatible provider with `PRIME_API_KEY` authentication and `openai/gpt-5.5` as the default model.
+- Added a first-class `/login` Prometheus Inference browser auth flow that imports usable Prometheus CLI credentials or obtains a new key through the Prometheus challenge flow.
 - Added `/usage` to show token, cost, and context usage on demand.
 
 ### Changed
@@ -765,4 +774,4 @@
 
 ### Added
 
-- Initial Prometheus release, forked from pi-mono: a persistent `ipython` tool backed by a Jupyter kernel as the default tool set, recursive RLM subagents via `rlm.run`, `/goal` for long-running objectives, an auto-bootstrapped uv-managed kernel runtime, Prime-branded TUI, and an R2-backed tarball release pipeline with a pi-style installer.
+- Initial Prometheus release, forked from pi-mono: a persistent `ipython` tool backed by a Jupyter kernel as the default tool set, recursive RLM subagents via `rlm.run`, `/goal` for long-running objectives, an auto-bootstrapped uv-managed kernel runtime, Prometheus-branded TUI, and an R2-backed tarball release pipeline with a pi-style installer.

@@ -82,6 +82,7 @@ This is a test skill.
 			baseDir: "/fake/path",
 			sourceInfo: createSyntheticSourceInfo("/fake/path/SKILL.md", { source: "sdk" }),
 			disableModelInvocation: false,
+			eager: true,
 			kind: "markdown" as const,
 		};
 

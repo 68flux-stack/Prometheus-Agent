@@ -1,3 +1,4 @@
+export { type AskUserToolInput, createAskUserTool, createAskUserToolDefinition } from "./ask-user.js";
 export {
 	type BashOperations,
 	type BashSpawnContext,
@@ -39,12 +40,13 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
+import { createAskUserTool, createAskUserToolDefinition } from "./ask-user.js";
 import { createIpythonTool, createIpythonToolDefinition, type IpythonToolOptions } from "./ipython.js";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "ipython";
-export const allToolNames: Set<ToolName> = new Set(["ipython"]);
+export type ToolName = "ipython" | "ask_user";
+export const allToolNames: Set<ToolName> = new Set(["ipython", "ask_user"]);
 
 export interface ToolsOptions {
 	ipython?: IpythonToolOptions;
@@ -54,6 +56,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 	switch (toolName) {
 		case "ipython":
 			return createIpythonToolDefinition(cwd, options?.ipython);
+		case "ask_user":
+			return createAskUserToolDefinition();
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -63,6 +67,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 	switch (toolName) {
 		case "ipython":
 			return createIpythonTool(cwd, options?.ipython);
+		case "ask_user":
+			return createAskUserTool();
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -71,11 +77,13 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
 		ipython: createIpythonToolDefinition(cwd, options?.ipython),
+		ask_user: createAskUserToolDefinition(),
 	};
 }
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
 	return {
 		ipython: createIpythonTool(cwd, options?.ipython),
+		ask_user: createAskUserTool(),
 	};
 }

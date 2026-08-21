@@ -310,7 +310,7 @@ export class DaemonAgentConnection implements AgentConnection {
 			capabilities: [
 				"attach_snapshot",
 				"event_sequence",
-				...(supportsExtensionUi ? (["extension_ui"] as const) : []),
+				...(supportsExtensionUi ? (["extension_ui", "question_ui"] as const) : []),
 				"slim_attach",
 				"chunked_snapshot",
 				...(this.options.ownedSession ? (["client_owned_sessions"] as const) : []),
@@ -1138,8 +1138,14 @@ export class DaemonAgentConnection implements AgentConnection {
 		await this.requestOk({ type: "set_follow_up_mode", activeSessionId: this.activeSessionId, mode });
 	}
 
-	async setAutoCompactionEnabled(enabled: boolean): Promise<void> {
-		await this.requestOk({ type: "set_auto_compaction", activeSessionId: this.activeSessionId, enabled });
+	async setAutoCompactionEnabled(enabled: boolean, thresholdPercent?: number): Promise<void> {
+		const supportsThreshold = this.client.supportsServerCapability("compaction_threshold");
+		await this.requestOk({
+			type: "set_auto_compaction",
+			activeSessionId: this.activeSessionId,
+			enabled,
+			...(thresholdPercent !== undefined && supportsThreshold ? { thresholdPercent } : {}),
+		});
 	}
 
 	async setAutoRetryEnabled(enabled: boolean): Promise<void> {
@@ -1297,7 +1303,7 @@ export class DaemonAgentConnection implements AgentConnection {
 				capabilities: [
 					"attach_snapshot",
 					"event_sequence",
-					...(supportsExtensionUi ? (["extension_ui"] as const) : []),
+					...(supportsExtensionUi ? (["extension_ui", "question_ui"] as const) : []),
 					"slim_attach",
 					"chunked_snapshot",
 					...(this.options.ownedSession ? (["client_owned_sessions"] as const) : []),

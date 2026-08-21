@@ -42,7 +42,7 @@ function isPrintableInput(data: string): boolean {
 	return data.length === 1 && data >= " " && data !== "\x7f";
 }
 
-class PrimeLoginHeader implements Component {
+class PrometheusLoginHeader implements Component {
 	invalidate(): void {
 		// Header render is derived from the current theme.
 	}
@@ -57,9 +57,9 @@ class PrimeLoginHeader implements Component {
 		return [
 			...logoLines,
 			centeredLine("", safeWidth),
-			centeredLine(theme.bold(theme.fg("text", "Login to Prime Inference")), safeWidth),
+			centeredLine(theme.bold(theme.fg("text", "Login to Prometheus Inference")), safeWidth),
 			centeredLine(
-				theme.fg("muted", "Connect your Prime Intellect account to enable Prime Inference models."),
+				theme.fg("muted", "Connect your Prometheus Intellect account to enable Prometheus Inference models."),
 				safeWidth,
 			),
 		];
@@ -73,7 +73,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	private contentContainer: Container;
 	private input: MenuSearchInput;
 	private tui: TUI;
-	private readonly isPrimeInference: boolean;
+	private readonly isPrometheusInference: boolean;
 	private abortController = new AbortController();
 	private inputResolver?: (value: string) => void;
 	private inputRejecter?: (error: Error) => void;
@@ -108,12 +108,12 @@ export class LoginDialogComponent extends Container implements Focusable {
 
 		const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
 		const providerName = providerNameOverride || providerInfo?.name || providerId;
-		this.isPrimeInference = providerId === PRIME_INFERENCE_PROVIDER_ID;
+		this.isPrometheusInference = providerId === PRIME_INFERENCE_PROVIDER_ID;
 		const title = titleOverride ?? `Login to ${providerName}`;
 
 		const panel = new MenuPanel({
-			title: this.isPrimeInference ? "" : title,
-			subtitle: this.isPrimeInference ? undefined : "Complete this step to continue setup.",
+			title: this.isPrometheusInference ? "" : title,
+			subtitle: this.isPrometheusInference ? undefined : "Complete this step to continue setup.",
 		});
 		this.addChild(panel);
 
@@ -304,8 +304,8 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.authActions = undefined;
 		// The cleared panel no longer shows the paste field.
 		this.inputVisible = false;
-		if (this.isPrimeInference) {
-			this.contentContainer.addChild(new PrimeLoginHeader());
+		if (this.isPrometheusInference) {
+			this.contentContainer.addChild(new PrometheusLoginHeader());
 			this.contentContainer.addChild(new Spacer(1));
 			return;
 		}

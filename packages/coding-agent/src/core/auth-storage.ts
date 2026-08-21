@@ -20,18 +20,18 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
 import {
-	clearPrimeCliCredentials,
-	getPrimeCliConfigPath,
-	loadPrimeCliConfig,
+	clearPrometheusCliCredentials,
+	getPrometheusCliConfigPath,
+	loadPrometheusCliConfig,
 	PRIME_INFERENCE_PROVIDER_ID,
-	type PrimeCliConfig,
-	type PrimeTeam,
-	savePrimeCliApiKey,
-	savePrimeCliTeamSelection,
+	type PrometheusCliConfig,
+	type PrometheusTeam,
+	savePrometheusCliApiKey,
+	savePrometheusCliTeamSelection,
 } from "./prime-inference-auth.js";
 import { resolveConfigValue, resolveConfigValueUncached } from "./resolve-config-value.js";
 
-export type PrimeTeamCredential = {
+export type PrometheusTeamCredential = {
 	teamId: string;
 	name: string;
 	slug?: string;
@@ -42,7 +42,7 @@ export type PrimeTeamCredential = {
 export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
-	primeTeam?: PrimeTeamCredential | null;
+	primeTeam?: PrometheusTeamCredential | null;
 };
 
 export type OAuthCredential = {
@@ -69,7 +69,7 @@ export type AuthStatus = {
 
 export type AuthStorageOptions = {
 	primeCliConfigPath?: string;
-	usePrimeCliConfig?: boolean;
+	usePrometheusCliConfig?: boolean;
 };
 
 type LockResult<T> = {
@@ -260,7 +260,7 @@ export class AuthStorage {
 	}
 
 	static create(authPath?: string, options?: AuthStorageOptions): AuthStorage {
-		const authOptions = options ?? { usePrimeCliConfig: authPath === undefined };
+		const authOptions = options ?? { usePrometheusCliConfig: authPath === undefined };
 		return new AuthStorage(new FileAuthStorageBackend(authPath ?? join(getAgentDir(), "auth.json")), authOptions);
 	}
 
@@ -375,13 +375,13 @@ export class AuthStorage {
 		};
 	}
 
-	private getPrimeCliAuthCandidate(provider: string): AuthSourceCandidate | undefined {
-		const apiKey = this.getPrimeCliApiKey(provider);
+	private getPrometheusCliAuthCandidate(provider: string): AuthSourceCandidate | undefined {
+		const apiKey = this.getPrometheusCliApiKey(provider);
 		if (!apiKey) {
 			return undefined;
 		}
 		return {
-			label: "Prime CLI",
+			label: "Prometheus CLI",
 			...this.createAuthSourceCandidate({
 				configured: false,
 				source: "prime_cli",
@@ -488,7 +488,7 @@ export class AuthStorage {
 				? [
 						this.getRuntimeAuthCandidate(provider),
 						this.getEnvironmentAuthCandidate(provider),
-						this.getPrimeCliAuthCandidate(provider),
+						this.getPrometheusCliAuthCandidate(provider),
 						this.getStoredAuthCandidate(provider),
 						fallbackCandidate,
 					]
@@ -745,9 +745,9 @@ export class AuthStorage {
 	 * Logout from a provider.
 	 */
 	logout(provider: string): void {
-		if (provider === PRIME_INFERENCE_PROVIDER_ID && this.isPrimeCliConfigEnabled()) {
+		if (provider === PRIME_INFERENCE_PROVIDER_ID && this.isPrometheusCliConfigEnabled()) {
 			try {
-				clearPrimeCliCredentials(this.getEnabledPrimeCliConfigPath());
+				clearPrometheusCliCredentials(this.getEnabledPrometheusCliConfigPath());
 				this.clearStaleAuthSource(provider, "prime_cli");
 			} catch (error) {
 				this.recordError(error);
@@ -811,7 +811,7 @@ export class AuthStorage {
 	 * Get API key for a provider.
 	 * Priority:
 	 * 1. Runtime override (CLI --api-key)
-	 * 2. Prime Inference: environment variable, Prime CLI config, auth.json
+	 * 2. Prometheus Inference: environment variable, Prometheus CLI config, auth.json
 	 * 3. Other providers: auth.json, environment variable
 	 * 4. Fallback resolver (models.json custom providers)
 	 */
@@ -844,8 +844,8 @@ export class AuthStorage {
 		}
 
 		if (providerId === PRIME_INFERENCE_PROVIDER_ID) {
-			const primeCliCandidate = this.getPrimeCliAuthCandidate(providerId);
-			const primeCliKey = this.getPrimeCliApiKey(providerId);
+			const primeCliCandidate = this.getPrometheusCliAuthCandidate(providerId);
+			const primeCliKey = this.getPrometheusCliApiKey(providerId);
 			if (primeCliKey && primeCliCandidate && !this.isAuthSourceStale(providerId, primeCliCandidate)) {
 				return {
 					apiKey: primeCliKey,
@@ -973,10 +973,10 @@ export class AuthStorage {
 		return getOAuthProviders();
 	}
 
-	setPrimeInferenceTeamSelection(team: PrimeTeam | null): void {
-		if (this.isPrimeCliConfigEnabled()) {
+	setPrometheusInferenceTeamSelection(team: PrometheusTeam | null): void {
+		if (this.isPrometheusCliConfigEnabled()) {
 			try {
-				savePrimeCliTeamSelection(team, this.getEnabledPrimeCliConfigPath());
+				savePrometheusCliTeamSelection(team, this.getEnabledPrometheusCliConfigPath());
 			} catch (error) {
 				this.recordError(error);
 				throw error;
@@ -990,21 +990,25 @@ export class AuthStorage {
 		}
 		this.set(PRIME_INFERENCE_PROVIDER_ID, {
 			...credential,
-			primeTeam: team ? this.toPrimeTeamCredential(team) : null,
+			primeTeam: team ? this.toPrometheusTeamCredential(team) : null,
 		});
 	}
 
-	setPrimeInferenceApiKey(apiKey: string): void {
-		if (this.isPrimeCliConfigEnabled()) {
+	setPrometheusInferenceApiKey(apiKey: string): void {
+		if (this.isPrometheusCliConfigEnabled()) {
 			try {
-				const configPath = this.getEnabledPrimeCliConfigPath();
-				const config = loadPrimeCliConfig(configPath);
+				const configPath = this.getEnabledPrometheusCliConfigPath();
+				const config = loadPrometheusCliConfig(configPath);
 				const existingCredential = this.data[PRIME_INFERENCE_PROVIDER_ID];
-				const legacyPrimeTeam = existingCredential?.type === "api_key" ? existingCredential.primeTeam : undefined;
+				const legacyPrometheusTeam =
+					existingCredential?.type === "api_key" ? existingCredential.primeTeam : undefined;
 				if (config.apiKey !== apiKey) {
-					savePrimeCliApiKey(apiKey, configPath);
-				} else if (!config.teamIdFromEnv && (legacyPrimeTeam === null || (!config.teamId && legacyPrimeTeam))) {
-					savePrimeCliTeamSelection(legacyPrimeTeam, configPath);
+					savePrometheusCliApiKey(apiKey, configPath);
+				} else if (
+					!config.teamIdFromEnv &&
+					(legacyPrometheusTeam === null || (!config.teamId && legacyPrometheusTeam))
+				) {
+					savePrometheusCliTeamSelection(legacyPrometheusTeam, configPath);
 				}
 				this.clearStaleAuthSource(PRIME_INFERENCE_PROVIDER_ID, "prime_cli");
 			} catch (error) {
@@ -1018,18 +1022,18 @@ export class AuthStorage {
 		}
 
 		const existingCredential = this.data[PRIME_INFERENCE_PROVIDER_ID];
-		const existingPrimeTeam = existingCredential?.type === "api_key" ? existingCredential.primeTeam : undefined;
+		const existingPrometheusTeam = existingCredential?.type === "api_key" ? existingCredential.primeTeam : undefined;
 		this.set(PRIME_INFERENCE_PROVIDER_ID, {
 			type: "api_key",
 			key: apiKey,
-			...(existingPrimeTeam !== undefined ? { primeTeam: existingPrimeTeam } : {}),
+			...(existingPrometheusTeam !== undefined ? { primeTeam: existingPrometheusTeam } : {}),
 		});
 	}
 
-	getPrimeInferenceTeamSelection(): PrimeTeamCredential | null | undefined {
-		let config: PrimeCliConfig | undefined;
-		if (this.isPrimeCliConfigEnabled()) {
-			config = this.getPrimeCliConfig(PRIME_INFERENCE_PROVIDER_ID);
+	getPrometheusInferenceTeamSelection(): PrometheusTeamCredential | null | undefined {
+		let config: PrometheusCliConfig | undefined;
+		if (this.isPrometheusCliConfigEnabled()) {
+			config = this.getPrometheusCliConfig(PRIME_INFERENCE_PROVIDER_ID);
 			if (config?.teamIdFromEnv) {
 				return undefined;
 			}
@@ -1045,9 +1049,9 @@ export class AuthStorage {
 				return null;
 			}
 			if (config?.teamId) {
-				return this.toPrimeTeamCredential({
+				return this.toPrometheusTeamCredential({
 					teamId: config.teamId,
-					name: config.teamName ?? "Prime CLI team",
+					name: config.teamName ?? "Prometheus CLI team",
 					...(config.teamRole ? { role: config.teamRole } : {}),
 				});
 			}
@@ -1060,9 +1064,9 @@ export class AuthStorage {
 			return credential.primeTeam;
 		}
 		if (!config?.apiKey && config?.teamId) {
-			return this.toPrimeTeamCredential({
+			return this.toPrometheusTeamCredential({
 				teamId: config.teamId,
-				name: config.teamName ?? "Prime CLI team",
+				name: config.teamName ?? "Prometheus CLI team",
 				...(config.teamRole ? { role: config.teamRole } : {}),
 			});
 		}
@@ -1074,24 +1078,24 @@ export class AuthStorage {
 			return undefined;
 		}
 
-		const primeCliConfig = this.getPrimeCliConfig(providerId);
+		const primeCliConfig = this.getPrometheusCliConfig(providerId);
 		if (primeCliConfig?.teamIdFromEnv) {
-			return primeCliConfig.teamId ? { "X-Prime-Team-ID": primeCliConfig.teamId } : undefined;
+			return primeCliConfig.teamId ? { "X-Prometheus-Team-ID": primeCliConfig.teamId } : undefined;
 		}
 
-		const teamId = this.getPrimeInferenceTeamSelection()?.teamId;
-		return teamId ? { "X-Prime-Team-ID": teamId } : undefined;
+		const teamId = this.getPrometheusInferenceTeamSelection()?.teamId;
+		return teamId ? { "X-Prometheus-Team-ID": teamId } : undefined;
 	}
 
-	getPrimeCliConfigPath(): string | undefined {
-		if (!this.isPrimeCliConfigEnabled()) {
+	getPrometheusCliConfigPath(): string | undefined {
+		if (!this.isPrometheusCliConfigEnabled()) {
 			return undefined;
 		}
-		return getPrimeCliConfigPath(this.options.primeCliConfigPath);
+		return getPrometheusCliConfigPath(this.options.primeCliConfigPath);
 	}
 
-	private toPrimeTeamCredential(team: PrimeTeam): PrimeTeamCredential {
-		const credential: PrimeTeamCredential = {
+	private toPrometheusTeamCredential(team: PrometheusTeam): PrometheusTeamCredential {
+		const credential: PrometheusTeamCredential = {
 			teamId: team.teamId,
 			name: team.name,
 		};
@@ -1107,29 +1111,29 @@ export class AuthStorage {
 		return credential;
 	}
 
-	private getPrimeCliConfig(providerId: string): PrimeCliConfig | undefined {
+	private getPrometheusCliConfig(providerId: string): PrometheusCliConfig | undefined {
 		if (providerId !== PRIME_INFERENCE_PROVIDER_ID) {
 			return undefined;
 		}
-		if (!this.isPrimeCliConfigEnabled()) {
+		if (!this.isPrometheusCliConfigEnabled()) {
 			return undefined;
 		}
-		return loadPrimeCliConfig(this.options.primeCliConfigPath);
+		return loadPrometheusCliConfig(this.options.primeCliConfigPath);
 	}
 
-	private getPrimeCliApiKey(providerId: string): string | undefined {
-		return this.getPrimeCliConfig(providerId)?.apiKey;
+	private getPrometheusCliApiKey(providerId: string): string | undefined {
+		return this.getPrometheusCliConfig(providerId)?.apiKey;
 	}
 
-	private getEnabledPrimeCliConfigPath(): string {
-		const configPath = this.getPrimeCliConfigPath();
+	private getEnabledPrometheusCliConfigPath(): string {
+		const configPath = this.getPrometheusCliConfigPath();
 		if (!configPath) {
-			throw new Error("Prime CLI config is not enabled");
+			throw new Error("Prometheus CLI config is not enabled");
 		}
 		return configPath;
 	}
 
-	private isPrimeCliConfigEnabled(): boolean {
-		return Boolean(this.options.usePrimeCliConfig || this.options.primeCliConfigPath);
+	private isPrometheusCliConfigEnabled(): boolean {
+		return Boolean(this.options.usePrometheusCliConfig || this.options.primeCliConfigPath);
 	}
 }

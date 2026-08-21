@@ -27,7 +27,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 			"prime-inference": {
 				type: "api_key",
 				key: "prime-key",
-				primeTeam: { teamId: "engineering-team", name: "Prime Engineering" },
+				primeTeam: { teamId: "engineering-team", name: "Prometheus Engineering" },
 			},
 		});
 		const registry = ModelRegistry.inMemory(authStorage);
@@ -53,7 +53,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 		expect(fetchMock).toHaveBeenCalledWith("https://api.pinference.ai/api/v1/models", {
 			headers: {
 				Authorization: "Bearer prime-key",
-				"X-Prime-Team-ID": "engineering-team",
+				"X-Prometheus-Team-ID": "engineering-team",
 			},
 			signal: expect.any(AbortSignal),
 		});
@@ -94,7 +94,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 			"prime-inference": {
 				type: "api_key",
 				key: "prime-key",
-				primeTeam: { teamId: "engineering-team", name: "Prime Engineering" },
+				primeTeam: { teamId: "engineering-team", name: "Prometheus Engineering" },
 			},
 		});
 		const registry = ModelRegistry.inMemory(authStorage);
@@ -163,7 +163,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 			"prime-inference": {
 				type: "api_key",
 				key: "prime-key",
-				primeTeam: { teamId: "engineering-team", name: "Prime Engineering" },
+				primeTeam: { teamId: "engineering-team", name: "Prometheus Engineering" },
 			},
 		});
 		const registry = ModelRegistry.inMemory(authStorage);
@@ -220,7 +220,9 @@ describe("ENG-4645 internal GLM configuration", () => {
 			throw new Error("Expected current and private models");
 		}
 
-		await expect(harness.session.setModel(privateModel)).rejects.toThrow("not available for the current Prime team");
+		await expect(harness.session.setModel(privateModel)).rejects.toThrow(
+			"not available for the current Prometheus team",
+		);
 		harness.session.setScopedModels([{ model: currentModel }, { model: privateModel }]);
 
 		expect(await harness.session.cycleModel()).toBeUndefined();
@@ -259,7 +261,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 			"prime-inference": {
 				type: "api_key",
 				key: "prime-key",
-				primeTeam: { teamId: "engineering-team", name: "Prime Engineering" },
+				primeTeam: { teamId: "engineering-team", name: "Prometheus Engineering" },
 			},
 		});
 		const registry = ModelRegistry.create(authStorage, modelsJsonPath);
@@ -287,7 +289,7 @@ describe("ENG-4645 internal GLM configuration", () => {
 		expect(await registry.getApiKeyAndHeaders(model!)).toEqual({
 			ok: true,
 			apiKey: "prime-key",
-			headers: { "X-Prime-Team-ID": "engineering-team" },
+			headers: { "X-Prometheus-Team-ID": "engineering-team" },
 		});
 	});
 });

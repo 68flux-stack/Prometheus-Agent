@@ -134,6 +134,7 @@ import {
 	AmbiguousActiveSessionError,
 	createActiveSessionId,
 	type DaemonSocketClient,
+	daemonClientSupportsCapability,
 	resolveActiveSessionState,
 } from "./active-session-state.js";
 import { createCompactAssistantDelta } from "./compact-session-stream.js";
@@ -4466,7 +4467,7 @@ export class AgentDaemon {
 
 			case "set_auto_compaction": {
 				const state = this.getSessionState(command.activeSessionId);
-				state.runtime.session.setAutoCompactionEnabled(command.enabled);
+				state.runtime.session.setAutoCompactionEnabled(command.enabled, command.thresholdPercent);
 				return success(command.id, "set_auto_compaction");
 			}
 
@@ -6964,11 +6965,13 @@ function isSequencedSessionOutbound(message: DaemonOutbound): message is Sequenc
 }
 
 export function shouldSendDaemonOutboundToClient(client: DaemonSocketClient, message: DaemonOutbound): boolean {
-	return (
-		message.type !== "extension_ui_request" ||
-		!isDaemonDialogExtensionUiRequest(message.method) ||
-		daemonClientSupportsExtensionUi(client, message.activeSessionId)
-	);
+	if (message.type !== "extension_ui_request" || !isDaemonDialogExtensionUiRequest(message.method)) {
+		return true;
+	}
+	if (message.method === "question") {
+		return daemonClientSupportsCapability(client, message.activeSessionId, "question_ui");
+	}
+	return daemonClientSupportsExtensionUi(client, message.activeSessionId);
 }
 
 export async function resolveDaemonSessionPath(selector: string, cwd: string, sessionDir?: string): Promise<string> {

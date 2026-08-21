@@ -28,7 +28,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/PrimeIntellect-ai/prometheus.git",
+		"url": "git+https://github.com/PrometheusIntellect-ai/prometheus.git",
 		"directory": "packages/tui"
 	},
 	"engines": {

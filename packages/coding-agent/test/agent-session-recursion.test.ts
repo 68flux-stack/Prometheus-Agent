@@ -295,6 +295,7 @@ describe("AgentSession rlm recursion", () => {
 								baseDir: tempDir,
 								sourceInfo: createSyntheticSourceInfo(join(tempDir, "SKILL.md"), { source: "test" }),
 								disableModelInvocation: false,
+								eager: true,
 								kind: "python",
 								python: {
 									importName: "agent_message",
@@ -3228,6 +3229,7 @@ describe("AgentSession RLM session dir", () => {
 						baseDir: "/x/websearch",
 						sourceInfo: createSyntheticSourceInfo("/x/websearch/SKILL.md", { source: "package" }),
 						disableModelInvocation: false,
+						eager: true,
 					},
 				]
 			: [];

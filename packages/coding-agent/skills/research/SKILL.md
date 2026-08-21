@@ -1,6 +1,7 @@
 ---
 name: research
 description: Run a deep research investigation — decompose a question, fan out subagents to search and read sources, triangulate across independent domains, and produce a citation-verified report. Use for open questions that need many sources, comparisons across several systems, or any answer that must be defensible rather than plausible. Not for a single lookup.
+eager: false
 ---
 
 # Deep Research

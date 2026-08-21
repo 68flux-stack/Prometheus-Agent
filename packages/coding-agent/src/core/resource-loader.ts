@@ -61,12 +61,12 @@ function resolvePromptInput(input: string | undefined, description: string): str
 }
 
 /**
- * List available output style names: the built-in "default" plus one entry per
+ * List available output style names: the built-in "none" opt-out plus one entry per
  * *.md file bundled with the package (output-styles/) or in the user's custom
  * output styles directory (~/.prometheus/agent/output-styles/, which wins on a name clash).
  */
 export function getAvailableOutputStyles(): string[] {
-	const styles = new Set<string>(["default"]);
+	const styles = new Set<string>(["none"]);
 	for (const dir of [getBundledOutputStylesDir(), getCustomOutputStylesDir()]) {
 		if (!existsSync(dir)) continue;
 		for (const file of readdirSync(dir)) {
@@ -75,7 +75,7 @@ export function getAvailableOutputStyles(): string[] {
 			}
 		}
 	}
-	return Array.from(styles).sort((a, b) => (a === "default" ? -1 : b === "default" ? 1 : a.localeCompare(b)));
+	return Array.from(styles).sort((a, b) => (a === "none" ? -1 : b === "none" ? 1 : a.localeCompare(b)));
 }
 
 /**
@@ -990,10 +990,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return undefined;
 	}
 
-	/** Resolve the selected output style ("default" or unset = no extra append content). Custom (user) styles win over bundled ones with the same name. */
+	/** Resolve the selected output style ("ELI5" when unset; "none" disables extra append content). Custom (user) styles win over bundled ones with the same name. */
 	private discoverOutputStyleFile(): string | undefined {
 		const styleName = this.settingsManager.getOutputStyle();
-		if (!styleName || styleName === "default") {
+		if (!styleName || styleName === "none") {
 			return undefined;
 		}
 

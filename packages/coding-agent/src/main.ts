@@ -727,7 +727,7 @@ async function prepareRuntimeServices(options: {
 	const { config, sessionManager } = options;
 	const effectiveAgentDir = config.agentDir ?? options.agentDir;
 	const authStorage = AuthStorage.create(join(effectiveAgentDir, "auth.json"), {
-		usePrimeCliConfig: effectiveAgentDir === options.agentDir,
+		usePrometheusCliConfig: effectiveAgentDir === options.agentDir,
 	});
 	const services = await createAgentSessionServices({
 		cwd: options.cwd,

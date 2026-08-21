@@ -348,6 +348,17 @@ Content`,
 			expect(loader.getAppendSystemPrompt()).toContain("Additional instructions.");
 		});
 
+		it("should use ELI5 when no output style is configured", async () => {
+			const bundledOutputStylesDir = join(tempDir, "bundled-output-styles");
+			mkdirSync(bundledOutputStylesDir, { recursive: true });
+			writeFileSync(join(bundledOutputStylesDir, "ELI5.md"), "Explain everything like I'm 5.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, bundledOutputStylesDir });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toContain("Explain everything like I'm 5.");
+		});
+
 		it("should append the selected output style without replacing the default prompt", async () => {
 			const outputStylesDir = join(agentDir, "output-styles");
 			mkdirSync(outputStylesDir, { recursive: true });
@@ -380,7 +391,18 @@ Content`,
 			expect(loader.getAppendSystemPrompt()).toEqual(["Be extremely concise.", "Additional instructions."]);
 		});
 
-		it("should add no extra append content for an unset or unknown output style", async () => {
+		it("should add no extra append content for the none output style", async () => {
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setOutputStyle("none");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBeUndefined();
+			expect(loader.getAppendSystemPrompt()).toEqual([]);
+		});
+
+		it("should add no extra append content for an unknown output style", async () => {
 			const settingsManager = SettingsManager.create(cwd, agentDir);
 			settingsManager.setOutputStyle("does-not-exist");
 
@@ -718,6 +740,7 @@ Explicit override.`,
 				baseDir: "/fake",
 				sourceInfo: createSyntheticSourceInfo("/fake/path", { source: "custom" }),
 				disableModelInvocation: false,
+				eager: true,
 				kind: "markdown",
 			};
 			const loader = new DefaultResourceLoader({

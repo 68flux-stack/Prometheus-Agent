@@ -1,8 +1,8 @@
 # Environments, Evaluations & Training
 
-verifiers is Prime Intellect's Python library for LLM environments: packages that expose `load_environment` and bundle datasets, rollout logic, and reward rubrics. Environments power evaluations (local and hosted) and RL training (Hosted Training or self-managed prime-rl).
+verifiers is Prometheus Intellect's Python library for LLM environments: packages that expose `load_environment` and bundle datasets, rollout logic, and reward rubrics. Environments power evaluations (local and hosted) and RL training (Hosted Training or self-managed prime-rl).
 
-Live docs: `verifiers/overview.md`, `tutorials-environments/getting-started.md`, `hosted-training/getting-started.md`, `prime-rl/overview.md` under https://docs.primeintellect.ai/ (append `.md` for raw markdown). Source: https://github.com/PrimeIntellect-ai/verifiers and https://github.com/PrimeIntellect-ai/prime-rl
+Live docs: `verifiers/overview.md`, `tutorials-environments/getting-started.md`, `hosted-training/getting-started.md`, `prime-rl/overview.md` under https://docs.primeintellect.ai/ (append `.md` for raw markdown). Source: https://github.com/PrometheusIntellect-ai/verifiers and https://github.com/PrometheusIntellect-ai/prime-rl
 
 ## Discovering Environments (Hub)
 
@@ -47,7 +47,7 @@ prime eval run owner/env --hosted --follow                       # hosted, strea
 
 - Smoke-test first; scale only after a pass. Use `--shuffle` (seed defaults to 0; set `--shuffle-seed` for reproducible reports).
 - Hosted evals require the environment to be published (`prime env push`) and support TOML configs and temporary sandbox/tunnel permissions (`--allow-tunnel-access`).
-- Prime Inference models include estimated run cost in eval output automatically.
+- Prometheus Inference models include estimated run cost in eval output automatically.
 - Keep reusable model endpoints as aliases in `configs/endpoints.toml` (fields: `endpoint_id`, `model`, `url`, key) and reference them with `-m <endpoint_id>`.
 
 ## Training

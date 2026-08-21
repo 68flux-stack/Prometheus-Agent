@@ -88,7 +88,7 @@ function renderPage(options: { title: string; heading: string; message: string; 
 </head>
 <body>
   <main>
-    <div class="logo" aria-label="Prime Intellect">${PRIME_BUTTERFLY_SVG}</div>
+    <div class="logo" aria-label="Prometheus Intellect">${PRIME_BUTTERFLY_SVG}</div>
     <h1>${heading}</h1>
     <p>${message}</p>
     ${details ? `<div class="details">${details}</div>` : ""}
@@ -99,7 +99,7 @@ function renderPage(options: { title: string; heading: string; message: string; 
 
 export function oauthSuccessHtml(message: string): string {
 	return renderPage({
-		title: "Prime Intellect authentication successful",
+		title: "Prometheus Intellect authentication successful",
 		heading: "Authentication successful",
 		message,
 	});
@@ -107,7 +107,7 @@ export function oauthSuccessHtml(message: string): string {
 
 export function oauthErrorHtml(message: string, details?: string): string {
 	return renderPage({
-		title: "Prime Intellect authentication failed",
+		title: "Prometheus Intellect authentication failed",
 		heading: "Authentication failed",
 		message,
 		details,

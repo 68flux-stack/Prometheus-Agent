@@ -18,6 +18,7 @@ import type {
 	AgentHeartbeatUpdateAction,
 } from "../../core/cron-jobs.js";
 import type { ExecutionMode } from "../../core/execution-policy.js";
+import type { ExtensionUIQuestion } from "../../core/extensions/types.js";
 import type { GoalState } from "../../core/goals.js";
 import type { RefinementResult } from "../../core/refinement/index.js";
 import type { RlmMaxDepthStatus, SetRlmMaxDepthResult } from "../../core/rlm-max-depth.js";
@@ -74,7 +75,7 @@ export type RpcCommand =
 	// Compaction
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "refine"; instructions?: string; rollbackId?: string; global?: boolean }
-	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
+	| { id?: string; type: "set_auto_compaction"; enabled: boolean; thresholdPercent?: number }
 
 	// Retry
 	| { id?: string; type: "set_auto_retry"; enabled: boolean }
@@ -100,6 +101,7 @@ export type RpcCommand =
 	// Session files whose agent is working, including ones this client is not attached to.
 	| { id?: string; type: "list_busy_sessions" }
 	| { id?: string; type: "fork"; entryId: string; position?: "before" | "at" }
+	| { id?: string; type: "navigate_tree"; targetId: string }
 	| { id?: string; type: "clone" }
 	| { id?: string; type: "get_fork_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
@@ -345,6 +347,13 @@ export type RpcResponse =
 			data: { sessionFiles: string[] };
 	  }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text?: string; cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "navigate_tree";
+			success: true;
+			data: { editorText?: string; cancelled: boolean; aborted?: boolean };
+	  }
 	| { id?: string; type: "response"; command: "clone"; success: true; data: { cancelled: boolean } }
 	| {
 			id?: string;
@@ -463,6 +472,13 @@ export type RpcExtensionUIRequest =
 			placeholder?: string;
 			timeout?: number;
 	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "question";
+			questions: ExtensionUIQuestion[];
+			timeout?: number;
+	  }
 	| { type: "extension_ui_request"; id: string; method: "editor"; title: string; prefill?: string }
 	| {
 			type: "extension_ui_request";
@@ -496,6 +512,7 @@ export type RpcExtensionUIRequest =
 /** Response to an extension UI request */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
+	| { type: "extension_ui_response"; id: string; answers: string[] }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 

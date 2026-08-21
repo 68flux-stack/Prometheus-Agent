@@ -161,7 +161,7 @@ If no `pi` manifest is present, Prometheus auto-discovers resources from these d
 
 Third party runtime dependencies belong in `dependencies` in `package.json`. Dependencies that do not register extensions, skills, prompt templates, or themes also belong in `dependencies`. When Prometheus installs a package from npm or git, it runs `npm install`, so those dependencies are installed automatically.
 
-Prime Agent bundles core packages for extensions and skills. The workspace still publishes these inherited package names; if you import any of them, list them in `peerDependencies` with a `"*"` range and do not bundle them: `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`.
+Prometheus Agent bundles core packages for extensions and skills. The workspace still publishes these inherited package names; if you import any of them, list them in `peerDependencies` with a `"*"` range and do not bundle them: `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`.
 
 Other resource packages must be bundled in your tarball. Add them to `dependencies` and `bundledDependencies`, then reference their resources through `node_modules/` paths. Prometheus loads packages with separate module roots, so separate installs do not collide or share modules.
 

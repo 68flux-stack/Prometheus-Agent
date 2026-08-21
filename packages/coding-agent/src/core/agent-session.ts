@@ -276,7 +276,7 @@ import {
 } from "./session-manager.js";
 import type { SessionStats } from "./session-stats.js";
 import type { SettingsManager } from "./settings-manager.js";
-import { getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
+import { getLazySkills, getPythonSkillRuntimeInfo, type Skill, summarizeSkill } from "./skills.js";
 import {
 	BUILTIN_SLASH_COMMANDS,
 	isBuiltinSlashCommandName,
@@ -3332,6 +3332,53 @@ export class AgentSession {
 	}
 
 	/**
+	 * Handle a skills.* request from the kernel host bridge — on-demand
+	 * discovery for skills withheld from the base system prompt to save
+	 * context. `skills.list` returns only skills not already visible
+	 * elsewhere (see getLazySkills: excludes hidden, eager, and
+	 * inline-documented skills); `skills.read` works for any non-hidden
+	 * skill, including ones the model already knows about from the prompt.
+	 */
+	handleSkillsHostRequest(type: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
+		switch (type) {
+			case "skills.list": {
+				const query = payload.query;
+				if (query !== undefined && typeof query !== "string") {
+					throw new Error("skills.list query must be a string when provided");
+				}
+				let lazySkills = getLazySkills(this._modelVisibleSkills());
+				if (query) {
+					const needle = query.toLowerCase();
+					lazySkills = lazySkills.filter(
+						(skill) =>
+							skill.name.toLowerCase().includes(needle) || skill.description.toLowerCase().includes(needle),
+					);
+				}
+				return { skills: lazySkills.map(summarizeSkill) };
+			}
+			case "skills.read": {
+				const name = payload.name;
+				if (typeof name !== "string" || name.length === 0) {
+					throw new Error("skills.read name must be a non-empty string");
+				}
+				const readableSkills = this._modelVisibleSkills().filter((skill) => !skill.disableModelInvocation);
+				const match = readableSkills.find((skill) => skill.name === name);
+				if (!match) {
+					const suggestion = readableSkills.find(
+						(skill) => skill.name.includes(name) || name.includes(skill.name),
+					);
+					throw new Error(
+						`no installed skill named "${name}"${suggestion ? ` — did you mean "${suggestion.name}"?` : ""}`,
+					);
+				}
+				return { content: readFileSync(match.filePath, "utf-8") };
+			}
+			default:
+				throw new Error(`unknown skills request type "${type}"`);
+		}
+	}
+
+	/**
 	 * Handle a refine.* request from the kernel host bridge. Like compact,
 	 * refinement waits for the current turn to become idle before applying
 	 * changes, so refine.run only schedules it; _consumePendingRequestedRefine
@@ -4771,11 +4818,11 @@ export class AgentSession {
 			);
 		} else if (this._executionPolicy.mode === "plan") {
 			promptGuidelines.push(
-				`Plan mode is active: the objective right now is to investigate and produce a plan, not to implement it. Don't edit, create, delete, or move files; don't run commands that write to disk or touch git. Web search (the \`websearch\` skill) is allowed for research; other network access isn't. Read code, search, and reason about the approach, then present the plan directly in this conversation. There's no tool to leave plan mode — it stays active until the user switches modes themselves (e.g. \`/permissions workspace\`), so end your turn once the plan is written rather than trying to start implementing.`,
+				`Plan mode is active: investigate and produce a plan. Do not edit or create files. Read files, search, and reason about the approach. Present the plan directly in this conversation. There's no tool to leave plan mode — it stays active until the user switches modes themselves (e.g. \`/permissions workspace\`).`,
 			);
 			if (this._executionPolicy.enforcement === "application") {
 				promptGuidelines.push(
-					`On this platform plan mode only exposes the ipython tool — other tools aren't just restricted, they're absent from your tool list. ipython is itself locked to read-only use here: writes, subprocess launches, and most network calls raise a PermissionError, except the websearch skill, which still works. Use it for reading and searching, not for making changes.`,
+					"On Windows, plan mode only blocks file editing and creation. Reads, searches, subprocess commands, and network access are allowed.",
 				);
 			}
 		}
@@ -6383,8 +6430,8 @@ export class AgentSession {
 			: nextPolicy.enforcement === "os"
 				? `Execution mode changed to ${requested}. New kernel and background processes are OS-sandboxed.`
 				: requested === "plan"
-					? "Execution mode changed to plan. IPython can read files and use web search; writes, subprocesses, general network access, and background commands are blocked on Windows."
-					: "Execution mode changed to workspace. Prime permission rules are enforced; kernel writes are confined to the workspace (the agent can ask you to open another directory), but processes it starts are not.";
+					? "Execution mode changed to plan. On Windows, plan mode only blocks file editing and creation. Reads, searches, commands, and network access are allowed."
+					: "Execution mode changed to workspace. Prometheus permission rules are enforced; kernel writes are confined to the workspace (the agent can ask you to open another directory), but processes it starts are not.";
 	}
 
 	startBackgroundJob(command: string) {
@@ -6408,8 +6455,8 @@ export class AgentSession {
 				: this._executionPolicy.enforcement === "os"
 					? `Execution mode: ${current}. Restrictions are enforced for the kernel process tree.`
 					: current === "plan"
-						? "Execution mode: plan. IPython can read files and use web search; writes, subprocesses, general network access, and background commands are blocked on Windows."
-						: "Execution mode: workspace. Prime permission rules are active; kernel writes stay inside the workspace unless you approve another directory, child-process containment is advisory on Windows.";
+						? "Execution mode: plan. On Windows, plan mode only blocks file editing and creation. Reads, searches, commands, and network access are allowed."
+						: "Execution mode: workspace. Prometheus permission rules are active; kernel writes stay inside the workspace unless you approve another directory, child-process containment is advisory on Windows.";
 		}
 		const modes: ExecutionMode[] = ["plan", "workspace", "unrestricted"];
 		const requested =
@@ -7349,7 +7396,7 @@ export class AgentSession {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 		if (!(await this._modelRegistry.canUseModel(model))) {
-			throw new Error(`Model "${model.provider}/${model.id}" is not available for the current Prime team.`);
+			throw new Error(`Model "${model.provider}/${model.id}" is not available for the current Prometheus team.`);
 		}
 
 		const previousModel = this.model;
@@ -8973,7 +9020,10 @@ export class AgentSession {
 	/**
 	 * Toggle auto-compaction setting.
 	 */
-	setAutoCompactionEnabled(enabled: boolean): void {
+	setAutoCompactionEnabled(enabled: boolean, thresholdPercent?: number): void {
+		if (thresholdPercent !== undefined) {
+			this.settingsManager.setCompactionThresholdPercent(thresholdPercent);
+		}
 		this.settingsManager.setCompactionEnabled(enabled);
 	}
 
@@ -9402,7 +9452,9 @@ export class AgentSession {
 		this._bindExtensionCore(this._extensionRunner);
 		this._applyExtensionBindings(this._extensionRunner);
 
-		const defaultActiveToolNames = this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : ["ipython"];
+		const defaultActiveToolNames = this._baseToolsOverride
+			? Object.keys(this._baseToolsOverride)
+			: ["ipython", "ask_user"];
 		const baseActiveToolNames = [...(options.activeToolNames ?? defaultActiveToolNames)];
 		if (this._goalState.status === "active" && this._includeGoals) {
 			// An active goal needs ipython so the model can reach the goal skill.
@@ -9689,6 +9741,9 @@ export class AgentSession {
 			"todo.clear",
 		]) {
 			handlers[type] = async (payload) => this.handleTodoHostRequest(type, payload);
+		}
+		for (const type of ["skills.list", "skills.read"]) {
+			handlers[type] = async (payload) => this.handleSkillsHostRequest(type, payload);
 		}
 		if (this._includeCompactSkill) {
 			for (const type of ["compact.run", "compact.status"]) {

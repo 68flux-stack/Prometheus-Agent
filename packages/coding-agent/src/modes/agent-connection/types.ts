@@ -603,7 +603,11 @@ export interface AgentConnectionHeartbeat {
 	firstMessage?: string;
 }
 
-export type AgentConnectionExtensionUiResponse = { value: string } | { confirmed: boolean } | { cancelled: true };
+export type AgentConnectionExtensionUiResponse =
+	| { value: string }
+	| { answers: string[] }
+	| { confirmed: boolean }
+	| { cancelled: true };
 
 export interface AgentConnectionExtensionUiRequest {
 	id: string;
@@ -798,7 +802,7 @@ export interface AgentConnection {
 	setTransport(transport: Transport): Promise<void>;
 	setSteeringMode(mode: AgentConnectionQueueMode): Promise<void>;
 	setFollowUpMode(mode: AgentConnectionQueueMode): Promise<void>;
-	setAutoCompactionEnabled(enabled: boolean): Promise<void>;
+	setAutoCompactionEnabled(enabled: boolean, thresholdPercent?: number): Promise<void>;
 	setAutoRetryEnabled(enabled: boolean): Promise<void>;
 
 	compact(customInstructions?: string): Promise<CompactionResult>;

@@ -118,7 +118,7 @@ const PRIME_INFERENCE_COMPAT: OpenAICompletionsCompat = {
 	maxTokensField: "max_tokens",
 	supportsStrictMode: false,
 };
-interface PrimeInferenceCatalogEntry {
+interface PrometheusInferenceCatalogEntry {
 	id: string;
 	input: number;
 	output: number;
@@ -127,21 +127,21 @@ interface PrimeInferenceCatalogEntry {
 	reasoning?: boolean;
 }
 
-interface PrimeInferenceModelMetadata {
+interface PrometheusInferenceModelMetadata {
 	contextWindow?: number;
 	maxTokens?: number;
 	vision?: boolean;
 	name?: string;
 }
 
-// The full Prime Inference catalog is registered (minus raw/duplicate variants).
-// Prime's /models endpoint publishes pricing only, so context/output limits and
+// The full Prometheus Inference catalog is registered (minus raw/duplicate variants).
+// Prometheus's /models endpoint publishes pricing only, so context/output limits and
 // modalities are read from OpenRouter's public catalog, used here purely as a
 // published spec sheet for the same upstream models — requests always go to
-// Prime's own baseUrl. Entries below override those specs where the Prime route
+// Prometheus's own baseUrl. Entries below override those specs where the Prometheus route
 // enforces a different limit (verified against the live API) or fill gaps for
 // models OpenRouter does not list or leaves incomplete.
-const PRIME_INFERENCE_MODEL_METADATA: Record<string, PrimeInferenceModelMetadata> = {
+const PRIME_INFERENCE_MODEL_METADATA: Record<string, PrometheusInferenceModelMetadata> = {
 	// These routes accept 200k, checked against the live API 2026-07-08. The
 	// other Claude routes take the full window their spec lists.
 	"anthropic/claude-sonnet-4": { contextWindow: 200000 },
@@ -203,7 +203,7 @@ const PRIME_INFERENCE_FEATURED_MODELS = new Set([
 	"z-ai/glm-5.2",
 ]);
 
-// Prime ids whose OpenRouter listing uses a different id. Empty today — Prime
+// Prometheus ids whose OpenRouter listing uses a different id. Empty today — Prometheus
 // currently publishes ids that match OpenRouter's, but HF-style ids show up
 // whenever a new route is added, so the mapping stays.
 const PRIME_INFERENCE_OPENROUTER_ALIASES: Record<string, string> = {};
@@ -216,7 +216,7 @@ const PRIME_INFERENCE_DEFAULT_MAX_TOKENS = 8192;
 
 // Raw checkpoints and duplicate routes that would clutter the picker: BF16
 // exports, fine-tune outputs, zai-org/ and HF-cased twins of canonical ids.
-function isPrimeInferenceRawVariant(modelId: string): boolean {
+function isPrometheusInferenceRawVariant(modelId: string): boolean {
 	const id = modelId.toLowerCase();
 	if (id.endsWith("-bf16") || id.includes(":")) {
 		return true;
@@ -225,7 +225,7 @@ function isPrimeInferenceRawVariant(modelId: string): boolean {
 	return vendor === "zai-org" || vendor !== vendor.toLowerCase();
 }
 
-function isPrimeInferencePrivateModel(modelId: string): boolean {
+function isPrometheusInferencePrivateModel(modelId: string): boolean {
 	return modelId.toLowerCase().startsWith("internal/");
 }
 
@@ -372,7 +372,7 @@ function getOptionalBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
 }
 
-function readPrimeCliConfig(): Record<string, unknown> {
+function readPrometheusCliConfig(): Record<string, unknown> {
 	try {
 		const parsed = JSON.parse(readFileSync(join(homedir(), ".prime", "config.json"), "utf8"));
 		return isRecord(parsed) ? parsed : {};
@@ -381,7 +381,7 @@ function readPrimeCliConfig(): Record<string, unknown> {
 	}
 }
 
-function getPrimeInferenceConfigValue(
+function getPrometheusInferenceConfigValue(
 	envName: "PRIME_API_KEY" | "PRIME_TEAM_ID",
 	config: Record<string, unknown>,
 	configKeys: readonly string[],
@@ -401,34 +401,34 @@ function getPrimeInferenceConfigValue(
 	return undefined;
 }
 
-function getPrimeInferenceHeaders(apiKey: string | undefined, teamId: string | undefined): Record<string, string> | undefined {
+function getPrometheusInferenceHeaders(apiKey: string | undefined, teamId: string | undefined): Record<string, string> | undefined {
 	const headers: Record<string, string> = {};
 	if (apiKey) {
 		headers.Authorization = `Bearer ${apiKey}`;
 	}
 	if (teamId) {
-		headers["X-Prime-Team-ID"] = teamId;
+		headers["X-Prometheus-Team-ID"] = teamId;
 	}
 
 	return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-function getPrimeInferenceCacheCosts(modelId: string, inputCost: number): { cacheRead: number; cacheWrite: number } {
+function getPrometheusInferenceCacheCosts(modelId: string, inputCost: number): { cacheRead: number; cacheWrite: number } {
 	return modelId.toLowerCase().startsWith("anthropic/")
 		? getAnthropicCacheCosts(inputCost, "5m")
 		: { cacheRead: 0, cacheWrite: 0 };
 }
 
-function getExistingPrimeInferenceModels(): Model<"openai-completions">[] {
+function getExistingPrometheusInferenceModels(): Model<"openai-completions">[] {
 	const models = EXISTING_MODELS["prime-inference"] as unknown as Record<string, Model<"openai-completions">>;
 	return Object.values(models)
-		.filter((model) => !isPrimeInferenceRawVariant(model.id) && !isPrimeInferencePrivateModel(model.id))
+		.filter((model) => !isPrometheusInferenceRawVariant(model.id) && !isPrometheusInferencePrivateModel(model.id))
 		.map((model) => ({
 			...model,
 			input: [...model.input],
 			cost: {
 				...model.cost,
-				...getPrimeInferenceCacheCosts(model.id, model.cost.input),
+				...getPrometheusInferenceCacheCosts(model.id, model.cost.input),
 			},
 			...(model.compat ? { compat: { ...model.compat } } : {}),
 			...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
@@ -436,7 +436,7 @@ function getExistingPrimeInferenceModels(): Model<"openai-completions">[] {
 		}));
 }
 
-function mergePrimeInferenceModels(
+function mergePrometheusInferenceModels(
 	snapshotModels: Model<"openai-completions">[],
 	catalogModels: Model<"openai-completions">[],
 ): Model<"openai-completions">[] {
@@ -450,7 +450,7 @@ function mergePrimeInferenceModels(
 	return Array.from(models.values());
 }
 
-function refreshPrimeInferenceAliasLimits(
+function refreshPrometheusInferenceAliasLimits(
 	snapshotModels: Model<"openai-completions">[],
 	catalogModels: Model<"openai-completions">[],
 ): Model<"openai-completions">[] {
@@ -483,7 +483,7 @@ function includesCatalogCapability(value: unknown, capabilities: readonly string
 	});
 }
 
-function getPrimeInferenceDisplayName(modelId: string): string {
+function getPrometheusInferenceDisplayName(modelId: string): string {
 	const rawName = modelId.split("/").at(-1) ?? modelId;
 	return rawName
 		.split(/[-_]+/)
@@ -496,7 +496,7 @@ function getPrimeInferenceDisplayName(modelId: string): string {
 		.join(" ");
 }
 
-function getPrimeInferenceCatalogReasoning(item: Record<string, unknown>): boolean | undefined {
+function getPrometheusInferenceCatalogReasoning(item: Record<string, unknown>): boolean | undefined {
 	const metadata = isRecord(item.metadata) ? item.metadata : {};
 	const direct =
 		getOptionalBoolean(item.reasoning) ??
@@ -519,7 +519,7 @@ function getPrimeInferenceCatalogReasoning(item: Record<string, unknown>): boole
 		: undefined;
 }
 
-function isPrimeInferenceReasoningModel(modelId: string, catalogReasoning?: boolean): boolean {
+function isPrometheusInferenceReasoningModel(modelId: string, catalogReasoning?: boolean): boolean {
 	if (catalogReasoning !== undefined) {
 		return catalogReasoning;
 	}
@@ -537,7 +537,7 @@ function isPrimeInferenceReasoningModel(modelId: string, catalogReasoning?: bool
 	);
 }
 
-function getPrimeInferenceCompat(modelId: string): OpenAICompletionsCompat {
+function getPrometheusInferenceCompat(modelId: string): OpenAICompletionsCompat {
 	const id = modelId.toLowerCase();
 	if (id.includes("deepseek-v4")) {
 		return {
@@ -555,12 +555,12 @@ function getPrimeInferenceCompat(modelId: string): OpenAICompletionsCompat {
 	return PRIME_INFERENCE_COMPAT;
 }
 
-function parsePrimeInferenceCatalog(data: unknown): PrimeInferenceCatalogEntry[] {
+function parsePrometheusInferenceCatalog(data: unknown): PrometheusInferenceCatalogEntry[] {
 	if (!isRecord(data) || !Array.isArray(data.data)) {
 		return [];
 	}
 
-	return data.data.flatMap((item): PrimeInferenceCatalogEntry[] => {
+	return data.data.flatMap((item): PrometheusInferenceCatalogEntry[] => {
 		if (!isRecord(item) || typeof item.id !== "string") {
 			return [];
 		}
@@ -580,21 +580,21 @@ function parsePrimeInferenceCatalog(data: unknown): PrimeInferenceCatalogEntry[]
 				output,
 				contextWindow: getOptionalNumber(item.context_window ?? item.contextWindow ?? limit.context),
 				maxTokens: getOptionalNumber(item.max_tokens ?? item.maxTokens ?? limit.output),
-				reasoning: getPrimeInferenceCatalogReasoning(item),
+				reasoning: getPrometheusInferenceCatalogReasoning(item),
 			},
 		];
 	});
 }
 
-interface PrimeInferenceOpenRouterMetadata {
+interface PrometheusInferenceOpenRouterMetadata {
 	contextWindow?: number;
 	maxTokens?: number;
 	vision: boolean;
 	reasoning: boolean;
 }
 
-function buildPrimeInferenceOpenRouterIndex(catalog: unknown[]): Map<string, PrimeInferenceOpenRouterMetadata> {
-	const index = new Map<string, PrimeInferenceOpenRouterMetadata>();
+function buildPrometheusInferenceOpenRouterIndex(catalog: unknown[]): Map<string, PrometheusInferenceOpenRouterMetadata> {
+	const index = new Map<string, PrometheusInferenceOpenRouterMetadata>();
 	for (const item of catalog) {
 		if (!isRecord(item) || typeof item.id !== "string") {
 			continue;
@@ -616,70 +616,70 @@ function buildPrimeInferenceOpenRouterIndex(catalog: unknown[]): Map<string, Pri
 	return index;
 }
 
-function getPrimeInferenceOpenRouterMetadata(
-	index: Map<string, PrimeInferenceOpenRouterMetadata>,
+function getPrometheusInferenceOpenRouterMetadata(
+	index: Map<string, PrometheusInferenceOpenRouterMetadata>,
 	modelId: string,
-): PrimeInferenceOpenRouterMetadata | undefined {
+): PrometheusInferenceOpenRouterMetadata | undefined {
 	const id = modelId.toLowerCase();
 	return index.get(PRIME_INFERENCE_OPENROUTER_ALIASES[id] ?? id);
 }
 
-async function fetchPrimeInferenceModels(): Promise<Model<"openai-completions">[]> {
-	const primeConfig = readPrimeCliConfig();
-	const apiKey = getPrimeInferenceConfigValue("PRIME_API_KEY", primeConfig, ["api_key", "apiKey"]);
-	const teamId = getPrimeInferenceConfigValue("PRIME_TEAM_ID", primeConfig, ["team_id", "teamId", "teamID"]);
-	let catalog: PrimeInferenceCatalogEntry[] = [];
+async function fetchPrometheusInferenceModels(): Promise<Model<"openai-completions">[]> {
+	const primeConfig = readPrometheusCliConfig();
+	const apiKey = getPrometheusInferenceConfigValue("PRIME_API_KEY", primeConfig, ["api_key", "apiKey"]);
+	const teamId = getPrometheusInferenceConfigValue("PRIME_TEAM_ID", primeConfig, ["team_id", "teamId", "teamID"]);
+	let catalog: PrometheusInferenceCatalogEntry[] = [];
 
 	try {
-		console.log("Fetching models from Prime Inference API...");
+		console.log("Fetching models from Prometheus Inference API...");
 		const response = await fetch(`${PRIME_INFERENCE_BASE_URL}/models`, {
-			headers: getPrimeInferenceHeaders(apiKey, teamId),
+			headers: getPrometheusInferenceHeaders(apiKey, teamId),
 		});
-		catalog = parsePrimeInferenceCatalog(await response.json());
+		catalog = parsePrometheusInferenceCatalog(await response.json());
 	} catch (error) {
-		console.error("Failed to fetch Prime Inference models:", error);
+		console.error("Failed to fetch Prometheus Inference models:", error);
 	}
 
-	let openRouterIndex = new Map<string, PrimeInferenceOpenRouterMetadata>();
+	let openRouterIndex = new Map<string, PrometheusInferenceOpenRouterMetadata>();
 	try {
-		openRouterIndex = buildPrimeInferenceOpenRouterIndex(await fetchOpenRouterCatalog());
+		openRouterIndex = buildPrometheusInferenceOpenRouterIndex(await fetchOpenRouterCatalog());
 	} catch (error) {
-		console.error("Failed to fetch OpenRouter catalog for Prime Inference metadata:", error);
+		console.error("Failed to fetch OpenRouter catalog for Prometheus Inference metadata:", error);
 	}
 	if (openRouterIndex.size === 0) {
 		// Without OpenRouter metadata every model would regress to the defaults;
 		// keep the previous snapshot instead.
-		console.error("OpenRouter catalog unavailable; keeping snapshot Prime Inference models");
-		return getExistingPrimeInferenceModels();
+		console.error("OpenRouter catalog unavailable; keeping snapshot Prometheus Inference models");
+		return getExistingPrometheusInferenceModels();
 	}
 
 	const catalogModels = catalog
-		.filter((entry) => !isPrimeInferenceRawVariant(entry.id) && !isPrimeInferencePrivateModel(entry.id))
+		.filter((entry) => !isPrometheusInferenceRawVariant(entry.id) && !isPrometheusInferencePrivateModel(entry.id))
 		.map((entry) =>
-			createPrimeInferenceModel(
+			createPrometheusInferenceModel(
 				entry,
 				PRIME_INFERENCE_MODEL_METADATA[entry.id.toLowerCase()],
-				getPrimeInferenceOpenRouterMetadata(openRouterIndex, entry.id),
+				getPrometheusInferenceOpenRouterMetadata(openRouterIndex, entry.id),
 			),
 		);
-	let snapshotModels = getExistingPrimeInferenceModels();
+	let snapshotModels = getExistingPrometheusInferenceModels();
 	if (catalog.length > 0) {
 		const liveIds = new Set(catalogModels.map((model) => model.id.toLowerCase()));
 		snapshotModels = snapshotModels.filter((model) => liveIds.has(model.id.toLowerCase()));
 	}
-	snapshotModels = refreshPrimeInferenceAliasLimits(snapshotModels, catalogModels);
-	const models = mergePrimeInferenceModels(snapshotModels, catalogModels);
-	console.log(`Loaded ${models.length} Prime Inference models (${catalogModels.length} from the live catalog)`);
+	snapshotModels = refreshPrometheusInferenceAliasLimits(snapshotModels, catalogModels);
+	const models = mergePrometheusInferenceModels(snapshotModels, catalogModels);
+	console.log(`Loaded ${models.length} Prometheus Inference models (${catalogModels.length} from the live catalog)`);
 	return models;
 }
 
-function createPrimeInferenceModel(
-	entry: PrimeInferenceCatalogEntry,
-	override: PrimeInferenceModelMetadata | undefined,
-	openRouter: PrimeInferenceOpenRouterMetadata | undefined,
+function createPrometheusInferenceModel(
+	entry: PrometheusInferenceCatalogEntry,
+	override: PrometheusInferenceModelMetadata | undefined,
+	openRouter: PrometheusInferenceOpenRouterMetadata | undefined,
 ): Model<"openai-completions"> {
 	const vision = override?.vision ?? openRouter?.vision ?? false;
-	const cacheCosts = getPrimeInferenceCacheCosts(entry.id, entry.input);
+	const cacheCosts = getPrometheusInferenceCacheCosts(entry.id, entry.input);
 	const contextWindow =
 		entry.contextWindow ??
 		override?.contextWindow ??
@@ -694,11 +694,11 @@ function createPrimeInferenceModel(
 	return {
 		id: entry.id,
 		...(PRIME_INFERENCE_FEATURED_MODELS.has(entry.id.toLowerCase()) ? { featured: true } : {}),
-		name: override?.name ?? getPrimeInferenceDisplayName(entry.id),
+		name: override?.name ?? getPrometheusInferenceDisplayName(entry.id),
 		api: "openai-completions",
 		provider: "prime-inference",
 		baseUrl: PRIME_INFERENCE_BASE_URL,
-		reasoning: isPrimeInferenceReasoningModel(entry.id, entry.reasoning ?? openRouter?.reasoning),
+		reasoning: isPrometheusInferenceReasoningModel(entry.id, entry.reasoning ?? openRouter?.reasoning),
 		input: vision ? ["text", "image"] : ["text"],
 		cost: {
 			input: entry.input,
@@ -707,7 +707,7 @@ function createPrimeInferenceModel(
 		},
 		contextWindow,
 		maxTokens,
-		compat: getPrimeInferenceCompat(entry.id),
+		compat: getPrometheusInferenceCompat(entry.id),
 	};
 }
 
@@ -2308,7 +2308,7 @@ async function generateModels() {
 	];
 	allModels.push(...vertexModels);
 
-	const primeInferenceModels = await fetchPrimeInferenceModels();
+	const primeInferenceModels = await fetchPrometheusInferenceModels();
 	allModels.push(...primeInferenceModels);
 
 	const azureOpenAiModels: Model<Api>[] = allModels

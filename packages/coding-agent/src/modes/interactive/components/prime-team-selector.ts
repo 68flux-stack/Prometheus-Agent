@@ -1,5 +1,5 @@
 import { Container, type Focusable, fuzzyFilter, getKeybindings, Spacer, TruncatedText } from "@earendil-works/pi-tui";
-import type { PrimeTeam } from "../../../core/prime-inference-auth.js";
+import type { PrometheusTeam } from "../../../core/prime-inference-auth.js";
 import { theme } from "../theme/theme.js";
 import {
 	getMenuListLayout,
@@ -10,20 +10,20 @@ import {
 	type MenuViewportProvider,
 } from "./menu-panel.js";
 
-type PrimeTeamOption = {
+type PrometheusTeamOption = {
 	type: "personal" | "team";
-	team: PrimeTeam | null;
+	team: PrometheusTeam | null;
 };
 
 const PREFERRED_VISIBLE_TEAMS = 8;
 const TEAM_LIST_RESERVED_ROWS = 7;
 const TEAM_SCROLL_INDICATOR_ROWS = 1;
 
-export class PrimeTeamSelectorComponent extends Container implements Focusable {
+export class PrometheusTeamSelectorComponent extends Container implements Focusable {
 	private readonly searchInput: MenuSearchInput;
 	private readonly listContainer: Container;
-	private readonly allOptions: PrimeTeamOption[];
-	private filteredOptions: PrimeTeamOption[];
+	private readonly allOptions: PrometheusTeamOption[];
+	private filteredOptions: PrometheusTeamOption[];
 	private selectedIndex = 0;
 	private searchQuery = "";
 	private _focused = false;
@@ -35,9 +35,9 @@ export class PrimeTeamSelectorComponent extends Container implements Focusable {
 	});
 
 	constructor(
-		teams: PrimeTeam[],
+		teams: PrometheusTeam[],
 		private readonly currentTeamId: string | undefined,
-		private readonly onSelect: (team: PrimeTeam | null) => void,
+		private readonly onSelect: (team: PrometheusTeam | null) => void,
 		private readonly onCancel: () => void,
 		private readonly viewport: MenuViewportProvider = {},
 	) {
@@ -47,8 +47,8 @@ export class PrimeTeamSelectorComponent extends Container implements Focusable {
 		this.filteredOptions = this.allOptions;
 
 		const panel = new MenuPanel({
-			title: "Prime Team",
-			subtitle: "Choose which account pays for Prime Inference usage.",
+			title: "Prometheus Team",
+			subtitle: "Choose which account pays for Prometheus Inference usage.",
 		});
 		this.addChild(panel);
 
@@ -88,7 +88,7 @@ export class PrimeTeamSelectorComponent extends Container implements Focusable {
 		this.updateList();
 	}
 
-	private getSearchText(option: PrimeTeamOption): string {
+	private getSearchText(option: PrometheusTeamOption): string {
 		if (option.type === "personal") {
 			return "personal account";
 		}
@@ -145,11 +145,11 @@ export class PrimeTeamSelectorComponent extends Container implements Focusable {
 		}
 	}
 
-	private getPrimary(option: PrimeTeamOption): string {
+	private getPrimary(option: PrometheusTeamOption): string {
 		return option.team?.name ?? "Personal";
 	}
 
-	private getSecondary(option: PrimeTeamOption): string {
+	private getSecondary(option: PrometheusTeamOption): string {
 		if (!option.team) {
 			return "personal account";
 		}
@@ -157,7 +157,7 @@ export class PrimeTeamSelectorComponent extends Container implements Focusable {
 		return option.team.slug ? `slug: ${option.team.slug}, role: ${role}` : `role: ${role}`;
 	}
 
-	private getMeta(option: PrimeTeamOption): string {
+	private getMeta(option: PrometheusTeamOption): string {
 		const isCurrent = option.team ? option.team.teamId === this.currentTeamId : this.currentTeamId === undefined;
 		return isCurrent ? theme.fg("success", "current") : "";
 	}

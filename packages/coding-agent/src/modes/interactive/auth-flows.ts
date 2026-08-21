@@ -13,17 +13,17 @@ import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { getAuthPath, getDocsPath } from "../../config.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import {
-	checkPrimeInferenceAccess,
+	checkPrometheusInferenceAccess,
 	checkPrometheusTracesAccess,
-	fetchPrimeTeams,
-	loadPrimeCliConfig,
-	loginPrimeInference,
+	fetchPrometheusTeams,
+	loadPrometheusCliConfig,
+	loginPrometheusInference,
 	loginPrometheusTraces,
 	PRIME_INFERENCE_PROVIDER_ID,
 	PRIME_INFERENCE_PROVIDER_NAME,
 	PROMETHEUS_TRACES_PROVIDER_ID,
 	PROMETHEUS_TRACES_PROVIDER_NAME,
-	type PrimeTeam,
+	type PrometheusTeam,
 	resolvePrometheusTracesBaseUrl,
 } from "../../core/prime-inference-auth.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
@@ -37,7 +37,7 @@ import {
 	compareAuthSelectorProviders,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.js";
-import { PrimeTeamSelectorComponent } from "./components/prime-team-selector.js";
+import { PrometheusTeamSelectorComponent } from "./components/prime-team-selector.js";
 import { theme } from "./theme/theme.js";
 
 export type AuthenticationResult =
@@ -186,7 +186,7 @@ export class ProviderAuthFlows {
 			return this.showLoginDialog(providerOption.id, providerOption.name, kind);
 		}
 		if (providerOption.id === PRIME_INFERENCE_PROVIDER_ID) {
-			return this.runPrimeInferenceLogin();
+			return this.runPrometheusInferenceLogin();
 		}
 		if (providerOption.id === BEDROCK_PROVIDER_ID) {
 			return this.showBedrockSetupDialog(providerOption.id, providerOption.name);
@@ -405,17 +405,17 @@ export class ProviderAuthFlows {
 		}
 	}
 
-	private showPrimeTeamSelector(
-		teams: PrimeTeam[],
+	private showPrometheusTeamSelector(
+		teams: PrometheusTeam[],
 		currentTeamId: string | undefined,
-	): Promise<PrimeTeam | null | undefined> {
+	): Promise<PrometheusTeam | null | undefined> {
 		return new Promise((resolve) => {
 			let handle: OverlayHandle | undefined;
 			const close = () => {
 				handle?.hide();
 				this.host.ui.requestRender();
 			};
-			const selector = new PrimeTeamSelectorComponent(
+			const selector = new PrometheusTeamSelectorComponent(
 				teams,
 				currentTeamId,
 				(team) => {
@@ -432,12 +432,12 @@ export class ProviderAuthFlows {
 		});
 	}
 
-	private getPrimeInferenceDefaultTeamStatus(): string {
-		const configPath = this.host.modelRegistry.authStorage.getPrimeCliConfigPath();
+	private getPrometheusInferenceDefaultTeamStatus(): string {
+		const configPath = this.host.modelRegistry.authStorage.getPrometheusCliConfigPath();
 		if (configPath) {
-			let config: ReturnType<typeof loadPrimeCliConfig>;
+			let config: ReturnType<typeof loadPrometheusCliConfig>;
 			try {
-				config = loadPrimeCliConfig(configPath);
+				config = loadPrometheusCliConfig(configPath);
 			} catch {
 				return "Using personal account.";
 			}
@@ -448,10 +448,10 @@ export class ProviderAuthFlows {
 				return `Using team "${config.teamName}".`;
 			}
 			if (config.teamId) {
-				return "Using Prime CLI team.";
+				return "Using Prometheus CLI team.";
 			}
 		}
-		const storedTeam = this.host.modelRegistry.authStorage.getPrimeInferenceTeamSelection();
+		const storedTeam = this.host.modelRegistry.authStorage.getPrometheusInferenceTeamSelection();
 		if (storedTeam) {
 			return `Using team "${storedTeam.name}".`;
 		}
@@ -461,48 +461,51 @@ export class ProviderAuthFlows {
 		return "Using personal account.";
 	}
 
-	private async selectPrimeInferenceTeam(apiKey: string, dialog: LoginDialogComponent): Promise<string | undefined> {
+	private async selectPrometheusInferenceTeam(
+		apiKey: string,
+		dialog: LoginDialogComponent,
+	): Promise<string | undefined> {
 		try {
-			const config = loadPrimeCliConfig(this.host.modelRegistry.authStorage.getPrimeCliConfigPath());
+			const config = loadPrometheusCliConfig(this.host.modelRegistry.authStorage.getPrometheusCliConfigPath());
 			if (config.teamIdFromEnv) {
 				this.host.modelRegistry.authStorage.reload();
 				return "Using team from PRIME_TEAM_ID.";
 			}
 
-			dialog.showProgress("Loading Prime teams...");
-			const teams = await fetchPrimeTeams(apiKey, config.baseUrl, { signal: dialog.signal });
+			dialog.showProgress("Loading Prometheus teams...");
+			const teams = await fetchPrometheusTeams(apiKey, config.baseUrl, { signal: dialog.signal });
 			if (dialog.signal.aborted) {
-				return this.getPrimeInferenceDefaultTeamStatus();
+				return this.getPrometheusInferenceDefaultTeamStatus();
 			}
 			if (teams.length === 0) {
-				this.host.modelRegistry.authStorage.setPrimeInferenceTeamSelection(null);
+				this.host.modelRegistry.authStorage.setPrometheusInferenceTeamSelection(null);
 				return "Using personal account.";
 			}
 
-			const storedTeam = this.host.modelRegistry.authStorage.getPrimeInferenceTeamSelection();
+			const storedTeam = this.host.modelRegistry.authStorage.getPrometheusInferenceTeamSelection();
 			const currentTeamId = storedTeam === null ? undefined : (storedTeam?.teamId ?? config.teamId);
-			const selectedTeam = await this.showPrimeTeamSelector(teams, currentTeamId);
+			const selectedTeam = await this.showPrometheusTeamSelector(teams, currentTeamId);
 			if (selectedTeam !== undefined) {
-				this.host.modelRegistry.authStorage.setPrimeInferenceTeamSelection(selectedTeam);
+				this.host.modelRegistry.authStorage.setPrometheusInferenceTeamSelection(selectedTeam);
 			}
 			return selectedTeam
 				? `Using team "${selectedTeam.name}".`
 				: selectedTeam === null
 					? "Using personal account."
-					: this.getPrimeInferenceDefaultTeamStatus();
+					: this.getPrometheusInferenceDefaultTeamStatus();
 		} catch {
 			this.host.modelRegistry.authStorage.reload();
-			return this.getPrimeInferenceDefaultTeamStatus();
+			return this.getPrometheusInferenceDefaultTeamStatus();
 		}
 	}
 
-	private async completePrimeInferenceLogin(
+	private async completePrometheusInferenceLogin(
 		apiKey: string,
 		dialog: LoginDialogComponent,
 		closeDialog: () => void,
 	): Promise<AuthenticationResult> {
-		this.host.modelRegistry.authStorage.setPrimeInferenceApiKey(apiKey);
-		const teamStatus = await this.selectPrimeInferenceTeam(apiKey, dialog);
+		this.host.modelRegistry.authStorage.setPrometheusInferenceApiKey(apiKey);
+		const teamStatus = await this.selectPrometheusInferenceTeam(apiKey, dialog);
 
 		closeDialog();
 		return await this.completeProviderAuthentication(
@@ -511,7 +514,7 @@ export class ProviderAuthFlows {
 			"api_key",
 			teamStatus,
 			"provider",
-			this.host.modelRegistry.authStorage.getPrimeCliConfigPath() ?? getAuthPath(),
+			this.host.modelRegistry.authStorage.getPrometheusCliConfigPath() ?? getAuthPath(),
 		);
 	}
 
@@ -529,7 +532,7 @@ export class ProviderAuthFlows {
 		);
 	}
 
-	async runPrimeInferenceLogin(): Promise<AuthenticationResult> {
+	async runPrometheusInferenceLogin(): Promise<AuthenticationResult> {
 		const dialog = new LoginDialogComponent(
 			this.host.ui,
 			PRIME_INFERENCE_PROVIDER_ID,
@@ -574,7 +577,7 @@ export class ProviderAuthFlows {
 		};
 
 		try {
-			const browserLogin = loginPrimeInference(
+			const browserLogin = loginPrometheusInference(
 				{
 					onAuth: (info) => {
 						dialog.showAuth(info.url, info.instructions);
@@ -586,7 +589,7 @@ export class ProviderAuthFlows {
 					signal: browserAbort.signal,
 				},
 				{
-					configPath: this.host.modelRegistry.authStorage.getPrimeCliConfigPath(),
+					configPath: this.host.modelRegistry.authStorage.getPrometheusCliConfigPath(),
 				},
 			);
 			// When the browser challenge cannot start or breaks down, keep the dialog
@@ -598,7 +601,7 @@ export class ProviderAuthFlows {
 				const errorMsg = error instanceof Error ? error.message : String(error);
 				dialog.showProgress(`Browser sign-in unavailable (${errorMsg}).`);
 				if (!manualInputArmed) {
-					armManualInput("Paste a Prime API key below:");
+					armManualInput("Paste a Prometheus API key below:");
 				}
 				return manualKeyEntry;
 			});
@@ -621,20 +624,24 @@ export class ProviderAuthFlows {
 
 			if (result.source === "manual") {
 				browserAbort.abort();
-				dialog.showProgress("Checking Prime Inference access...");
-				const config = loadPrimeCliConfig(this.host.modelRegistry.authStorage.getPrimeCliConfigPath());
-				const access = await checkPrimeInferenceAccess(result.apiKey, config.baseUrl, { signal: dialog.signal });
+				dialog.showProgress("Checking Prometheus Inference access...");
+				const config = loadPrometheusCliConfig(this.host.modelRegistry.authStorage.getPrometheusCliConfigPath());
+				const access = await checkPrometheusInferenceAccess(result.apiKey, config.baseUrl, {
+					signal: dialog.signal,
+				});
 				if (dialog.signal.aborted) {
 					closeDialog();
 					return { status: "cancelled" };
 				}
 				if (!access.ok) {
 					const status = access.status === undefined ? "" : `HTTP ${access.status}: `;
-					throw new Error(`Prime API key does not have Prime Inference access (${status}${access.message})`);
+					throw new Error(
+						`Prometheus API key does not have Prometheus Inference access (${status}${access.message})`,
+					);
 				}
 			}
 
-			return await this.completePrimeInferenceLogin(result.apiKey, dialog, closeDialog);
+			return await this.completePrometheusInferenceLogin(result.apiKey, dialog, closeDialog);
 		} catch (error: unknown) {
 			closeDialog();
 			const errorMsg = error instanceof Error ? error.message : String(error);
@@ -694,7 +701,7 @@ export class ProviderAuthFlows {
 			const browserLogin = loginPrometheusTraces({
 				onAuth: (info) => {
 					dialog.showAuth(info.url, info.instructions);
-					armManualInput("Complete the sign-in in your browser, or paste a Prime API key below:");
+					armManualInput("Complete the sign-in in your browser, or paste a Prometheus API key below:");
 				},
 				onProgress: (message) => {
 					dialog.showProgress(message);
@@ -708,7 +715,7 @@ export class ProviderAuthFlows {
 				const errorMsg = error instanceof Error ? error.message : String(error);
 				dialog.showProgress(`Browser sign-in unavailable (${errorMsg}).`);
 				if (!manualInputArmed) {
-					armManualInput("Paste a Prime API key below:");
+					armManualInput("Paste a Prometheus API key below:");
 				}
 				return manualKeyEntry;
 			});
@@ -736,7 +743,7 @@ export class ProviderAuthFlows {
 				}
 				if (!access.ok) {
 					const status = access.status === undefined ? "" : `HTTP ${access.status}: `;
-					throw new Error(`Prime API key does not have Prometheus trace access (${status}${access.message})`);
+					throw new Error(`Prometheus API key does not have Prometheus trace access (${status}${access.message})`);
 				}
 			}
 

@@ -129,8 +129,8 @@ Example of a well-formed `[Unreleased]` section:
 
 ### Attribution
 
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/PrimeIntellect-ai/prometheus/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/PrimeIntellect-ai/prometheus/pull/456) by [@username](https://github.com/username))`
+- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/PrometheusIntellect-ai/prometheus/issues/123))`
+- **External contributions**: `Added feature X ([#456](https://github.com/PrometheusIntellect-ai/prometheus/pull/456) by [@username](https://github.com/username))`
 
 ## Adding a New LLM Provider (packages/ai)
 

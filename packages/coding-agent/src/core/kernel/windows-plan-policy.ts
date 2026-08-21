@@ -17,8 +17,6 @@ if not getattr(_prometheus_plan_sys, "_prometheus_plan_policy_installed", False)
         "os.remove", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod", "os.utime",
         "os.rename", "os.replace", "os.link", "os.symlink",
         "shutil.copyfile", "shutil.copymode", "shutil.copystat",
-        "subprocess.Popen", "os.system", "os.startfile",
-        "socket.connect", "socket.connect_ex", "socket.bind",
         "winreg.CreateKey", "winreg.DeleteKey", "winreg.DeleteValue",
         "winreg.SaveKey", "winreg.SetValue", "winreg.SetValueEx",
     })
@@ -59,7 +57,7 @@ if not getattr(_prometheus_plan_sys, "_prometheus_plan_policy_installed", False)
                 blocked = _prometheus_plan_is_write_open(args)
             if blocked:
                 raise PermissionError(
-                    f"Plan mode is read-only on Windows; blocked operation: {event}"
+                    f"Plan mode blocks file edits and creation on Windows; blocked operation: {event}"
                 )
 
         _prometheus_plan_sys.addaudithook(_prometheus_plan_audit)

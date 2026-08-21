@@ -60,7 +60,7 @@ describe("OAuthSelectorComponent", () => {
 		]);
 	});
 
-	it("sorts Prime Inference first within every login auth-state group", () => {
+	it("sorts Prometheus Inference first within every login auth-state group", () => {
 		const cases: Array<{ status: AuthStatus; configuredProviderLeads: boolean }> = [
 			{ status: { configured: true, source: "environment" }, configuredProviderLeads: false },
 			{ status: { configured: false, source: "stale", label: "expired" }, configuredProviderLeads: true },
@@ -73,7 +73,7 @@ describe("OAuthSelectorComponent", () => {
 				AuthStorage.inMemory(),
 				[
 					{ id: "anthropic", name: "Anthropic", authType: "api_key" },
-					{ id: PRIME_INFERENCE_PROVIDER_ID, name: "Prime Inference", authType: "api_key" },
+					{ id: PRIME_INFERENCE_PROVIDER_ID, name: "Prometheus Inference", authType: "api_key" },
 					{ id: "openai", name: "OpenAI", authType: "api_key" },
 				],
 				() => {},
@@ -83,7 +83,7 @@ describe("OAuthSelectorComponent", () => {
 			);
 
 			const output = stripAnsi(selector.render(120).join("\n"));
-			const primeIndex = output.indexOf("Prime Inference");
+			const primeIndex = output.indexOf("Prometheus Inference");
 			const anthropicIndex = output.indexOf("Anthropic");
 			const openAiIndex = output.indexOf("OpenAI");
 
@@ -248,7 +248,7 @@ describe("OAuthSelectorComponent", () => {
 			[
 				{ id: "github-copilot", name: "GitHub Copilot", authType: "oauth" },
 				{ id: "amazon-bedrock", name: "Amazon Bedrock", authType: "api_key" },
-				{ id: "prime-inference", name: "Prime Inference", authType: "api_key" },
+				{ id: "prime-inference", name: "Prometheus Inference", authType: "api_key" },
 				{ id: "openai", name: "OpenAI", authType: "api_key" },
 			],
 			() => {},
@@ -257,9 +257,9 @@ describe("OAuthSelectorComponent", () => {
 
 		const output = stripAnsi(selector.render(120).join("\n"));
 
-		expect(output.indexOf("OpenAI")).toBeLessThan(output.indexOf("Prime Inference"));
-		expect(output.indexOf("Prime Inference")).toBeLessThan(output.indexOf("GitHub Copilot"));
-		expect(output.indexOf("Prime Inference")).toBeLessThan(output.indexOf("Amazon Bedrock"));
+		expect(output.indexOf("OpenAI")).toBeLessThan(output.indexOf("Prometheus Inference"));
+		expect(output.indexOf("Prometheus Inference")).toBeLessThan(output.indexOf("GitHub Copilot"));
+		expect(output.indexOf("Prometheus Inference")).toBeLessThan(output.indexOf("Amazon Bedrock"));
 		expect(output).toContain("expired");
 	});
 

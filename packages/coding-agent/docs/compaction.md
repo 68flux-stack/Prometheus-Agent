@@ -29,10 +29,10 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens >= contextWindow * (thresholdPercent / 100)
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.prometheus/agent/settings.json` or `<project-dir>/.prometheus/agent/settings.json`). This leaves room for the LLM's response.
+By default, `thresholdPercent` is 75. Set it in `~/.prometheus/agent/settings.json` or `<project-dir>/.prometheus/agent/settings.json`. `reserveTokens` still controls the token budget for the compaction summary response.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary — for example `/compact focus on the auth refactor, remember the exact migration command`. The instructions are passed to the summarization prompt with high priority, persisted on the `CompactionEntry`, and shown on the `[compaction]` message in the TUI.
 
@@ -380,6 +380,7 @@ Configure compaction in `~/.prometheus/agent/settings.json` or `<project-dir>/.p
 {
   "compaction": {
     "enabled": true,
+    "thresholdPercent": 75,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   }
@@ -389,7 +390,8 @@ Configure compaction in `~/.prometheus/agent/settings.json` or `<project-dir>/.p
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
+| `thresholdPercent` | `75` | Compact when context reaches this percentage of the model window |
+| `reserveTokens` | `16384` | Tokens to reserve for the compaction summary response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.

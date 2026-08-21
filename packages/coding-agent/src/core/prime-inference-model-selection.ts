@@ -7,16 +7,16 @@ type ProviderLoginResult =
 	| { status: "success"; providerId: string; kind?: "provider" | "service" }
 	| { status: "cancelled" | "failed" };
 
-export interface PrimeInferencePostLoginModelAction {
+export interface PrometheusInferencePostLoginModelAction {
 	openModelPicker: boolean;
 	fallbackModel?: Model<Api>;
 }
 
-export function resolvePrimeInferencePostLoginModelAction(
+export function resolvePrometheusInferencePostLoginModelAction(
 	authResult: ProviderLoginResult,
 	currentModel: Model<Api> | undefined,
 	modelRegistry: Pick<ModelRegistry, "find">,
-): PrimeInferencePostLoginModelAction {
+): PrometheusInferencePostLoginModelAction {
 	if (
 		authResult.status !== "success" ||
 		authResult.kind === "service" ||

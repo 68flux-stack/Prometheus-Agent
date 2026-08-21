@@ -4,7 +4,7 @@ import { AuthStorage } from "../src/core/auth-storage.js";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { ModelSelectorComponent } from "../src/modes/interactive/components/model-selector.js";
 import { OAuthSelectorComponent } from "../src/modes/interactive/components/oauth-selector.js";
-import { PrimeTeamSelectorComponent } from "../src/modes/interactive/components/prime-team-selector.js";
+import { PrometheusTeamSelectorComponent } from "../src/modes/interactive/components/prime-team-selector.js";
 import { ScopedModelsSelectorComponent } from "../src/modes/interactive/components/scoped-models-selector.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 import { createHarness, type Harness } from "./suite/harness.js";
@@ -93,7 +93,7 @@ describe("searchable selector navigation", () => {
 
 	it("selects the first team after the search query changes", () => {
 		let selectedTeamId: string | undefined;
-		const selector = new PrimeTeamSelectorComponent(
+		const selector = new PrometheusTeamSelectorComponent(
 			Array.from({ length: 12 }, (_, index) => ({
 				teamId: `team-${index + 1}`,
 				name: `Team ${String(index + 1).padStart(2, "0")}`,

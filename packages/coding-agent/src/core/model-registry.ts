@@ -31,9 +31,9 @@ import { getAgentDir, VERSION } from "../config.js";
 import type { AuthSourceToken, AuthStatus, AuthStorage } from "./auth-storage.js";
 import { PRIME_INFERENCE_PROVIDER_ID } from "./prime-inference-auth.js";
 import {
-	fetchAuthorizedPrivatePrimeInferenceModelIds,
-	getPrivatePrimeInferenceModels,
-	isPrivatePrimeInferenceModel,
+	fetchAuthorizedPrivatePrometheusInferenceModelIds,
+	getPrivatePrometheusInferenceModels,
+	isPrivatePrometheusInferenceModel,
 } from "./prime-inference-models.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
@@ -405,13 +405,13 @@ const PRIVATE_PRIME_AUTHORIZATION_CACHE_FILE = "prime-inference-private-models.j
 const PRIVATE_PRIME_AUTHORIZATION_CACHE_TTL_MS = 5 * 60_000;
 const PRIVATE_PRIME_BACKGROUND_REFRESH_TIMEOUT_MS = 3_000;
 
-interface PrivatePrimeAuthorizationCache {
+interface PrivatePrometheusAuthorizationCache {
 	fingerprint: string;
 	modelIds: Set<string>;
 	refreshedAt: number;
 }
 
-function privatePrimeAuthorizationFingerprint(apiKey: string, teamId: string): string {
+function privatePrometheusAuthorizationFingerprint(apiKey: string, teamId: string): string {
 	return createHash("sha256").update(apiKey).update("\0").update(teamId).digest("hex");
 }
 
@@ -431,11 +431,11 @@ export class ModelRegistry {
 	private lastProviderAuthSourceTokens: Map<string, AuthSourceToken> = new Map();
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
-	private authorizedPrivatePrimeInferenceModelIds = new Set<string>();
-	private authorizedPrivatePrimeInferenceTeamId: string | undefined;
-	private explicitPrivatePrimeInferenceModelIds = new Set<string>();
+	private authorizedPrivatePrometheusInferenceModelIds = new Set<string>();
+	private authorizedPrivatePrometheusInferenceTeamId: string | undefined;
+	private explicitPrivatePrometheusInferenceModelIds = new Set<string>();
 	private openAICodexModelsCache: { authFingerprint: string; modelIds: Set<string>; refreshedAt: number } | undefined;
-	private backgroundPrivatePrimeAuthorization: { fingerprint: string; promise: Promise<void> } | undefined;
+	private backgroundPrivatePrometheusAuthorization: { fingerprint: string; promise: Promise<void> } | undefined;
 	private inFlightRefreshAvailableModels: Promise<Model<Api>[]> | undefined;
 	private loadError: string | undefined = undefined;
 
@@ -468,9 +468,9 @@ export class ModelRegistry {
 		this.providerRequestConfigs.clear();
 		this.modelRequestHeaders.clear();
 		this.lastProviderAuthSourceTokens.clear();
-		this.authorizedPrivatePrimeInferenceModelIds.clear();
-		this.authorizedPrivatePrimeInferenceTeamId = undefined;
-		this.explicitPrivatePrimeInferenceModelIds.clear();
+		this.authorizedPrivatePrometheusInferenceModelIds.clear();
+		this.authorizedPrivatePrometheusInferenceTeamId = undefined;
+		this.explicitPrivatePrometheusInferenceModelIds.clear();
 		this.loadError = undefined;
 
 		// Credentials may have been written by another process (e.g. the UI
@@ -518,10 +518,13 @@ export class ModelRegistry {
 			// Keep built-in models even if custom models failed to load
 		}
 
-		this.explicitPrivatePrimeInferenceModelIds = new Set(
-			customModels.filter(isPrivatePrimeInferenceModel).map((model) => model.id),
+		this.explicitPrivatePrometheusInferenceModelIds = new Set(
+			customModels.filter(isPrivatePrometheusInferenceModel).map((model) => model.id),
 		);
-		const builtInModels = [...this.loadBuiltInModels(overrides, modelOverrides), ...getPrivatePrimeInferenceModels()];
+		const builtInModels = [
+			...this.loadBuiltInModels(overrides, modelOverrides),
+			...getPrivatePrometheusInferenceModels(),
+		];
 		let combined = this.mergeCustomModels(builtInModels, customModels);
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
@@ -769,9 +772,9 @@ export class ModelRegistry {
 	getAvailable(): Model<Api>[] {
 		return this.models.filter((model) => {
 			if (
-				isPrivatePrimeInferenceModel(model) &&
-				!this.explicitPrivatePrimeInferenceModelIds.has(model.id) &&
-				!this.authorizedPrivatePrimeInferenceModelIds.has(model.id)
+				isPrivatePrometheusInferenceModel(model) &&
+				!this.explicitPrivatePrometheusInferenceModelIds.has(model.id) &&
+				!this.authorizedPrivatePrometheusInferenceModelIds.has(model.id)
 			) {
 				return false;
 			}
@@ -793,67 +796,71 @@ export class ModelRegistry {
 	}
 
 	private async refreshAvailableModelsInternal(): Promise<Model<Api>[]> {
-		const previousPrivateModelIds = new Set(this.authorizedPrivatePrimeInferenceModelIds);
-		const previousTeamId = this.authorizedPrivatePrimeInferenceTeamId;
+		const previousPrivateModelIds = new Set(this.authorizedPrivatePrometheusInferenceModelIds);
+		const previousTeamId = this.authorizedPrivatePrometheusInferenceTeamId;
 		this.refresh();
-		await this.refreshPrivatePrimeInferenceAuthorization(previousPrivateModelIds, previousTeamId);
+		await this.refreshPrivatePrometheusInferenceAuthorization(previousPrivateModelIds, previousTeamId);
 		return this.getAvailable();
 	}
 
-	private async refreshPrivatePrimeInferenceAuthorization(
-		previousPrivateModelIds = new Set(this.authorizedPrivatePrimeInferenceModelIds),
-		previousTeamId = this.authorizedPrivatePrimeInferenceTeamId,
+	private async refreshPrivatePrometheusInferenceAuthorization(
+		previousPrivateModelIds = new Set(this.authorizedPrivatePrometheusInferenceModelIds),
+		previousTeamId = this.authorizedPrivatePrometheusInferenceTeamId,
 	): Promise<void> {
 		const apiKey = await this.authStorage.getApiKey(PRIME_INFERENCE_PROVIDER_ID);
 		const teamHeaders = this.authStorage.getProviderHeaders(PRIME_INFERENCE_PROVIDER_ID);
-		const teamId = teamHeaders?.["X-Prime-Team-ID"];
+		const teamId = teamHeaders?.["X-Prometheus-Team-ID"];
 		if (!apiKey || !teamHeaders || !teamId) {
-			this.authorizedPrivatePrimeInferenceModelIds.clear();
-			this.authorizedPrivatePrimeInferenceTeamId = undefined;
+			this.authorizedPrivatePrometheusInferenceModelIds.clear();
+			this.authorizedPrivatePrometheusInferenceTeamId = undefined;
 			return;
 		}
 
-		const fingerprint = privatePrimeAuthorizationFingerprint(apiKey, teamId);
-		const cached = this.readPrivatePrimeAuthorizationCache();
+		const fingerprint = privatePrometheusAuthorizationFingerprint(apiKey, teamId);
+		const cached = this.readPrivatePrometheusAuthorizationCache();
 		if (cached?.fingerprint === fingerprint) {
 			// Serve the persisted authorization decision so startup and model lists
 			// don't block on the network. A stale cache refreshes in the background
 			// and the updated ids apply to subsequent lookups in this process.
-			this.authorizedPrivatePrimeInferenceModelIds = new Set(cached.modelIds);
-			this.authorizedPrivatePrimeInferenceTeamId = teamId;
+			this.authorizedPrivatePrometheusInferenceModelIds = new Set(cached.modelIds);
+			this.authorizedPrivatePrometheusInferenceTeamId = teamId;
 			const cacheIsFresh = Date.now() - cached.refreshedAt < PRIVATE_PRIME_AUTHORIZATION_CACHE_TTL_MS;
 			if (cacheIsFresh || isOfflineModeEnabled()) {
 				return;
 			}
-			this.startBackgroundPrivatePrimeAuthorizationRefresh(apiKey, teamHeaders, teamId, fingerprint);
+			this.startBackgroundPrivatePrometheusAuthorizationRefresh(apiKey, teamHeaders, teamId, fingerprint);
 			return;
 		}
 		if (isOfflineModeEnabled()) {
-			this.authorizedPrivatePrimeInferenceModelIds.clear();
-			this.authorizedPrivatePrimeInferenceTeamId = undefined;
+			this.authorizedPrivatePrometheusInferenceModelIds.clear();
+			this.authorizedPrivatePrometheusInferenceTeamId = undefined;
 			return;
 		}
 
 		let authorizedIds: Set<string> | undefined;
 		try {
-			authorizedIds = await fetchAuthorizedPrivatePrimeInferenceModelIds(apiKey, teamHeaders);
+			authorizedIds = await fetchAuthorizedPrivatePrometheusInferenceModelIds(apiKey, teamHeaders);
 		} catch {
 			// Fall back to the previous authorization below.
 		}
 		// Leave newer state untouched if the credentials changed while fetching.
-		if ((await this.currentPrivatePrimeAuthorizationFingerprint()) !== fingerprint) {
+		if ((await this.currentPrivatePrometheusAuthorizationFingerprint()) !== fingerprint) {
 			return;
 		}
 		if (authorizedIds) {
-			this.authorizedPrivatePrimeInferenceModelIds = authorizedIds;
-			this.authorizedPrivatePrimeInferenceTeamId = teamId;
-			this.writePrivatePrimeAuthorizationCache({ fingerprint, modelIds: authorizedIds, refreshedAt: Date.now() });
+			this.authorizedPrivatePrometheusInferenceModelIds = authorizedIds;
+			this.authorizedPrivatePrometheusInferenceTeamId = teamId;
+			this.writePrivatePrometheusAuthorizationCache({
+				fingerprint,
+				modelIds: authorizedIds,
+				refreshedAt: Date.now(),
+			});
 		} else if (teamId === previousTeamId) {
-			this.authorizedPrivatePrimeInferenceModelIds = previousPrivateModelIds;
-			this.authorizedPrivatePrimeInferenceTeamId = teamId;
+			this.authorizedPrivatePrometheusInferenceModelIds = previousPrivateModelIds;
+			this.authorizedPrivatePrometheusInferenceTeamId = teamId;
 		} else {
-			this.authorizedPrivatePrimeInferenceModelIds.clear();
-			this.authorizedPrivatePrimeInferenceTeamId = undefined;
+			this.authorizedPrivatePrometheusInferenceModelIds.clear();
+			this.authorizedPrivatePrometheusInferenceTeamId = undefined;
 		}
 	}
 
@@ -863,64 +870,68 @@ export class ModelRegistry {
 	 * refresh is queued after the in-flight one, and a result is only applied
 	 * if the credentials it was fetched with are still current.
 	 */
-	private startBackgroundPrivatePrimeAuthorizationRefresh(
+	private startBackgroundPrivatePrometheusAuthorizationRefresh(
 		apiKey: string,
 		teamHeaders: Record<string, string>,
 		teamId: string,
 		fingerprint: string,
 	): void {
-		if (this.backgroundPrivatePrimeAuthorization?.fingerprint === fingerprint) {
+		if (this.backgroundPrivatePrometheusAuthorization?.fingerprint === fingerprint) {
 			return;
 		}
 		const run = async () => {
 			try {
-				const authorizedIds = await fetchAuthorizedPrivatePrimeInferenceModelIds(
+				const authorizedIds = await fetchAuthorizedPrivatePrometheusInferenceModelIds(
 					apiKey,
 					teamHeaders,
 					undefined,
 					PRIVATE_PRIME_BACKGROUND_REFRESH_TIMEOUT_MS,
 				);
-				if ((await this.currentPrivatePrimeAuthorizationFingerprint()) !== fingerprint) {
+				if ((await this.currentPrivatePrometheusAuthorizationFingerprint()) !== fingerprint) {
 					return;
 				}
-				this.authorizedPrivatePrimeInferenceModelIds = authorizedIds;
-				this.authorizedPrivatePrimeInferenceTeamId = teamId;
-				this.writePrivatePrimeAuthorizationCache({ fingerprint, modelIds: authorizedIds, refreshedAt: Date.now() });
+				this.authorizedPrivatePrometheusInferenceModelIds = authorizedIds;
+				this.authorizedPrivatePrometheusInferenceTeamId = teamId;
+				this.writePrivatePrometheusAuthorizationCache({
+					fingerprint,
+					modelIds: authorizedIds,
+					refreshedAt: Date.now(),
+				});
 			} catch {
 				// Keep the cached ids.
 			}
 		};
-		const pending = this.backgroundPrivatePrimeAuthorization?.promise;
+		const pending = this.backgroundPrivatePrometheusAuthorization?.promise;
 		const promise = (pending ?? Promise.resolve()).then(run);
-		this.backgroundPrivatePrimeAuthorization = { fingerprint, promise };
+		this.backgroundPrivatePrometheusAuthorization = { fingerprint, promise };
 		void promise.finally(() => {
-			if (this.backgroundPrivatePrimeAuthorization?.promise === promise) {
-				this.backgroundPrivatePrimeAuthorization = undefined;
+			if (this.backgroundPrivatePrometheusAuthorization?.promise === promise) {
+				this.backgroundPrivatePrometheusAuthorization = undefined;
 			}
 		});
 	}
 
-	private async currentPrivatePrimeAuthorizationFingerprint(): Promise<string | undefined> {
+	private async currentPrivatePrometheusAuthorizationFingerprint(): Promise<string | undefined> {
 		const apiKey = await this.authStorage.getApiKey(PRIME_INFERENCE_PROVIDER_ID);
-		const teamId = this.authStorage.getProviderHeaders(PRIME_INFERENCE_PROVIDER_ID)?.["X-Prime-Team-ID"];
-		return apiKey && teamId ? privatePrimeAuthorizationFingerprint(apiKey, teamId) : undefined;
+		const teamId = this.authStorage.getProviderHeaders(PRIME_INFERENCE_PROVIDER_ID)?.["X-Prometheus-Team-ID"];
+		return apiKey && teamId ? privatePrometheusAuthorizationFingerprint(apiKey, teamId) : undefined;
 	}
 
-	private privatePrimeAuthorizationCachePath(): string | undefined {
+	private privatePrometheusAuthorizationCachePath(): string | undefined {
 		if (!this.modelsJsonPath) {
 			return undefined;
 		}
 		return join(dirname(this.modelsJsonPath), PRIVATE_PRIME_AUTHORIZATION_CACHE_FILE);
 	}
 
-	private readPrivatePrimeAuthorizationCache(): PrivatePrimeAuthorizationCache | undefined {
-		const cachePath = this.privatePrimeAuthorizationCachePath();
+	private readPrivatePrometheusAuthorizationCache(): PrivatePrometheusAuthorizationCache | undefined {
+		const cachePath = this.privatePrometheusAuthorizationCachePath();
 		if (!cachePath) {
 			return undefined;
 		}
 		try {
 			const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as Partial<
-				Omit<PrivatePrimeAuthorizationCache, "modelIds"> & { modelIds: string[] }
+				Omit<PrivatePrometheusAuthorizationCache, "modelIds"> & { modelIds: string[] }
 			>;
 			if (
 				typeof parsed.fingerprint !== "string" ||
@@ -939,8 +950,8 @@ export class ModelRegistry {
 		}
 	}
 
-	private writePrivatePrimeAuthorizationCache(cache: PrivatePrimeAuthorizationCache): void {
-		const cachePath = this.privatePrimeAuthorizationCachePath();
+	private writePrivatePrometheusAuthorizationCache(cache: PrivatePrometheusAuthorizationCache): void {
+		const cachePath = this.privatePrometheusAuthorizationCachePath();
 		if (!cachePath) {
 			return;
 		}
@@ -956,12 +967,12 @@ export class ModelRegistry {
 	async refreshModelCatalog(): Promise<ModelCatalogSnapshot> {
 		const availableModels = await this.refreshAvailableModels();
 		const availablePrivateModels = new Set(
-			availableModels.filter(isPrivatePrimeInferenceModel).map((model) => `${model.provider}/${model.id}`),
+			availableModels.filter(isPrivatePrometheusInferenceModel).map((model) => `${model.provider}/${model.id}`),
 		);
 		return {
 			models: this.models.filter(
 				(model) =>
-					!isPrivatePrimeInferenceModel(model) || availablePrivateModels.has(`${model.provider}/${model.id}`),
+					!isPrivatePrometheusInferenceModel(model) || availablePrivateModels.has(`${model.provider}/${model.id}`),
 			),
 			configuredProviders: [...new Set(availableModels.map((model) => model.provider))],
 		};
@@ -971,7 +982,7 @@ export class ModelRegistry {
 		if (!this.hasConfiguredAuth(model)) {
 			return false;
 		}
-		if (!isPrivatePrimeInferenceModel(model)) {
+		if (!isPrivatePrometheusInferenceModel(model)) {
 			return true;
 		}
 
@@ -980,7 +991,7 @@ export class ModelRegistry {
 	}
 
 	async getExecutableModels(): Promise<Model<Api>[]> {
-		await this.refreshPrivatePrimeInferenceAuthorization();
+		await this.refreshPrivatePrometheusInferenceAuthorization();
 		const availableModels = this.getAvailable();
 		const codexModels = availableModels.filter((model) => model.provider === "openai-codex");
 		if (codexModels.length === 0) {

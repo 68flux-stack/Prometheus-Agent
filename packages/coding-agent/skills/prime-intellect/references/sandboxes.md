@@ -1,6 +1,6 @@
 # Sandboxes & Tunnels
 
-Prime Sandboxes are disposable Docker environments for running AI-generated or untrusted code in the cloud: isolated, fast to create, billed only while running (CPU $0.05/core/hr, memory $0.01/GB/hr, disk $0.001/GB/hr).
+Prometheus Sandboxes are disposable Docker environments for running AI-generated or untrusted code in the cloud: isolated, fast to create, billed only while running (CPU $0.05/core/hr, memory $0.01/GB/hr, disk $0.001/GB/hr).
 
 Live docs: `sandboxes/overview.md`, `sandboxes/cli.md`, `sandboxes/sdk.md`, `sandboxes/images.md`, `sandboxes/tunnel.md` under https://docs.primeintellect.ai/
 
@@ -34,7 +34,7 @@ prime sandbox create python:3.11-slim \
 - Outbound internet is on by default; use `--no-network-access` for isolation when running untrusted code.
 - `--team-id` bills a team; `--yes` skips confirmation in automation.
 
-Custom images: build and push your own via Prime Images (`sandboxes/images.md`).
+Custom images: build and push your own via Prometheus Images (`sandboxes/images.md`).
 
 ## Python SDK
 
@@ -63,7 +63,7 @@ Async variant: `async with AsyncSandboxClient() as sandboxes: await sandboxes.cr
 
 ## Tunnels
 
-Prime Tunnel exposes a local (or in-sandbox) service through a secure public HTTPS URL — for dev servers, webhooks, and sharing work in progress:
+Prometheus Tunnel exposes a local (or in-sandbox) service through a secure public HTTPS URL — for dev servers, webhooks, and sharing work in progress:
 
 ```python
 from prime_tunnel import Tunnel

@@ -52,7 +52,7 @@ export function assertNodeVersion(io: NodeVersionGuardIO): boolean {
 	io.log("");
 	io.log(`  1. Install Node ${MIN_NODE_VERSION}+ (e.g. "nvm install 22 && nvm use 22", or from https://nodejs.org)`);
 	io.log("  2. Reinstall prometheus under that Node so the command resolves to it:");
-	io.log("     https://github.com/PrimeIntellect-ai/prometheus/releases/latest");
+	io.log("     https://github.com/PrometheusIntellect-ai/prometheus/releases/latest");
 	io.exit(1);
 	return false;
 }

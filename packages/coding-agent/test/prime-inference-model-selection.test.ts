@@ -1,6 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
-import { resolvePrimeInferencePostLoginModelAction } from "../src/core/prime-inference-model-selection.js";
+import { resolvePrometheusInferencePostLoginModelAction } from "../src/core/prime-inference-model-selection.js";
 
 const glmModel: Model<"openai-completions"> = {
 	id: "z-ai/glm-5.2",
@@ -20,9 +20,9 @@ const registry = {
 		provider === glmModel.provider && modelId === glmModel.id ? glmModel : undefined,
 };
 
-describe("Prime Inference post-login model selection", () => {
+describe("Prometheus Inference post-login model selection", () => {
 	test("selects GLM 5.2 as a fallback and opens the model picker", () => {
-		const action = resolvePrimeInferencePostLoginModelAction(
+		const action = resolvePrometheusInferencePostLoginModelAction(
 			{
 				status: "success",
 				providerId: "prime-inference",
@@ -37,7 +37,7 @@ describe("Prime Inference post-login model selection", () => {
 
 	test("keeps an existing model while still opening the model picker", () => {
 		const currentModel = { ...glmModel, id: "openai/gpt-5.5", name: "GPT-5.5" };
-		const action = resolvePrimeInferencePostLoginModelAction(
+		const action = resolvePrometheusInferencePostLoginModelAction(
 			{
 				status: "success",
 				providerId: "prime-inference",
@@ -51,7 +51,7 @@ describe("Prime Inference post-login model selection", () => {
 	});
 
 	test("does nothing after another provider login", () => {
-		const action = resolvePrimeInferencePostLoginModelAction(
+		const action = resolvePrometheusInferencePostLoginModelAction(
 			{
 				status: "success",
 				providerId: "anthropic",
@@ -65,7 +65,7 @@ describe("Prime Inference post-login model selection", () => {
 	});
 
 	test("does nothing when login is cancelled", () => {
-		const action = resolvePrimeInferencePostLoginModelAction({ status: "cancelled" }, undefined, registry);
+		const action = resolvePrometheusInferencePostLoginModelAction({ status: "cancelled" }, undefined, registry);
 
 		expect(action).toEqual({ openModelPicker: false });
 	});

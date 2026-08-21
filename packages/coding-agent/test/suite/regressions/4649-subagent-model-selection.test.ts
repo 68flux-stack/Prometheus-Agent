@@ -110,7 +110,7 @@ describe("ENG-4649 subagent model selection", () => {
 		}
 	});
 
-	it("includes private Prime models authorized for the selected team", async () => {
+	it("includes private Prometheus models authorized for the selected team", async () => {
 		const harness = await createHarness({ provider, models: [{ id: "parent-model" }] });
 		const fetchModels = vi.fn(
 			async () =>
@@ -124,7 +124,7 @@ describe("ENG-4649 subagent model selection", () => {
 			harness.authStorage.set("prime-inference", {
 				type: "api_key",
 				key: "prime-key",
-				primeTeam: { teamId: "engineering-team", name: "Prime Engineering" },
+				primeTeam: { teamId: "engineering-team", name: "Prometheus Engineering" },
 			});
 
 			const discovered = await harness.session.findRlmModels("glm 5.2", 8);

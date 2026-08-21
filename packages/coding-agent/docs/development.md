@@ -7,7 +7,7 @@ See the repository [AGENTS.md](../../../AGENTS.md) for the current contribution 
 Prometheus requires Node.js 22.8.0 or newer.
 
 ```bash
-git clone https://github.com/PrimeIntellect-ai/prometheus
+git clone https://github.com/PrometheusIntellect-ai/prometheus
 cd prometheus
 npm ci
 ```
@@ -22,7 +22,7 @@ The script can be called from any directory and preserves the caller's working d
 
 ## Product and Source Names
 
-Prime Agent is the product, public CLI, release artifact, and repository name. The monorepo still retains inherited `@earendil-works/pi-*` npm workspace names, a source-package `pi` bin entry, the `pi` package manifest key, and some `PI_*` compatibility environment variables. These names are source and compatibility details, not a signal that contributors should install or develop against pi-mono.
+Prometheus Agent is the product, public CLI, release artifact, and repository name. The monorepo still retains inherited `@earendil-works/pi-*` npm workspace names, a source-package `pi` bin entry, the `pi` package manifest key, and some `PI_*` compatibility environment variables. These names are source and compatibility details, not a signal that contributors should install or develop against pi-mono.
 
 Public releases are currently versioned tarball artifacts installed by the stable and beta installer scripts. `scripts/pack-prometheus-release.mjs` rewrites the coding-agent package name, executable, config metadata, and internal dependency URLs for that distribution. Do not document the inherited npm workspace package as the public Prometheus install path.
 

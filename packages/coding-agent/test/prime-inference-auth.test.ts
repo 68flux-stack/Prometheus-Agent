@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	checkPrimeInferenceAccess,
+	checkPrometheusInferenceAccess,
 	checkPrometheusTracesAccess,
-	fetchPrimeTeams,
-	loadPrimeCliConfig,
-	loginPrimeInference,
+	fetchPrometheusTeams,
+	loadPrometheusCliConfig,
+	loginPrometheusInference,
 	loginPrometheusTraces,
 } from "../src/core/prime-inference-auth.js";
 
@@ -62,7 +62,7 @@ function encryptChallengeResult(publicKey: string, value: string): string {
 	).toString("base64");
 }
 
-describe("Prime Inference auth", () => {
+describe("Prometheus Inference auth", () => {
 	let tempDir: string;
 	let configPath: string;
 	let originalTraceBaseUrl: string | undefined;
@@ -87,7 +87,7 @@ describe("Prime Inference auth", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("loads Prime CLI config with defaults", () => {
+	it("loads Prometheus CLI config with defaults", () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -97,7 +97,7 @@ describe("Prime Inference auth", () => {
 			}),
 		);
 
-		expect(loadPrimeCliConfig(configPath)).toEqual({
+		expect(loadPrometheusCliConfig(configPath)).toEqual({
 			apiKey: "prime-key",
 			baseUrl: "https://prime-api.example",
 			frontendUrl: "https://prime-app.example",
@@ -107,7 +107,7 @@ describe("Prime Inference auth", () => {
 		});
 	});
 
-	it("loads Prime CLI team selection", () => {
+	it("loads Prometheus CLI team selection", () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -118,7 +118,7 @@ describe("Prime Inference auth", () => {
 			}),
 		);
 
-		expect(loadPrimeCliConfig(configPath)).toMatchObject({
+		expect(loadPrometheusCliConfig(configPath)).toMatchObject({
 			apiKey: "prime-key",
 			teamId: "team-1",
 			teamName: "Research",
@@ -127,7 +127,7 @@ describe("Prime Inference auth", () => {
 		});
 	});
 
-	it("lets PRIME_TEAM_ID override Prime CLI team selection", () => {
+	it("lets PRIME_TEAM_ID override Prometheus CLI team selection", () => {
 		const originalTeamId = process.env.PRIME_TEAM_ID;
 		process.env.PRIME_TEAM_ID = "env-team";
 		writeFileSync(
@@ -140,11 +140,11 @@ describe("Prime Inference auth", () => {
 		);
 
 		try {
-			expect(loadPrimeCliConfig(configPath)).toMatchObject({
+			expect(loadPrometheusCliConfig(configPath)).toMatchObject({
 				teamId: "env-team",
 				teamIdFromEnv: true,
 			});
-			expect(loadPrimeCliConfig(configPath).teamName).toBeUndefined();
+			expect(loadPrometheusCliConfig(configPath).teamName).toBeUndefined();
 		} finally {
 			if (originalTeamId === undefined) {
 				delete process.env.PRIME_TEAM_ID;
@@ -154,7 +154,7 @@ describe("Prime Inference auth", () => {
 		}
 	});
 
-	it("fetches Prime teams across paginated responses", async () => {
+	it("fetches Prometheus teams across paginated responses", async () => {
 		const requestedUrls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			requestedUrls.push(getUrl(input));
@@ -172,7 +172,7 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			fetchPrimeTeams("prime-key", "https://prime-api.example/api/v1", { fetchFn: fetchMock }),
+			fetchPrometheusTeams("prime-key", "https://prime-api.example/api/v1", { fetchFn: fetchMock }),
 		).resolves.toEqual([
 			{ teamId: "team-1", name: "Research", slug: "research", role: "admin" },
 			{ teamId: "team-2", name: "Infra", slug: "infra", role: "member" },
@@ -183,7 +183,7 @@ describe("Prime Inference auth", () => {
 		]);
 	});
 
-	it("checks Prime Inference access with Prime whoami permissions", async () => {
+	it("checks Prometheus Inference access with Prometheus whoami permissions", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://prime-api.example/api/v1/user/whoami");
 			expect(init?.method).toBe("GET");
@@ -192,12 +192,12 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			checkPrimeInferenceAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
+			checkPrometheusInferenceAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
 		).resolves.toEqual({ ok: true });
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("checks Prometheus trace access with Prime whoami permissions", async () => {
+	it("checks Prometheus trace access with Prometheus whoami permissions", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://prime-api.example/api/v1/user/whoami");
 			expect(init?.method).toBe("GET");
@@ -211,7 +211,7 @@ describe("Prime Inference auth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("validates imported Prime CLI trace credentials against the production trace API by default", async () => {
+	it("validates imported Prometheus CLI trace credentials against the production trace API by default", async () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -236,7 +236,7 @@ describe("Prime Inference auth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("validates imported Prime CLI trace credentials against PROMETHEUS_TRACES_BASE_URL", async () => {
+	it("validates imported Prometheus CLI trace credentials against PROMETHEUS_TRACES_BASE_URL", async () => {
 		process.env.PROMETHEUS_TRACES_BASE_URL = "https://trace-api.example/api/v1";
 		writeFileSync(
 			configPath,
@@ -262,7 +262,7 @@ describe("Prime Inference auth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("throws contextual errors for invalid Prime whoami JSON", async () => {
+	it("throws contextual errors for invalid Prometheus whoami JSON", async () => {
 		const fetchMock = vi.fn(async (): Promise<Response> => {
 			return new Response("not json", {
 				status: 200,
@@ -271,11 +271,11 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			checkPrimeInferenceAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
-		).rejects.toThrow("Prime whoami returned an invalid response");
+			checkPrometheusInferenceAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
+		).rejects.toThrow("Prometheus whoami returned an invalid response");
 	});
 
-	it("imports a valid Prime CLI key", async () => {
+	it("imports a valid Prometheus CLI key", async () => {
 		writeFileSync(configPath, JSON.stringify({ api_key: "prime-cli-key" }));
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://api.primeintellect.ai/api/v1/user/whoami");
@@ -284,14 +284,17 @@ describe("Prime Inference auth", () => {
 		});
 		const onAuth = vi.fn();
 
-		const result = await loginPrimeInference({ onAuth }, { configPath, fetchFn: fetchMock, requestTimeoutMs: 1000 });
+		const result = await loginPrometheusInference(
+			{ onAuth },
+			{ configPath, fetchFn: fetchMock, requestTimeoutMs: 1000 },
+		);
 
 		expect(result).toEqual({ apiKey: "prime-cli-key", source: "prime-cli" });
 		expect(onAuth).not.toHaveBeenCalled();
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("honors cancellation before returning an imported Prime CLI key", async () => {
+	it("honors cancellation before returning an imported Prometheus CLI key", async () => {
 		writeFileSync(configPath, JSON.stringify({ api_key: "prime-cli-key" }));
 		const controller = new AbortController();
 		const fetchMock = vi.fn(async (): Promise<Response> => {
@@ -304,7 +307,7 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			loginPrimeInference(
+			loginPrometheusInference(
 				{
 					onAuth: () => {},
 					signal: controller.signal,
@@ -314,7 +317,7 @@ describe("Prime Inference auth", () => {
 		).rejects.toThrow("Login cancelled");
 	});
 
-	it("falls back to browser login when the Prime CLI key cannot access inference", async () => {
+	it("falls back to browser login when the Prometheus CLI key cannot access inference", async () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -349,7 +352,7 @@ describe("Prime Inference auth", () => {
 		const onAuth = vi.fn();
 		const progress: string[] = [];
 
-		const result = await loginPrimeInference(
+		const result = await loginPrometheusInference(
 			{
 				onAuth,
 				onProgress: (message) => progress.push(message),
@@ -362,7 +365,7 @@ describe("Prime Inference auth", () => {
 			url: "https://prime-app.example/dashboard/tokens/challenge?code=challenge-code",
 			instructions: "Code: challenge-code",
 		});
-		expect(progress.join("\n")).toContain("Existing Prime CLI key cannot access Prime Inference");
+		expect(progress.join("\n")).toContain("Existing Prometheus CLI key cannot access Prometheus Inference");
 	});
 
 	it("requests agent trace scope during Prometheus trace browser login", async () => {
@@ -421,7 +424,7 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			loginPrimeInference({ onAuth: () => {} }, { configPath, fetchFn: fetchMock, pollIntervalMs: 0 }),
-		).rejects.toThrow("Prime login challenge expired");
+			loginPrometheusInference({ onAuth: () => {} }, { configPath, fetchFn: fetchMock, pollIntervalMs: 0 }),
+		).rejects.toThrow("Prometheus login challenge expired");
 	});
 });

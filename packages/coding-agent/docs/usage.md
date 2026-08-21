@@ -149,7 +149,7 @@ Append to the default prompt without replacing it with `APPEND_SYSTEM.md` in eit
 
 ### Output Styles
 
-Output styles are named, reusable behavioral presets, like Claude Code's output styles. Prometheus ships with a built-in `ELI5` style and seeds `~/.prometheus/agent/output-styles/` with it the first time the agent runs, so it's ready to use without any setup. Select a style from `/settings` → Output style, or set it directly in `settings.json` with `"outputStyle": "ELI5"`. The built-in `"default"` value (or leaving `outputStyle` unset) adds nothing extra.
+Output styles are named, reusable behavioral presets, like Claude Code's output styles. Prometheus ships with a built-in `ELI5` style and seeds `~/.prometheus/agent/output-styles/` with it the first time the agent runs, so it's ready to use without any setup. Select a style from `/settings` → Output style, or set it directly in `settings.json` with `"outputStyle": "ELI5"`. The built-in `"none"` value disables extra style instructions. Leaving `outputStyle` unset uses `ELI5`.
 
 Add your own styles by putting one `.md` file per style in `~/.prometheus/agent/output-styles/` (e.g. `concise.md`). A custom style with the same name as a bundled one wins, and the seeding step never overwrites a directory that already exists, so your edits and deletions stick.
 
@@ -377,8 +377,8 @@ prometheus --tools ipython -p "Review the code"
 | `PI_SKIP_VERSION_CHECK` | Skip the Prometheus version update check at startup. This prevents the release manifest request |
 | `PROMETHEUS_DOWNLOAD_BASE_URL` | Override the Prometheus release manifest and tarball base URL |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
-| `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing when it has `agent_traces` scope |
-| `PROMETHEUS_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
+| `PRIME_API_KEY` | Prometheus Inference API key; also used for trace sharing when it has `agent_traces` scope |
+| `PROMETHEUS_TRACES_API_KEY` | Prometheus API key used only for opt-in trace sharing |
 | `PROMETHEUS_TRACES_BASE_URL` | Override the Prometheus trace upload API base URL |
 | `PROMETHEUS_KERNEL_PYTHON` | Use an existing Python environment with `ipykernel` instead of bootstrapping `~/.prometheus/agent/kernel-venv` |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |

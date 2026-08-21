@@ -121,12 +121,15 @@ export const COMPACT_SKILL_NAME = "compact";
 
 export interface CompactionSettings {
 	enabled: boolean;
+	/** Context percentage at which automatic compaction starts. */
+	thresholdPercent: number;
 	reserveTokens: number;
 	keepRecentTokens: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
+	thresholdPercent: 75,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
 };
@@ -229,7 +232,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
 	if (contextWindow <= 0) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens >= contextWindow * (settings.thresholdPercent / 100);
 }
 
 // ============================================================================

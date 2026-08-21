@@ -91,6 +91,7 @@ import type {
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIQuestion,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
@@ -114,7 +115,7 @@ import { findExactModelReferenceMatch, resolveModelScopeFromModels } from "../..
 import { parseNewSessionCommand } from "../../core/new-session-command.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { resolvePrometheusTracesBaseUrl } from "../../core/prime-inference-auth.js";
-import { resolvePrimeInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
+import { resolvePrometheusInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
 import { parseCommandArgs } from "../../core/prompt-templates.js";
 import { getAvailableOutputStyles } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
@@ -207,6 +208,7 @@ import { InjectedPromptMessageComponent, isInjectedPromptMessage } from "./compo
 import { formatKeyText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.js";
 import type { AuthSelectorProvider } from "./components/oauth-selector.js";
 import { PrometheusOnboardingSplashComponent } from "./components/prometheus-onboarding-splash.js";
+import { QuestionComponent } from "./components/question.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { SideQuestionComponent } from "./components/side-question.js";
@@ -245,7 +247,7 @@ import {
 	isOnboardingModelReady,
 	type OnboardingStartupState,
 	shouldRunOnboarding,
-	shouldRunPrimeCliOnboardingSplash,
+	shouldRunPrometheusCliOnboardingSplash,
 } from "./onboarding.js";
 import type { ClientPromptStashStore, PromptStash, PromptStashState } from "./prompt-stash-state.js";
 import { formatResumeHint } from "./resume-hint.js";
@@ -1713,8 +1715,8 @@ export class InteractiveMode {
 		return shouldRunOnboarding(this.getOnboardingState());
 	}
 
-	private shouldRunPrimeCliOnboardingSplash(): boolean {
-		return shouldRunPrimeCliOnboardingSplash(this.getOnboardingState());
+	private shouldRunPrometheusCliOnboardingSplash(): boolean {
+		return shouldRunPrometheusCliOnboardingSplash(this.getOnboardingState());
 	}
 
 	private markOnboardingShown(): void {
@@ -1729,12 +1731,12 @@ export class InteractiveMode {
 		}
 
 		const startedAt = Date.now();
-		const showPrimeCliSplash = this.shouldRunPrimeCliOnboardingSplash();
+		const showPrometheusCliSplash = this.shouldRunPrometheusCliOnboardingSplash();
 		let outcome: TelemetryOnboardingOutcome = "aborted";
 		try {
 			this.markOnboardingShown();
 			await this.settingsManager.flush();
-			await this.runOnboardingFlow(showPrimeCliSplash);
+			await this.runOnboardingFlow(showPrometheusCliSplash);
 			outcome = isOnboardingModelReady(this.getOnboardingState()) ? "success" : "aborted";
 			return true;
 		} catch (error) {
@@ -1764,9 +1766,11 @@ export class InteractiveMode {
 		}
 	}
 
-	private async runOnboardingFlow(showPrimeCliSplash = this.shouldRunPrimeCliOnboardingSplash()): Promise<void> {
+	private async runOnboardingFlow(
+		showPrometheusCliSplash = this.shouldRunPrometheusCliOnboardingSplash(),
+	): Promise<void> {
 		this.modelRegistry.refresh();
-		if (showPrimeCliSplash) {
+		if (showPrometheusCliSplash) {
 			const splash = await this.showOnboardingSplash("choose a model");
 			if (!splash) {
 				return;
@@ -1787,8 +1791,8 @@ export class InteractiveMode {
 			return;
 		}
 
-		splash.showProgress("Signing in to Prime Intellect...");
-		const authResult = await this.createAuthFlows().runPrimeInferenceLogin();
+		splash.showProgress("Signing in to Prometheus Intellect...");
+		const authResult = await this.createAuthFlows().runPrometheusInferenceLogin();
 		if (authResult.status !== "success") {
 			splash.dismiss();
 			return;
@@ -3692,6 +3696,7 @@ export class InteractiveMode {
 			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
 			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+			question: (questions, opts) => this.showExtensionQuestion(questions, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -3742,6 +3747,52 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
+	}
+
+	/**
+	 * Show the agent question form in place of the editor.
+	 */
+	private showExtensionQuestion(
+		questions: ExtensionUIQuestion[],
+		opts?: ExtensionUIDialogOptions,
+	): Promise<string[] | undefined> {
+		return new Promise((resolve) => {
+			if (opts?.signal?.aborted) {
+				resolve(undefined);
+				return;
+			}
+			const onAbort = () => {
+				this.hideExtensionQuestion();
+				resolve(undefined);
+			};
+			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+			const question = new QuestionComponent(
+				questions,
+				(answers) => {
+					opts?.signal?.removeEventListener("abort", onAbort);
+					this.hideExtensionQuestion(question);
+					resolve(answers);
+				},
+				() => {
+					opts?.signal?.removeEventListener("abort", onAbort);
+					this.hideExtensionQuestion(question);
+					resolve(undefined);
+				},
+				{ timeout: opts?.timeout },
+			);
+			this.editorContainer.clear();
+			this.editorContainer.addChild(question);
+			this.ui.setFocus(question);
+			this.ui.requestRender();
+		});
+	}
+
+	private hideExtensionQuestion(question?: QuestionComponent): void {
+		question?.dispose();
+		this.editorContainer.clear();
+		this.editorContainer.addChild(this.editor);
+		this.ui.setFocus(this.editor);
+		this.ui.requestRender();
 	}
 
 	/**
@@ -7266,6 +7317,7 @@ export class InteractiveMode {
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: state.autoCompactionEnabled,
+					compactionThresholdPercent: this.settingsManager.getCompactionThresholdPercent(),
 					idleEvictionMinutes: this.settingsManager.getIdleEvictionMinutes(),
 					showImages: this.settingsManager.getShowImages(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -7279,7 +7331,7 @@ export class InteractiveMode {
 					availableThinkingLevels: state.availableThinkingLevels,
 					currentTheme: this.settingsManager.getTheme() || "prime",
 					availableThemes: getAvailableThemes(),
-					currentOutputStyle: this.settingsManager.getOutputStyle() || "default",
+					currentOutputStyle: this.settingsManager.getOutputStyle() || "none",
 					availableOutputStyles: getAvailableOutputStyles(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -7299,6 +7351,13 @@ export class InteractiveMode {
 							this.showError(error instanceof Error ? error.message : String(error));
 						});
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onCompactionThresholdPercentChange: (percent) => {
+						this.settingsManager.setCompactionThresholdPercent(percent);
+						const enabled = this.connectionState?.autoCompactionEnabled ?? state.autoCompactionEnabled;
+						void this.agentConnection.setAutoCompactionEnabled(enabled, percent).catch((error) => {
+							this.showError(error instanceof Error ? error.message : String(error));
+						});
 					},
 					onIdleEvictionMinutesChange: (value) => {
 						this.settingsManager.setIdleEvictionMinutes(value);
@@ -8336,7 +8395,7 @@ export class InteractiveMode {
 		// The agent core uses unknown/unknown as its no-model sentinel.
 		const selectedModel =
 			currentModel?.provider === "unknown" && currentModel.id === "unknown" ? undefined : currentModel;
-		let action = resolvePrimeInferencePostLoginModelAction(authResult, selectedModel, this.modelRegistry);
+		let action = resolvePrometheusInferencePostLoginModelAction(authResult, selectedModel, this.modelRegistry);
 		if (!action.openModelPicker) {
 			return false;
 		}
@@ -8344,7 +8403,7 @@ export class InteractiveMode {
 		if (!selectedModel) {
 			try {
 				const availableModels = await this.getConnectionAvailableModels();
-				action = resolvePrimeInferencePostLoginModelAction(authResult, selectedModel, {
+				action = resolvePrometheusInferencePostLoginModelAction(authResult, selectedModel, {
 					find: (provider, modelId) =>
 						availableModels.find((model) => model.provider === provider && model.id === modelId) ??
 						this.modelRegistry.find(provider, modelId),
@@ -8360,11 +8419,11 @@ export class InteractiveMode {
 				await this.settingsManager.flush();
 			} catch (error) {
 				this.showError(
-					`Prime Inference login succeeded, but the default model could not be selected: ${error instanceof Error ? error.message : String(error)}`,
+					`Prometheus Inference login succeeded, but the default model could not be selected: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
 		} else if (!selectedModel) {
-			this.showError("Prime Inference login succeeded, but the default GLM 5.2 model is unavailable.");
+			this.showError("Prometheus Inference login succeeded, but the default GLM 5.2 model is unavailable.");
 		}
 
 		return true;
@@ -9269,7 +9328,7 @@ export class InteractiveMode {
 			case "disabled":
 				return "Trace sharing is disabled.";
 			case "missing_credentials":
-				return "Trace sharing needs a Prime API key. Run /traces login.";
+				return "Trace sharing needs a Prometheus API key. Run /traces login.";
 			case "no_session_file":
 				return "Current session has no persisted trace yet.";
 			case "empty_session":
@@ -9429,7 +9488,7 @@ export class InteractiveMode {
 				credential = await getPrometheusTraceCredential(this.modelRegistry.authStorage);
 			}
 			if (!credential) {
-				this.showError("Trace sharing needs a Prime API key.");
+				this.showError("Trace sharing needs a Prometheus API key.");
 				return;
 			}
 
@@ -9447,7 +9506,7 @@ export class InteractiveMode {
 		if (command === "upload" || command === "upload-current") {
 			const credential = await getPrometheusTraceCredential(this.modelRegistry.authStorage);
 			if (!credential) {
-				this.showError("Trace sharing needs a Prime API key. Run /traces login.");
+				this.showError("Trace sharing needs a Prometheus API key. Run /traces login.");
 				return;
 			}
 			const uploadResult = await this.uploadCurrentTraceOnce();
@@ -9463,7 +9522,7 @@ export class InteractiveMode {
 		if (command === "upload-all") {
 			const credential = await getPrometheusTraceCredential(this.modelRegistry.authStorage);
 			if (!credential) {
-				this.showError("Trace sharing needs a Prime API key. Run /traces login.");
+				this.showError("Trace sharing needs a Prometheus API key. Run /traces login.");
 				return;
 			}
 			if (this.traceUploadAllAbortController) {

@@ -4,7 +4,7 @@
 
 import { buildChildAgentDoctrine, buildRlmPrompt, buildSubagentGuidance } from "./prompts/index.js";
 import { formatHarnessStateForPrompt, type HarnessState, REFINE_SKILL_NAME } from "./refinement/index.js";
-import { formatSkillsForPrompt, getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
+import { formatSkillsForPrompt, getLazySkills, getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -70,8 +70,15 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const hasIpython = tools.includes("ipython");
 	const hasBash = tools.includes("bash");
 	const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
-	const visiblePythonSkillImportNames = getPythonSkillRuntimeInfo(visibleSkills).map((skill) => skill.importName);
+	// Only eager skills feed the RLM prompt's per-skill paragraphs and its
+	// "Installed Python skill modules" catch-all line — lazy skills (e.g.
+	// `research`) are deliberately withheld from both and surfaced instead via
+	// the `skills` meta-skill's on-demand list()/read().
+	const visiblePythonSkillImportNames = getPythonSkillRuntimeInfo(visibleSkills.filter((skill) => skill.eager)).map(
+		(skill) => skill.importName,
+	);
 	const hasRefineSkill = visibleSkills.some((skill) => skill.name === REFINE_SKILL_NAME);
+	const lazySkillCount = getLazySkills(skills).length;
 
 	if (customPrompt) {
 		let prompt = customPrompt;
@@ -125,6 +132,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		allowRecursion,
 		depth: options.rlmDepth,
 		parentAgent: options.rlmParentAgent,
+		lazySkillCount,
 	});
 
 	// Appended AFTER the trained buildRlmPrompt prefix, and before the harness-state

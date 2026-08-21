@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
 import {
 	formatSkillsForPrompt,
+	getLazySkills,
 	getPythonSkillRuntimeInfo,
+	INLINE_DOCUMENTED_SKILL_NAMES,
 	loadSkills,
 	loadSkillsFromDir,
 	type Skill,
 	type SkillPythonMetadata,
+	summarizeSkill,
 } from "../src/core/skills.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
@@ -22,6 +25,11 @@ function createTestSkill(options: {
 	filePath: string;
 	baseDir: string;
 	disableModelInvocation?: boolean;
+	/** Defaults to `true` regardless of kind, unlike the production loader's
+	 * kind-based default — most tests here exercise formatting/filtering, not
+	 * eager/lazy derivation, and need the skill visible unless told otherwise.
+	 * See the dedicated "eager / lazy skills" describe block for default-derivation coverage. */
+	eager?: boolean;
 	python?: SkillPythonMetadata;
 	source?: string;
 }): Skill {
@@ -32,6 +40,7 @@ function createTestSkill(options: {
 		baseDir: options.baseDir,
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
 		disableModelInvocation: options.disableModelInvocation ?? false,
+		eager: options.eager ?? true,
 	};
 	return options.python
 		? {
@@ -471,6 +480,142 @@ describe("skills", () => {
 
 			const result = formatSkillsForPrompt(skills);
 			expect(result).toBe("");
+		});
+
+		it("should exclude eager: false (lazy) skills from the prompt", () => {
+			const skills: Skill[] = [
+				createTestSkill({ name: "visible-skill", description: "Shown.", filePath: "/a/SKILL.md", baseDir: "/a" }),
+				createTestSkill({
+					name: "lazy-skill",
+					description: "Hidden until discovered.",
+					filePath: "/b/SKILL.md",
+					baseDir: "/b",
+					eager: false,
+				}),
+			];
+
+			const result = formatSkillsForPrompt(skills);
+
+			expect(result).toContain("<name>visible-skill</name>");
+			expect(result).not.toContain("<name>lazy-skill</name>");
+		});
+
+		it("should exclude inline-documented first-party skills regardless of eager", () => {
+			const skills: Skill[] = [...INLINE_DOCUMENTED_SKILL_NAMES].map((name) =>
+				createTestSkill({
+					name,
+					description: `${name} description`,
+					filePath: `/${name}/SKILL.md`,
+					baseDir: `/${name}`,
+				}),
+			);
+
+			const result = formatSkillsForPrompt(skills);
+
+			expect(result).toBe("");
+		});
+	});
+
+	describe("getLazySkills", () => {
+		it("excludes hidden, eager, and inline-documented skills", () => {
+			const skills: Skill[] = [
+				createTestSkill({
+					name: "eager-skill",
+					description: "Shown eagerly.",
+					filePath: "/a/SKILL.md",
+					baseDir: "/a",
+				}),
+				createTestSkill({
+					name: "lazy-skill",
+					description: "Discoverable on demand.",
+					filePath: "/b/SKILL.md",
+					baseDir: "/b",
+					eager: false,
+				}),
+				createTestSkill({
+					name: "hidden-lazy-skill",
+					description: "Hidden and lazy.",
+					filePath: "/c/SKILL.md",
+					baseDir: "/c",
+					eager: false,
+					disableModelInvocation: true,
+				}),
+				createTestSkill({
+					name: "compact",
+					description: "Inline-documented, would otherwise look lazy.",
+					filePath: "/d/SKILL.md",
+					baseDir: "/d",
+					eager: false,
+				}),
+			];
+
+			const lazy = getLazySkills(skills);
+
+			expect(lazy.map((s) => s.name)).toEqual(["lazy-skill"]);
+		});
+	});
+
+	describe("summarizeSkill", () => {
+		it("includes python_import only for python skills", () => {
+			const markdown = createTestSkill({
+				name: "md-skill",
+				description: "A markdown skill.",
+				filePath: "/a/SKILL.md",
+				baseDir: "/a",
+			});
+			const python = createTestSkill({
+				name: "py-skill",
+				description: "A python skill.",
+				filePath: "/b/SKILL.md",
+				baseDir: "/b",
+				python: { importName: "py_skill", packagePath: "/b", pyprojectPath: "/b/pyproject.toml" },
+			});
+
+			expect(summarizeSkill(markdown)).toEqual({
+				name: "md-skill",
+				kind: "markdown",
+				description: "A markdown skill.",
+			});
+			expect(summarizeSkill(python)).toEqual({
+				name: "py-skill",
+				kind: "python",
+				description: "A python skill.",
+				python_import: "py_skill",
+			});
+		});
+	});
+
+	describe("eager default derivation", () => {
+		it("defaults markdown skills to eager: false", () => {
+			const { skills } = loadSkillsFromDir({ dir: join(fixturesDir, "valid-skill"), source: "test" });
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].kind).toBe("markdown");
+			expect(skills[0].eager).toBe(false);
+		});
+
+		it("defaults python skills to eager: true", () => {
+			const { skills } = loadSkillsFromDir({ dir: join(fixturesDir, "python-skill"), source: "test" });
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].kind).toBe("python");
+			expect(skills[0].eager).toBe(true);
+		});
+
+		it("honors an explicit eager: true override on a markdown skill", () => {
+			const { skills } = loadSkillsFromDir({ dir: join(fixturesDir, "eager-markdown"), source: "test" });
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].kind).toBe("markdown");
+			expect(skills[0].eager).toBe(true);
+		});
+
+		it("honors an explicit eager: false override on a python skill", () => {
+			const { skills } = loadSkillsFromDir({ dir: join(fixturesDir, "lazy-python"), source: "test" });
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].kind).toBe("python");
+			expect(skills[0].eager).toBe(false);
 		});
 	});
 

@@ -38,8 +38,8 @@ describe("execution policy", () => {
 		expect(policy.secure).toBe(false);
 		expect(policy.enforcement).toBe("application");
 		expect(policy.permission("tool", "ipython")).toBe("allow");
-		expect(policy.permission("tool", "custom-writer")).toBe("deny");
-		expect(policy.permission("command", "npm test")).toBe("deny");
+		expect(policy.permission("tool", "custom-writer")).toBe("allow");
+		expect(policy.permission("command", "npm test")).toBe("allow");
 		expect(policy.permission("filesystem.read", "README.md")).toBe("allow");
 	});
 
@@ -55,16 +55,16 @@ try:
     open(${JSON.stringify(readable)}, "w").write("changed")
 except PermissionError:
     print("write-blocked")
-try:
-    import subprocess
-    subprocess.run(["cmd.exe", "/c", "echo", "changed"])
-except PermissionError:
-    print("process-blocked")
+import subprocess
+subprocess.run(["cmd.exe", "/c", "echo", "changed"], check=True)
+print("process-allowed")
 try:
     import socket
     socket.socket().connect(("127.0.0.1", 9))
 except PermissionError:
-    print("network-blocked")`;
+    print("network-blocked")
+except OSError:
+    print("network-allowed")`;
 			const result = spawnSync("python", ["-c", code], {
 				encoding: "utf8",
 				env: { ...process.env, [WINDOWS_PLAN_MODE_ENV]: "1" },
@@ -73,8 +73,8 @@ except PermissionError:
 			expect(result.status, result.stderr).toBe(0);
 			expect(result.stdout).toContain("readable");
 			expect(result.stdout).toContain("write-blocked");
-			expect(result.stdout).toContain("process-blocked");
-			expect(result.stdout).toContain("network-blocked");
+			expect(result.stdout).toContain("process-allowed");
+			expect(result.stdout).toContain("network-allowed");
 		},
 	);
 

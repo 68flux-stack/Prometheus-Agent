@@ -549,8 +549,8 @@ export class InProcessAgentConnection implements AgentConnection {
 		this.session.setFollowUpMode(mode);
 	}
 
-	async setAutoCompactionEnabled(enabled: boolean): Promise<void> {
-		this.session.setAutoCompactionEnabled(enabled);
+	async setAutoCompactionEnabled(enabled: boolean, thresholdPercent?: number): Promise<void> {
+		this.session.setAutoCompactionEnabled(enabled, thresholdPercent);
 	}
 
 	async setAutoRetryEnabled(enabled: boolean): Promise<void> {
