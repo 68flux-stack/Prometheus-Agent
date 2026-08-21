@@ -47,3 +47,6 @@ collect.sh
 
 __pycache__/
 *.pyc
+
+/AGENTS.md
+/memory.md
