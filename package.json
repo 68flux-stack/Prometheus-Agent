@@ -28,14 +28,13 @@
 		"version:major": "npm version major -ws --no-git-tag-version && node scripts/sync-versions.js && shx rm -rf node_modules packages/*/node_modules package-lock.json && npm install",
 		"version:set": "npm version -ws",
 		"prepublishOnly": "npm run clean && npm run build && npm run check",
-		"publish": "npm run prepublishOnly && npm publish -ws --access public",
-		"publish:dry": "npm run prepublishOnly && npm publish -ws --access public --dry-run",
-		"release:pack": "node scripts/pack-prometheus-release.mjs",
+		"publish": "npm run prepublishOnly && npm publish --workspace packages/coding-agent",
+		"publish:dry": "npm run prepublishOnly && npm publish --workspace packages/coding-agent --dry-run",
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
 		"prepare": "husky",
-		"desktop:package:win": "npm --workspace @prometheus/desktop run package:win"
+		"desktop:package": "npm --workspace @prometheus/desktop run package"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "^0.0.55",
@@ -54,7 +53,6 @@
 	},
 	"version": "0.7.1",
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "^0.7.1",
 		"get-east-asian-width": "^1.6.0"
 	},
 	"overrides": {
@@ -63,5 +61,9 @@
 			"rimraf": "6.1.2"
 		},
 		"shell-quote": "^1.10.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/68flux-stack/Prometheus-Agent.git"
 	}
 }

@@ -32,7 +32,9 @@ try {
 rmSync(outdir, { recursive: true, force: true });
 
 await build({
-	entryPoints: [join(packageDir, "dist", "cli.js")],
+	// postinstall.js is spawned by postinstall.cjs from the published package,
+	// where the unbundled dist cannot resolve the workspace-only pi-* imports.
+	entryPoints: [join(packageDir, "dist", "cli.js"), join(packageDir, "dist", "postinstall.js")],
 	outdir,
 	bundle: true,
 	splitting: true,

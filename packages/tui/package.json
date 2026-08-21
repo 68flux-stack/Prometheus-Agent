@@ -28,7 +28,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/PrometheusIntellect-ai/prometheus.git",
+		"url": "git+https://github.com/68flux-stack/Prometheus-Agent.git",
 		"directory": "packages/tui"
 	},
 	"engines": {
@@ -48,5 +48,6 @@
 	"devDependencies": {
 		"@xterm/headless": "^6.0.0",
 		"@xterm/xterm": "^6.0.0"
-	}
+	},
+	"private": true
 }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AnthropicMessagesCompat, Api, Context, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai";
 import { getOAuthProvider, registerOAuthProvider } from "@earendil-works/pi-ai/oauth";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.js";
 
@@ -1122,8 +1122,76 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("auth refresh across processes", () => {
+		test("refreshes OpenCode model ids from the provider catalog", async () => {
+			authStorage.setRuntimeApiKey("opencode-go", "test-key");
+			const fetchMock = vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							object: "list",
+							data: [{ id: "ox-alpha-free" }, { id: "new-live-model" }],
+						}),
+						{ status: 200, headers: { "content-type": "application/json" } },
+					),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+
+			try {
+				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+				const models = await registry.refreshAvailableModels();
+				const openCodeModelIds = models
+					.filter((model) => model.provider === "opencode-go")
+					.map((model) => model.id);
+
+				expect(openCodeModelIds).toContain("deepseek-v4-flash");
+				expect(openCodeModelIds).toContain("new-live-model");
+				expect(registry.find("opencode-go", "new-live-model")?.api).toBe("openai-completions");
+				expect(fetchMock).toHaveBeenCalledWith(
+					"https://opencode.ai/zen/go/v1/models",
+					expect.objectContaining({
+						headers: expect.objectContaining({ Authorization: "Bearer test-key" }),
+					}),
+				);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		test("adds new models from every configured provider", async () => {
+			authStorage.setRuntimeApiKey("openrouter", "test-key");
+			const fetchMock = vi.fn(
+				async () => new Response(JSON.stringify({ data: [{ id: "stealth/ox-alpha" }] }), { status: 200 }),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+
+			try {
+				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+				const models = await registry.refreshAvailableModels();
+				const model = models.find(
+					(candidate) => candidate.provider === "openrouter" && candidate.id === "stealth/ox-alpha",
+				);
+
+				expect(model).toMatchObject({
+					id: "stealth/ox-alpha",
+					provider: "openrouter",
+					api: "openai-completions",
+					baseUrl: "https://openrouter.ai/api/v1",
+				});
+				expect(fetchMock).toHaveBeenCalledWith(
+					"https://openrouter.ai/api/v1/models",
+					expect.objectContaining({
+						headers: expect.objectContaining({ Authorization: "Bearer test-key" }),
+					}),
+				);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
 		test("model catalog includes unauthenticated public models and hides private Prometheus routes", async () => {
 			const savedPrometheusApiKey = process.env.PRIME_API_KEY;
+			const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+			vi.stubGlobal("fetch", fetchMock);
 			const savedOpenAiApiKey = process.env.OPENAI_API_KEY;
 			delete process.env.PRIME_API_KEY;
 			delete process.env.OPENAI_API_KEY;
@@ -1143,6 +1211,7 @@ describe("ModelRegistry", () => {
 				const authenticated = await registry.refreshModelCatalog();
 				expect(authenticated.configuredProviders).toContain("openai");
 			} finally {
+				vi.unstubAllGlobals();
 				if (savedPrometheusApiKey !== undefined) {
 					process.env.PRIME_API_KEY = savedPrometheusApiKey;
 				}

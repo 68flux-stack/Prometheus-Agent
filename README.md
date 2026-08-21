@@ -20,11 +20,14 @@ Prometheus: A Self-Improving RLM Agent
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrometheusIntellect-ai/prometheus/actions/workflows/ci.yml">
-    <img src="https://github.com/PrometheusIntellect-ai/prometheus/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  <a href="https://github.com/68flux-stack/Prometheus-Agent/actions/workflows/ci.yml">
+    <img src="https://github.com/68flux-stack/Prometheus-Agent/actions/workflows/ci.yml/badge.svg" alt="CI" />
   </a>
-  <a href="https://github.com/PrometheusIntellect-ai/prometheus/actions/workflows/build-binaries.yml">
-    <img src="https://github.com/PrometheusIntellect-ai/prometheus/actions/workflows/build-binaries.yml/badge.svg" alt="Build Binaries" />
+  <a href="https://github.com/68flux-stack/Prometheus-Agent/actions/workflows/release.yml">
+    <img src="https://github.com/68flux-stack/Prometheus-Agent/actions/workflows/release.yml/badge.svg" alt="Release" />
+  </a>
+  <a href="https://www.npmjs.com/package/prometheus-agent">
+    <img src="https://img.shields.io/npm/v/prometheus-agent.svg" alt="npm" />
   </a>
 </p>
 
@@ -45,13 +48,19 @@ Prometheus combines a persistent Python control environment with durable harness
 
 ## Getting Started
 
-Install the latest stable release on macOS or Linux:
+Prometheus needs [Node.js](https://nodejs.org) 22.8 or newer. Install the CLI from npm on
+macOS, Linux, or Windows:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh
+npm install -g prometheus-agent
 ```
 
-The installer downloads a versioned release, verifies its SHA-256 checksum, installs the `prometheus` command, and can prepare the IPython runtime used by the agent.
+On macOS and Linux you can instead use the installer script, which sets up Node.js for you
+if it is missing and can prepare the IPython runtime the agent uses:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/68flux-stack/Prometheus-Agent/main/install.sh | sh
+```
 
 Start Prometheus from the repository or directory you want it to work in:
 
@@ -60,26 +69,49 @@ cd /path/to/project
 prometheus
 ```
 
+On first launch, run `/login` to choose a subscription or API-key provider.
+
+Update or remove it with npm:
+
+```bash
+npm install -g prometheus-agent@latest
+npm uninstall -g prometheus-agent
+```
+
 ## Desktop app
 
-The repository also includes an Electron desktop client backed by the same RPC engine as the CLI. It keeps the full Prometheus runtime (tools, sessions, models, subagents, schedules, and continual harness) in a separate process while providing a native chat workspace.
+The desktop client is an Electron app backed by the same engine as the CLI. It bundles that
+engine, so it needs no separate Node.js install.
 
-From the repository root, install dependencies and build the agent packages once:
+Download an installer for your platform from the
+[latest release](https://github.com/68flux-stack/Prometheus-Agent/releases/latest):
+
+| Platform | File |
+| --- | --- |
+| Windows | `Prometheus-<version>-Setup.exe`, or `-Portable.exe` to run without installing |
+| macOS | `Prometheus-<version>-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel) |
+| Linux | `Prometheus-<version>-x86_64.AppImage` or `Prometheus-<version>-amd64.deb` |
+
+> [!NOTE]
+> These builds are **not code-signed**. On Windows, SmartScreen shows an "unknown publisher"
+> prompt: choose **More info → Run anyway**. On macOS, right-click the app and choose **Open**
+> the first time, then confirm. Signing requires paid developer certificates.
+
+Choose a workspace from the left sidebar to point the agent at another project. The desktop
+client supports streaming prompts, aborting work, model and thinking-level selection, new
+sessions, plugins, session statistics, and HTML export. Credentials and settings are shared
+with the CLI.
+
+To run the desktop app from a checkout instead:
 
 ```bash
 npm install
 npm run build
-```
-
-Then start the desktop client:
-
-```bash
 npm run desktop:dev
 ```
 
-Choose a workspace from the left sidebar to point the agent at another project. The desktop client supports streaming prompts, aborting work, model and thinking-level selection, new sessions, session statistics, and HTML export. API credentials are read from the same environment variables and auth storage used by the CLI.
-
-On first launch, run `/login` to choose a subscription or API-key provider. Prometheus works in the current directory and can run commands and modify files there. Use a disposable clone, clean worktree, or another checkpoint you can inspect and restore.
+Prometheus works in the current directory and can run commands and modify files there. Use a
+disposable clone, clean worktree, or another checkpoint you can inspect and restore.
 
 > [!WARNING]
 > Prometheus executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not** a security sandbox. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
@@ -117,6 +149,8 @@ Prometheus is built for long-running work, especially for evaluations in researc
 - [Provider setup](packages/coding-agent/docs/providers.md) — subscription and API-key providers
 - [Architecture overview](packages/coding-agent/docs/architecture.md) — daemon, worker, kernel, and persistence boundaries
 - [Development](packages/coding-agent/docs/development.md) — build and run from source
+- [Contributing](CONTRIBUTING.md) — how to propose changes
+- [Security policy](SECURITY.md) — how to report a vulnerability
 
 ## Acknowledgements
 

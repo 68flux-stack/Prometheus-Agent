@@ -171,11 +171,6 @@ run(`git commit -m "Release v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 5. Publish
-console.log("Publishing to npm...");
-run("npm run publish");
-console.log();
-
 // 6. Add new [Unreleased] sections
 console.log("Adding [Unreleased] sections for next cycle...");
 addUnreleasedSection();
@@ -194,3 +189,9 @@ run(`git push origin v${version}`);
 console.log();
 
 console.log(`=== Released v${version} ===`);
+console.log();
+// Pushing the tag is the release trigger: .github/workflows/release.yml publishes
+// prometheus-agent to npm, builds the desktop installers on all three platforms,
+// and creates the GitHub Release. Nothing is published from this machine.
+console.log("The v-tag push started .github/workflows/release.yml (npm publish + desktop installers).");
+console.log("Watch it with: gh run watch");

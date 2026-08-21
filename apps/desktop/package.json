@@ -1,6 +1,6 @@
 {
 	"name": "@prometheus/desktop",
-	"version": "0.1.0",
+	"version": "0.7.1",
 	"private": true,
 	"description": "Desktop client for Prometheus",
 	"main": "electron/main.cjs",
@@ -10,35 +10,19 @@
 		"dev": "electron .",
 		"prestart": "npm run prepare-runtime",
 		"start": "electron .",
-		"package:win": "npm run prepare-runtime && electron-builder --win --config electron-builder.yml",
-		"test": "node electron/subagent-registry.test.mjs && node electron/session-messages.test.mjs"
+		"test": "node electron/subagent-registry.test.mjs && node electron/session-messages.test.mjs",
+		"stage-engine": "node scripts/stage-engine.mjs",
+		"package": "npm run stage-engine && electron-builder --config electron-builder.yml"
 	},
 	"devDependencies": {
-		"electron": "^37.2.6",
-		"electron-builder": "^26.15.3"
+		"electron-builder": "^26.15.3",
+		"electron": "37.10.3"
 	},
-	"build": {
-		"appId": "com.primeintellect.prometheus",
-		"productName": "Prometheus",
-		"executableName": "Prometheus",
-		"icon": "../../PrometheusLogo.ico",
-		"asar": true,
-		"files": [
-			"electron/**/*",
-			"renderer/**/*",
-			"package.json"
-		],
-		"win": {
-			"target": [
-				"nsis",
-				"portable"
-			]
-		},
-		"nsis": {
-			"artifactName": "Prometheus-${version}-Setup.${ext}"
-		},
-		"portable": {
-			"artifactName": "Prometheus-${version}-Portable.${ext}"
-		}
+	"author": "Prometheus Intellect",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/68flux-stack/Prometheus-Agent.git",
+		"directory": "apps/desktop"
 	}
 }

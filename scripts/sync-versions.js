@@ -11,14 +11,17 @@ import { join } from 'path';
 const packagesDir = join(process.cwd(), 'packages');
 const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
 	.filter(dirent => dirent.isDirectory())
-	.map(dirent => dirent.name);
+	.map(dirent => join(packagesDir, dirent.name));
+// The desktop app is versioned in lockstep too: its version is the one stamped on
+// the released installers, so it must not drift from the engine it ships.
+packageDirs.push(join(process.cwd(), 'apps', 'desktop'));
 
 // Read all package.json files and build version map
 const packages = {};
 const versionMap = {};
 
 for (const dir of packageDirs) {
-	const pkgPath = join(packagesDir, dir, 'package.json');
+	const pkgPath = join(dir, 'package.json');
 	try {
 		const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 		packages[dir] = { path: pkgPath, data: pkg };

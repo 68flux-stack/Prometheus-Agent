@@ -375,7 +375,7 @@ prometheus --tools ipython -p "Review the code"
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
 | `PI_SKIP_VERSION_CHECK` | Skip the Prometheus version update check at startup. This prevents the release manifest request |
-| `PROMETHEUS_DOWNLOAD_BASE_URL` | Override the Prometheus release manifest and tarball base URL |
+| `PROMETHEUS_REGISTRY_URL` | Override the npm registry used for update checks |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `PRIME_API_KEY` | Prometheus Inference API key; also used for trace sharing when it has `agent_traces` scope |
 | `PROMETHEUS_TRACES_API_KEY` | Prometheus API key used only for opt-in trace sharing |

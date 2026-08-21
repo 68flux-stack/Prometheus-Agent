@@ -35,12 +35,18 @@ let activeProviderLogin;
 let providerLoginPromptCounter = 0;
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
+// In a checkout the engine is the workspace package; a packaged build carries its
+// own copy under resources/engine, staged by scripts/stage-engine.mjs. __dirname
+// lives inside app.asar once packaged, so the repo-relative path cannot be used.
+const enginePackageDir = process.defaultApp
+	? path.join(repoRoot, "packages", "coding-agent")
+	: path.join(process.resourcesPath, "engine", "node_modules", "prometheus-agent");
 // Run the bundled engine entry. The unbundled dist/cli.js graph is ~2,500
 // files and each RPC/daemon/worker process pays its module resolution on every
 // spawn; the bundle (dist/bundle/cli.js) loads the same code from ~20 chunks
 // in under half the time. The bin entry and the daemon benchmarks use it too.
-const cliPath = process.env.PROMETHEUS_CLI_PATH || path.join(repoRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
-const distDir = path.join(repoRoot, "packages", "coding-agent", "dist");
+const distDir = path.join(enginePackageDir, "dist");
+const cliPath = process.env.PROMETHEUS_CLI_PATH || path.join(distDir, "bundle", "cli.js");
 const { AuthStorage } = require(path.join(distDir, "core", "auth-storage.js"));
 const { SessionManager } = require(path.join(distDir, "core", "session-manager.js"));
 const { WorkspaceChangeReview } = require(path.join(distDir, "core", "workspace-change-review.js"));
@@ -74,7 +80,9 @@ if (!process.env.PROMETHEUS_USER_DATA_DIR && existsSync(legacyUserData) && !exis
 		// Leave the legacy folder in place; isWritableDirectory below still resolves a usable path.
 	}
 }
-const fallbackUserData = path.join(repoRoot, ".tmp-agent", "desktop-user-data");
+const fallbackUserData = process.defaultApp
+	? path.join(repoRoot, ".tmp-agent", "desktop-user-data")
+	: path.join(os.tmpdir(), "prometheus-desktop-user-data");
 app.setPath("userData", isWritableDirectory(requestedUserData) ? requestedUserData : fallbackUserData);
 
 // The desktop is a client for the same agent the CLI runs. Sharing the standard
@@ -269,9 +277,11 @@ function getDesktopDaemonSocketPath() {
 }
 
 const desktopDaemonSocketPath = getDesktopDaemonSocketPath();
+// A packaged build ships one high-resolution PNG as a build resource; the Windows
+// executable and shortcut icons come from the .ico electron-builder generates.
 const appIconIcoPath = path.join(repoRoot, "PrometheusLogo.ico");
-const appIconPngPath = path.join(repoRoot, "PrometheusLogo.png");
-const appIconPath = process.platform === "win32" ? appIconIcoPath : appIconPngPath;
+const appIconPngPath = process.defaultApp ? path.join(repoRoot, "PrometheusLogo.png") : path.join(process.resourcesPath, "icon.png");
+const appIconPath = process.defaultApp && process.platform === "win32" ? appIconIcoPath : appIconPngPath;
 
 app.setName("Prometheus");
 app.setAppUserModelId("com.primeintellect.prometheus");
@@ -578,7 +588,7 @@ function listSessionSubagents(payload = {}) {
 
 function readCodingAgentVersion() {
 	try {
-		const manifest = JSON.parse(readFileSync(path.join(repoRoot, "packages", "coding-agent", "package.json"), "utf8"));
+		const manifest = JSON.parse(readFileSync(path.join(enginePackageDir, "package.json"), "utf8"));
 		return typeof manifest.version === "string" ? manifest.version : undefined;
 	} catch {
 		return undefined;
@@ -738,14 +748,20 @@ function startAgent(options = {}) {
 		options.sessionPath || options.provider || options.model || (Array.isArray(options.args) && options.args.length > 0),
 	);
 	const childRunning = agentProcess && !agentProcess.killed && agentProcess.exitCode === null;
-	if (childRunning && agentWorkspace && path.resolve(agentWorkspace) === requestedWorkspace && !hasSessionOptions) {
+	// options.restart is the renderer's reconnect: the running child never
+	// answered its handshake, so reusing it would repeat the same failure.
+	if (childRunning && !options.restart && agentWorkspace && path.resolve(agentWorkspace) === requestedWorkspace && !hasSessionOptions) {
 		// The engine is already warm on this workspace (pre-started at launch or
 		// reused after a renderer reload); respawning would only cost a spawn.
 		return { workspace: agentWorkspace, generation: agentGeneration, agentDataDir: getAgentDataDir() };
 	}
 	stopAgent();
 	if (!existsSync(cliPath)) {
-		throw new Error("Prometheus is not built yet. Run `npm install` and `npm run build` from the repository root first.");
+		throw new Error(
+			process.defaultApp
+				? "Prometheus is not built yet. Run `npm install` and `npm run build` from the repository root first."
+				: `Prometheus engine is missing from this installation (expected ${cliPath}). Reinstall the app.`,
+		);
 	}
 	agentWorkspace = options.cwd || process.cwd();
 	const generation = ++agentGeneration;
@@ -925,7 +941,7 @@ function createWindow() {
 }
 
 function serveRenderer() {
-	const rendererRoot = path.join(repoRoot, "apps", "desktop", "renderer");
+	const rendererRoot = path.join(__dirname, "..", "renderer");
 	rendererServer = http.createServer((request, response) => {
 		const requestedPath = decodeURIComponent(new URL(request.url || "/", "http://127.0.0.1").pathname);
 		const relativePath = requestedPath === "/" ? "index.html" : requestedPath.slice(1);

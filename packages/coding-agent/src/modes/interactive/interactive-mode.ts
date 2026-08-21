@@ -219,7 +219,11 @@ import {
 	styleSlashCommandText,
 } from "./components/slash-command-message.js";
 import { SlashCommandResultMessageComponent } from "./components/slash-command-result-message.js";
-import { countDirectSubagentStatuses, SubagentSummaryLine } from "./components/subagent-summary-line.js";
+import {
+	countDirectSubagentStatuses,
+	type SubagentSummaryCounts,
+	SubagentSummaryLine,
+} from "./components/subagent-summary-line.js";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.js";
 import {
 	selectLatestToolExpandHint,
@@ -948,6 +952,7 @@ export class InteractiveMode {
 
 	// One summary line below the editor, backed by the existing child-status stream.
 	private subagentSummaryLine: SubagentSummaryLine;
+	private subagentCounts: SubagentSummaryCounts = { total: 0, running: 0, idle: 0, inactive: 0 };
 	private subagentSnapshots = new Map<string, AgentConnectionRlmChildAgentSnapshot>();
 	private rlmNodeId: string | undefined;
 
@@ -5962,9 +5967,12 @@ export class InteractiveMode {
 				.filter((heartbeat) => heartbeat.job.status === "active")
 				.map((heartbeat) => heartbeat.job.activeSessionId),
 		);
-		this.subagentSummaryLine.setSubagentCounts(
-			countDirectSubagentStatuses(this.subagentSnapshots.values(), this.rlmNodeId, activeHeartbeatSessionIds),
+		this.subagentCounts = countDirectSubagentStatuses(
+			this.subagentSnapshots.values(),
+			this.rlmNodeId,
+			activeHeartbeatSessionIds,
 		);
+		this.subagentSummaryLine.setSubagentCounts(this.subagentCounts);
 		if (!this.subagentSummaryLine.isSelectable() && this.subagentSummaryLine.focused) this.focusEditor();
 	}
 
@@ -6118,8 +6126,15 @@ export class InteractiveMode {
 	private getTrayGoalLabel(): string | undefined {
 		const goal = this.getGoalState();
 		switch (goal.status) {
-			case "active":
-				return `Pursuing goal (${this.formatGoalElapsed(goal.timeUsedSeconds)})`;
+			case "active": {
+				const elapsed = this.formatGoalElapsed(goal.timeUsedSeconds);
+				// While a subagent runs, goal continuations are deferred host-side.
+				// Say so instead of claiming the goal is being worked on.
+				const waiting = this.isAgentStreaming() ? 0 : this.subagentCounts.running;
+				return waiting > 0
+					? `Goal waiting on ${waiting} subagent${waiting === 1 ? "" : "s"} (${elapsed})`
+					: `Pursuing goal (${elapsed})`;
+			}
 			case "paused":
 				return `Goal paused (${this.formatGoalElapsed(goal.timeUsedSeconds)})`;
 			case "budget_limited":
