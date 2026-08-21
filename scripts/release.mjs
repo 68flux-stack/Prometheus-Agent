@@ -11,12 +11,13 @@
  * 2. Bump version via npm run version:xxx or set an explicit version
  * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
  * 4. Commit and tag
- * 5. Publish to npm
- * 6. Add new [Unreleased] section to changelogs
- * 7. Commit
+ * 5. Add new [Unreleased] section to changelogs
+ * 6. Commit
+ * 7. Push (the tag push triggers .github/workflows/release.yml, which publishes to npm
+ *    and builds the desktop installers)
  */
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -61,10 +62,6 @@ function compareVersions(a, b) {
 	return 0;
 }
 
-function shellQuote(value) {
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 function stageChangedFiles() {
 	const output = run("git ls-files -m -o -d --exclude-standard", { silent: true });
 	const paths = [...new Set((output || "").split("\n").map((line) => line.trim()).filter(Boolean))];
@@ -72,7 +69,11 @@ function stageChangedFiles() {
 		return;
 	}
 
-	run(`git add -- ${paths.map(shellQuote).join(" ")}`);
+	// execFileSync passes argv directly (no shell), so this works on both POSIX and
+	// Windows. The previous version built a POSIX single-quoted string for execSync,
+	// which on Windows runs through cmd.exe and does not honor single quotes at all.
+	console.log(`$ git add -- ${paths.join(" ")}`);
+	execFileSync("git", ["add", "--", ...paths], { stdio: "inherit" });
 }
 
 function bumpOrSetVersion(target) {
