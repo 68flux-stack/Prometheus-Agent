@@ -62,6 +62,16 @@ if it is missing and can prepare the IPython runtime the agent uses:
 curl -fsSL https://raw.githubusercontent.com/68flux-stack/Prometheus-Agent/main/install.sh | sh
 ```
 
+Check the install:
+
+```bash
+prometheus --version
+```
+
+If `prometheus` isn't found, npm's global bin directory isn't on your `PATH`. Find it with
+`npm bin -g` (or `npm config get prefix` and look in its `bin`/nothing-suffixed folder on
+Windows) and add that to your shell's `PATH`.
+
 Start Prometheus from the repository or directory you want it to work in:
 
 ```bash
