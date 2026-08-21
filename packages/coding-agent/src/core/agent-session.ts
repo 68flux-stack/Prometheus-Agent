@@ -69,6 +69,8 @@ import {
 	assertAgentSessionNameAvailable,
 	assertDirectAgentMessageTarget,
 	createAgentMessageHostHandlers,
+	createAgentSessionMessage,
+	createAgentSessionMessageId,
 	formatAgentSessionNameUnavailable,
 	isAgentSessionMessage,
 	normalizeAgentSessionMessage,
@@ -10798,10 +10800,35 @@ export class AgentSession {
 					});
 					return;
 				} catch {
-					// An unattributed notice beats silence, so fall through to the injected path.
+					// Fall through so an unavailable message route cannot lose the result.
 				}
 			}
-			await this._promptInjectedMessage(message.content as string, message, {
+
+			const isCompletedTerminalMessage =
+				!childController &&
+				message.customType === "rlm_child_terminal_notice" &&
+				typeof message.details === "object" &&
+				message.details !== null &&
+				(message.details as { kind?: unknown }).kind === "completed";
+			const fallbackMessage = isCompletedTerminalMessage
+				? createAgentSessionMessage({
+						id: createAgentSessionMessageId(),
+						source: "agent_message",
+						message: message.content as string,
+						from: {
+							sessionId: childSession?.sessionId ?? "unknown-child",
+							sessionName: childSession?.sessionName ?? sessionName,
+							activeSessionId: childSession?.sessionId ?? "unknown-child",
+						},
+						fromRelationship: "child",
+						target: {
+							activeSessionId: this.sessionId,
+							sessionId: this.sessionId,
+							sessionName: this.sessionName,
+						},
+					})
+				: message;
+			await this._promptInjectedMessage(fallbackMessage.content as string, fallbackMessage, {
 				streamingBehavior: "followUp",
 				queueIfBusy: true,
 				returnAfterAccepted: true,

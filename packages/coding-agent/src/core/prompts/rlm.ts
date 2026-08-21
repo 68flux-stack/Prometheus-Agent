@@ -107,6 +107,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	const depth = options.depth ?? 0;
 	const activeTools = options.activeTools ?? [];
 	const hasIpython = options.activeTools === undefined ? true : activeTools.includes("ipython");
+	const hasAskUser = options.activeTools?.includes("ask_user") ?? false;
 	const canRunShellSkills = hasIpython || activeTools.includes("bash");
 	const parts = [
 		"You are a general purpose agent that uses code to solve tasks.",
@@ -178,6 +179,11 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	if (hasIpython && hasTodo) {
 		skillLines.push(
 			"Show a progress checklist in the UI with the pre-imported `todo` skill: `await todo.set([...])` replaces the list, `await todo.update(id, status)` / `await todo.complete(id)` update one item, `await todo.clear()` empties it.",
+		);
+	}
+	if (hasAskUser) {
+		skillLines.push(
+			"Use the active `ask_user` tool when the user's choice changes the work: ask 1 to 4 questions with 2 to 6 options each, and mark exactly one option as recommended.",
 		);
 	}
 	if (hasIpython && hasWebsearch) {

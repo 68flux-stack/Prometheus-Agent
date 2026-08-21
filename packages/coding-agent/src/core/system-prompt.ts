@@ -128,7 +128,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		cwd: promptCwd,
 		messagesPath: promptMessagesPath,
 		installedSkills: visiblePythonSkillImportNames,
-		activeTools: tools.filter((name) => name === "ipython" || name === "bash" || name === "edit"),
+		activeTools: tools.filter(
+			(name) => name === "ipython" || name === "bash" || name === "edit" || name === "ask_user",
+		),
 		allowRecursion,
 		depth: options.rlmDepth,
 		parentAgent: options.rlmParentAgent,
