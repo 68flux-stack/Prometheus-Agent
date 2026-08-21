@@ -318,14 +318,16 @@ async def concede(reason: str, *, dir: str | Path | None = None) -> dict[str, An
 async def status(*, dir: str | Path | None = None) -> dict[str, Any]:
     research_run = _run(dir)
     meta = research_run.meta()
+    notes = research_run.notes()
+    coverage = _coverage(research_run, notes)
     result = {
         "dir": str(research_run.dir),
         "question": meta["question"],
         "effort": meta["effort"],
         "sources": len(research_run.sources()),
-        "notes": len(research_run.notes()),
-        "coverage": _coverage(research_run),
-        "gaps": _gaps(research_run),
+        "notes": len(notes),
+        "coverage": coverage,
+        "gaps": _gaps(research_run, coverage),
     }
     if meta.get("quota") is not None:
         result["quota_status"] = quota_status(research_run)

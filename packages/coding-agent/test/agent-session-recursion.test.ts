@@ -1222,20 +1222,20 @@ describe("AgentSession rlm recursion", () => {
 		});
 	});
 
-	it("injects the child's complete final response exactly once", async () => {
+	it("injects the child's complete final response as an agent message", async () => {
 		const root = createSession();
 
 		await root.runRlmChild("silent child", { name: "silent-worker" });
 		await vi.waitFor(() => {
 			const responses = root.messages.filter(
-				(message) => message.role === "custom" && message.customType === "rlm_child_terminal_notice",
+				(message) => message.role === "custom" && message.customType === "agent_message",
 			);
 			expect(responses).toHaveLength(1);
 			expect(responses[0]).toMatchObject({
-				content: "child answer: silent child",
+				content: expect.stringContaining("child answer: silent child"),
 				details: {
-					kind: "completed",
-					response: "child answer: silent child",
+					message: "child answer: silent child",
+					fromRelationship: "child",
 				},
 			});
 		});

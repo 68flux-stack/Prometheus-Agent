@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Added the `ask_user` tool with CLI and desktop question panels, custom answers, dismissal, and one recommended option per question.
+- Fixed the active `ask_user` tool being omitted from the model-facing system prompt guidance.
 - Changed auto-compaction to start at 75% of the model context by default, with a configurable threshold in settings.
 - Fixed editing a desktop message creating a duplicate chat; edited messages now stay in the current session.
 - Added a three-tier skill visibility model: hidden (`disable-model-invocation: true`, unchanged), lazy (`eager: false`, the new default for markdown skills — discoverable on demand via the new `skills.list()` / `skills.read()` skill instead of costing tokens on every turn), and eager (`eager: true`, the default for python skills, shown in the system prompt as before).
@@ -10,6 +11,7 @@
 - Changed `research` to lazy by default (`eager: false`): its correct use is a multi-step procedure, not a single call signature, so it is now discovered via `skills.list()`/`skills.read()` instead of an always-injected description.
 - Changed `edit`, `refine`, `compact`, `goal`, `todo`, `websearch`, `attach-image`, `agent-observe`, `agent-message`, and `rlm-heartbeat` to skip the skill-description lookup entirely: their exact call syntax is now written directly into the base system prompt (matching `edit`'s prior treatment), and they are excluded from both the `<available_skills>` block and `skills.list()`.
 - Fixed `edit` and `refine` being described twice in the system prompt — once via `<available_skills>` and again via their dedicated usage paragraph — now only the dedicated paragraph is shown.
+- Fixed `research.status()` rescanning the evidence ledger and appearing to hang on larger research runs.
 - Fixed `request_directory_access` in Windows workspace mode never showing the user an accept/deny prompt: the injected kernel helper called the async host bridge without awaiting it, so the request was never sent.
 - Fixed Windows plan mode blocking searches and commands; it now blocks only file edits and creation.
 - Fixed the desktop command summary showing "Read a file" instead of the actual path; the kernel's file-mutation audit hook now also tracks reads and reports them alongside writes.

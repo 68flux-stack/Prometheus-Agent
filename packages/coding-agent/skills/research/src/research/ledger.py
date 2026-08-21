@@ -663,11 +663,23 @@ def concede(run: Run, reason: str) -> dict[str, Any]:
     return meta["conceded"]
 
 
-def coverage(run: Run) -> list[dict[str, Any]]:
-    notes = run.notes()
+def coverage(run: Run, notes: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Summarize notes in one pass.
+
+    ``status()`` needs both coverage and gaps. Accepting already loaded notes
+    prevents it from rereading a growing ledger and rescanning every note once
+    per sub-question.
+    """
+    notes_by_sub: dict[str, list[dict[str, Any]]] = {
+        sub: [] for sub in run.meta().get("sub_questions", [])
+    }
+    for note in run.notes() if notes is None else notes:
+        sub_question = note.get("sub_question")
+        if sub_question in notes_by_sub:
+            notes_by_sub[sub_question].append(note)
+
     result = []
-    for sub in run.meta().get("sub_questions", []):
-        relevant = [note for note in notes if note.get("sub_question") == sub]
+    for sub, relevant in notes_by_sub.items():
         domains = sorted({note.get("domain", "") for note in relevant if note.get("domain")})
         result.append(
             {
@@ -683,10 +695,10 @@ def coverage(run: Run) -> list[dict[str, Any]]:
     return result
 
 
-def gaps(run: Run) -> list[dict[str, Any]]:
+def gaps(run: Run, coverage_entries: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Sub-questions that still need work: thin sourcing, or an open conflict."""
     open_gaps = []
-    for entry in coverage(run):
+    for entry in coverage(run) if coverage_entries is None else coverage_entries:
         reasons = []
         if entry["distinct_domains"] < MIN_DOMAINS_PER_SUB_QUESTION:
             reasons.append(

@@ -113,6 +113,31 @@ describe("buildRlmPrompt", () => {
 		expect(prompt).toContain("Each `%%bash` cell runs in a throw-away subshell");
 	});
 
+	test("documents ask_user only when the tool is active", () => {
+		const withAskUser = buildRlmPrompt({
+			cwd: "/repo",
+			messagesPath: "/repo/session.jsonl",
+			activeTools: ["ipython", "ask_user"],
+			allowRecursion: false,
+		});
+		const withoutAskUser = buildRlmPrompt({
+			cwd: "/repo",
+			messagesPath: "/repo/session.jsonl",
+			activeTools: ["ipython"],
+			allowRecursion: false,
+		});
+
+		const guidance = "Use the active `ask_user` tool when the user's choice changes the work";
+		const systemPrompt = buildSystemPrompt({
+			cwd: "/repo",
+			selectedTools: ["ipython", "ask_user"],
+			skills: [],
+		});
+		expect(withAskUser).toContain(guidance);
+		expect(withoutAskUser).not.toContain(guidance);
+		expect(systemPrompt).toContain(guidance);
+	});
+
 	test("discovers requested models through a bounded authenticated host search", () => {
 		const prompt = buildRlmPrompt({
 			cwd: "/repo",
