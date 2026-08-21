@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.2] - 2026-08-21
 
 - Fixed Bedrock prompt caching to cover Claude 5.x models, which previously never received cache points.
 - Fixed Bedrock cache points being dropped when a conversation ends in an assistant message; the cache point now lands on the last message regardless of role.
