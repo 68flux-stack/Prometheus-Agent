@@ -18,7 +18,10 @@
 		"electron-builder": "^26.15.3",
 		"electron": "37.10.3"
 	},
-	"author": "Prometheus Intellect",
+	"author": {
+		"name": "Prometheus Intellect",
+		"email": "noreply@prometheus-agent.dev"
+	},
 	"license": "MIT",
 	"repository": {
 		"type": "git",
