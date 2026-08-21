@@ -1,6 +1,6 @@
 {
 	"name": "prometheus-agent",
-	"version": "0.7.2",
+	"version": "0.7.3",
 	"description": "Prometheus: a coding agent CLI with IPython-backed tools and session management",
 	"type": "module",
 	"piConfig": {
@@ -81,9 +81,9 @@
 		"shx": "^0.4.0",
 		"typescript": "^5.7.3",
 		"vitest": "^4.1.9",
-		"@earendil-works/pi-agent-core": "^0.7.2",
-		"@earendil-works/pi-ai": "^0.7.2",
-		"@earendil-works/pi-tui": "^0.7.2"
+		"@earendil-works/pi-agent-core": "^0.7.3",
+		"@earendil-works/pi-ai": "^0.7.3",
+		"@earendil-works/pi-tui": "^0.7.3"
 	},
 	"keywords": [
 		"coding-agent",
