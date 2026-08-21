@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fixed `npm run version:patch|minor|major` failing on Windows when a live Prometheus daemon holds its native addons (zeromq, clipboard) open: the version bump no longer force-deletes `node_modules` before reinstalling, since a plain `npm install` already reconciles the lockfile correctly.
 - Fixed an active goal re-prompting every turn while the session waits on subagents or a background job; the goal pill now shows "Goal waiting on N subagents".
 - Fixed web search and page fetch errors being reported as "unhandled errors in a TaskGroup"; the real cause (such as an Exa rate limit) is now shown, with a hint to add an Exa key via `/login`.
 - Added an Exa (web search) entry to the desktop provider dialog so the websearch API key can be saved without the terminal UI.
