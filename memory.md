@@ -10,7 +10,7 @@ When this file conflicts with the current source, package manifests, or `AGENTS.
 - Root package: `prometheus`, currently versioned in lockstep across the workspace.
 - Runtime baseline: Node.js `22.8.0` or newer for the coding agent. Use a current npm; the repository's dependency policy relies on npm support for the seven-day minimum release age.
 - License: MIT.
-- The public product/install name is Prime Agent. The monorepo retains inherited `@earendil-works/pi-*` package names, a `pi` binary entry, and some `PI_*` compatibility variables. Those are source/compatibility details, not a separate product that should be reintroduced.
+- The public product/install name is Prometheus Agent. The monorepo retains inherited `@earendil-works/pi-*` package names, a `pi` binary entry, and some `PI_*` compatibility variables. Those are source/compatibility details, not a separate product that should be reintroduced.
 - The agent runs with the current user's operating-system permissions. Workers and kernels provide lifecycle isolation and recovery, not a security sandbox. Treat model-generated code, shell commands, extensions, skills, and project instructions as trusted-code inputs only.
 
 ## 2. Repository layout

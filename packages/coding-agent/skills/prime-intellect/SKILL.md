@@ -1,11 +1,11 @@
 ---
 name: prime-intellect
-description: Work with Prime Intellect products via the prime CLI and Python SDKs - verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, code sandboxes, Prime Inference, GPU compute (pods and clusters), storage, and tunnels. Use when a task involves Prime Intellect, the prime CLI, verifiers, RL environments, evals, training, sandboxes, renting GPUs, Prime Inference models, or when the user asks what Prime Intellect is or what it offers.
+description: Work with Prometheus Intellect products via the prime CLI and Python SDKs - verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, code sandboxes, Prometheus Inference, GPU compute (pods and clusters), storage, and tunnels. Use when a task involves Prometheus Intellect, the prime CLI, verifiers, RL environments, evals, training, sandboxes, renting GPUs, Prometheus Inference models, or when the user asks what Prometheus Intellect is or what it offers.
 ---
 
-# Prime Intellect
+# Prometheus Intellect
 
-Prime Intellect is an open superintelligence lab building open-source AGI infrastructure: a platform for RL environments, evaluations, post-training, inference, and globally distributed GPU compute. Prometheus (this agent) is built by Prime Intellect, and the `prime` CLI is the default way to interface with every product below.
+Prometheus Intellect is an open superintelligence lab building open-source AGI infrastructure: a platform for RL environments, evaluations, post-training, inference, and globally distributed GPU compute. Prometheus (this agent) is built by Prometheus Intellect, and the `prime` CLI is the default way to interface with every product below.
 
 ## Product Map
 
@@ -13,7 +13,7 @@ Prime Intellect is an open superintelligence lab building open-source AGI infras
 |---|---|---|
 | verifiers | Python library for building LLM environments and evaluations | [environments.md](references/environments.md) |
 | Environments Hub | Platform library of community RL environments (`prime env`) | [environments.md](references/environments.md) |
-| Hosted Evaluations | Run evals on Prime-managed infra (`prime eval run --hosted`) | [environments.md](references/environments.md) |
+| Hosted Evaluations | Run evals on Prometheus-managed infra (`prime eval run --hosted`) | [environments.md](references/environments.md) |
 | Hosted Training | Post-train models against environments (`prime train`, Lab) | [environments.md](references/environments.md) |
 | prime-rl | Large-scale async RL framework for self-managed training | [environments.md](references/environments.md) |
 | Sandboxes | Secure disposable Docker environments for AI-generated code | [sandboxes.md](references/sandboxes.md) |
@@ -22,9 +22,9 @@ Prime Intellect is an open superintelligence lab building open-source AGI infras
 | Compute | Rent single GPU pods or multi-node clusters | [compute.md](references/compute.md) |
 | Storage | Persistent disks shared between instances | [compute.md](references/compute.md) |
 
-## Prime CLI Setup
+## Prometheus CLI Setup
 
-Default to the `prime` CLI for all Prime Intellect operations. If it is not installed:
+Default to the `prime` CLI for all Prometheus Intellect operations. If it is not installed:
 
 ```bash
 uv tool install prime    # or: pip install prime
@@ -32,7 +32,7 @@ prime login              # browser auth; or: prime config set-api-key
 prime config view        # verify configuration
 ```
 
-The same package provides the Python SDKs (e.g. `prime_sandboxes`, `prime_tunnel`). Source: https://github.com/PrimeIntellect-ai/prime
+The same package provides the Python SDKs (e.g. `prime_sandboxes`, `prime_tunnel`). Source: https://github.com/PrometheusIntellect-ai/prime
 
 ## Live Documentation
 

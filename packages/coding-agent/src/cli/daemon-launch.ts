@@ -354,7 +354,7 @@ async function ensureDaemonRunning(socketPath: string, spawnCwd?: string): Promi
 
 	// Strip inherited daemon worker/supervisor role env vars so the spawned
 	// daemon supervisor does not inherit worker-mode behavior. Without this,
-	// a CLI running inside a daemon worker (e.g. a test spawned by the Prime
+	// a CLI running inside a daemon worker (e.g. a test spawned by the Prometheus
 	// Agent daemon) would launch the supervisor in worker mode, which listens
 	// on the socket but never sends the daemon_hello handshake.
 	const env = createCliSubprocessEnv();

@@ -194,14 +194,14 @@ describe("AuthStorage", () => {
 			expect(apiKey).toBe("literal_api_key_value");
 		});
 
-		test("prime inference falls back to Prime CLI config when enabled", async () => {
+		test("prime inference falls back to Prometheus CLI config when enabled", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("prime-cli-key");
@@ -209,7 +209,7 @@ describe("AuthStorage", () => {
 			expect(authStorage.getAuthStatus("prime-inference")).toEqual({
 				configured: false,
 				source: "prime_cli",
-				label: "Prime CLI",
+				label: "Prometheus CLI",
 			});
 		});
 
@@ -220,7 +220,7 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("prime-cli-key");
@@ -228,14 +228,14 @@ describe("AuthStorage", () => {
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("changed-prime-key");
 		});
 
-		test("prime inference marks current Prime CLI auth stale", async () => {
+		test("prime inference marks current Prometheus CLI auth stale", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			expect(authStorage.markAuthStale("prime-inference")).toBe(true);
@@ -249,14 +249,14 @@ describe("AuthStorage", () => {
 			});
 		});
 
-		test("changed Prime CLI key no longer matches stale auth marker", async () => {
+		test("changed Prometheus CLI key no longer matches stale auth marker", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 			authStorage.markAuthStale("prime-inference");
 
@@ -267,29 +267,29 @@ describe("AuthStorage", () => {
 			expect(authStorage.getAuthStatus("prime-inference")).toEqual({
 				configured: false,
 				source: "prime_cli",
-				label: "Prime CLI",
+				label: "Prometheus CLI",
 			});
 		});
 
-		test("setPrimeInferenceApiKey clears stale Prime CLI auth marker", async () => {
+		test("setPrometheusInferenceApiKey clears stale Prometheus CLI auth marker", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 			authStorage.markAuthStale("prime-inference");
 
-			authStorage.setPrimeInferenceApiKey("new-prime-key");
+			authStorage.setPrometheusInferenceApiKey("new-prime-key");
 
 			expect(authStorage.hasAuth("prime-inference")).toBe(true);
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("new-prime-key");
 			expect(authStorage.getAuthStatus("prime-inference")).toEqual({
 				configured: false,
 				source: "prime_cli",
-				label: "Prime CLI",
+				label: "Prometheus CLI",
 			});
 		});
 
@@ -334,7 +334,7 @@ describe("AuthStorage", () => {
 			expect(authStorage.getAuthStatus("anthropic")).toEqual({ configured: true, source: "stored" });
 		});
 
-		test("prime inference uses Prime CLI auth over stored auth", async () => {
+		test("prime inference uses Prometheus CLI auth over stored auth", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({
@@ -346,20 +346,20 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("prime-cli-key");
 			expect(authStorage.getAuthStatus("prime-inference")).toEqual({
 				configured: false,
 				source: "prime_cli",
-				label: "Prime CLI",
+				label: "Prometheus CLI",
 			});
 		});
 
-		test("prime inference uses environment auth over Prime CLI and stored auth", async () => {
-			const originalPrimeApiKey = process.env.PRIME_API_KEY;
-			const originalPrimeTeamId = process.env.PRIME_TEAM_ID;
+		test("prime inference uses environment auth over Prometheus CLI and stored auth", async () => {
+			const originalPrometheusApiKey = process.env.PRIME_API_KEY;
+			const originalPrometheusTeamId = process.env.PRIME_TEAM_ID;
 			process.env.PRIME_API_KEY = "env-prime-key";
 			delete process.env.PRIME_TEAM_ID;
 			try {
@@ -378,7 +378,7 @@ describe("AuthStorage", () => {
 
 				authStorage = AuthStorage.create(authJsonPath, {
 					primeCliConfigPath: primeConfigPath,
-					usePrimeCliConfig: true,
+					usePrometheusCliConfig: true,
 				});
 
 				await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("env-prime-key");
@@ -388,22 +388,22 @@ describe("AuthStorage", () => {
 					label: "PRIME_API_KEY",
 				});
 				expect(authStorage.getProviderHeaders("prime-inference")).toBeUndefined();
-				expect(authStorage.getPrimeInferenceTeamSelection()).toBeUndefined();
+				expect(authStorage.getPrometheusInferenceTeamSelection()).toBeUndefined();
 			} finally {
-				if (originalPrimeApiKey === undefined) {
+				if (originalPrometheusApiKey === undefined) {
 					delete process.env.PRIME_API_KEY;
 				} else {
-					process.env.PRIME_API_KEY = originalPrimeApiKey;
+					process.env.PRIME_API_KEY = originalPrometheusApiKey;
 				}
-				if (originalPrimeTeamId === undefined) {
+				if (originalPrometheusTeamId === undefined) {
 					delete process.env.PRIME_TEAM_ID;
 				} else {
-					process.env.PRIME_TEAM_ID = originalPrimeTeamId;
+					process.env.PRIME_TEAM_ID = originalPrometheusTeamId;
 				}
 			}
 		});
 
-		test("prime inference provider headers use selected Prime CLI team", () => {
+		test("prime inference provider headers use selected Prometheus CLI team", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(
 				primeConfigPath,
@@ -424,18 +424,18 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "cli-team" });
-			expect(authStorage.getPrimeInferenceTeamSelection()).toEqual({
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "cli-team" });
+			expect(authStorage.getPrometheusInferenceTeamSelection()).toEqual({
 				teamId: "cli-team",
 				name: "CLI Research",
 				role: "admin",
 			});
 		});
 
-		test("prime inference legacy personal selection suppresses Prime CLI team fallback without Prime CLI key", () => {
+		test("prime inference legacy personal selection suppresses Prometheus CLI team fallback without Prometheus CLI key", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ team_id: "cli-team" }));
 			writeAuthJson({
@@ -448,14 +448,14 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			expect(authStorage.getProviderHeaders("prime-inference")).toBeUndefined();
-			expect(authStorage.getPrimeInferenceTeamSelection()).toBeNull();
+			expect(authStorage.getPrometheusInferenceTeamSelection()).toBeNull();
 		});
 
-		test("prime inference legacy personal selection suppresses Prime CLI team with Prime CLI key", () => {
+		test("prime inference legacy personal selection suppresses Prometheus CLI team with Prometheus CLI key", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key", team_id: "cli-team" }));
 			writeAuthJson({
@@ -468,15 +468,15 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			expect(authStorage.getProviderHeaders("prime-inference")).toBeUndefined();
-			expect(authStorage.getPrimeInferenceTeamSelection()).toBeNull();
+			expect(authStorage.getPrometheusInferenceTeamSelection()).toBeNull();
 		});
 
 		test("prime inference environment team overrides legacy personal selection", () => {
-			const originalPrimeTeamId = process.env.PRIME_TEAM_ID;
+			const originalPrometheusTeamId = process.env.PRIME_TEAM_ID;
 			process.env.PRIME_TEAM_ID = "env-team";
 			try {
 				const primeConfigPath = join(tempDir, "prime-config.json");
@@ -491,21 +491,21 @@ describe("AuthStorage", () => {
 
 				authStorage = AuthStorage.create(authJsonPath, {
 					primeCliConfigPath: primeConfigPath,
-					usePrimeCliConfig: true,
+					usePrometheusCliConfig: true,
 				});
 
-				expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "env-team" });
-				expect(authStorage.getPrimeInferenceTeamSelection()).toBeUndefined();
+				expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "env-team" });
+				expect(authStorage.getPrometheusInferenceTeamSelection()).toBeUndefined();
 			} finally {
-				if (originalPrimeTeamId === undefined) {
+				if (originalPrometheusTeamId === undefined) {
 					delete process.env.PRIME_TEAM_ID;
 				} else {
-					process.env.PRIME_TEAM_ID = originalPrimeTeamId;
+					process.env.PRIME_TEAM_ID = originalPrometheusTeamId;
 				}
 			}
 		});
 
-		test("prime inference missing Agent team selection falls back to Prime CLI team", () => {
+		test("prime inference missing Agent team selection falls back to Prometheus CLI team", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key", team_id: "cli-team" }));
 			writeAuthJson({
@@ -517,10 +517,10 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "cli-team" });
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "cli-team" });
 		});
 
 		test("prime inference provider header changes are picked up without reload", () => {
@@ -530,24 +530,24 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "team-1" });
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "team-1" });
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key", team_id: "team-2" }));
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "team-2" });
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "team-2" });
 		});
 
-		test("setPrimeInferenceApiKey creates Prime CLI config", async () => {
+		test("setPrometheusInferenceApiKey creates Prometheus CLI config", async () => {
 			const primeConfigPath = join(tempDir, "prime", "config.json");
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("new-prime-key");
+			authStorage.setPrometheusInferenceApiKey("new-prime-key");
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.api_key).toBe("new-prime-key");
@@ -557,7 +557,7 @@ describe("AuthStorage", () => {
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBe("new-prime-key");
 		});
 
-		test("setPrimeInferenceApiKey clears stale Prime CLI team selection", () => {
+		test("setPrometheusInferenceApiKey clears stale Prometheus CLI team selection", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(
 				primeConfigPath,
@@ -572,10 +572,10 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("new-prime-key");
+			authStorage.setPrometheusInferenceApiKey("new-prime-key");
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.api_key).toBe("new-prime-key");
@@ -584,7 +584,7 @@ describe("AuthStorage", () => {
 			expect(config.team_role).toBeUndefined();
 		});
 
-		test("setPrimeInferenceApiKey preserves Prime CLI team selection for the same key", () => {
+		test("setPrometheusInferenceApiKey preserves Prometheus CLI team selection for the same key", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(
 				primeConfigPath,
@@ -604,10 +604,10 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("prime-cli-key");
+			authStorage.setPrometheusInferenceApiKey("prime-cli-key");
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.api_key).toBe("prime-cli-key");
@@ -617,7 +617,7 @@ describe("AuthStorage", () => {
 			expect(authStorage.has("prime-inference")).toBe(false);
 		});
 
-		test("setPrimeInferenceApiKey migrates legacy team selection for the same Prime CLI key", () => {
+		test("setPrometheusInferenceApiKey migrates legacy team selection for the same Prometheus CLI key", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({
@@ -630,10 +630,10 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("prime-cli-key");
+			authStorage.setPrometheusInferenceApiKey("prime-cli-key");
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.api_key).toBe("prime-cli-key");
@@ -641,10 +641,10 @@ describe("AuthStorage", () => {
 			expect(config.team_name).toBe("Research");
 			expect(config.team_role).toBe("admin");
 			expect(authStorage.has("prime-inference")).toBe(false);
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "team-1" });
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "team-1" });
 		});
 
-		test("setPrimeInferenceApiKey migrates legacy personal selection for the same Prime CLI key", () => {
+		test("setPrometheusInferenceApiKey migrates legacy personal selection for the same Prometheus CLI key", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(
 				primeConfigPath,
@@ -664,10 +664,10 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("prime-cli-key");
+			authStorage.setPrometheusInferenceApiKey("prime-cli-key");
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.api_key).toBe("prime-cli-key");
@@ -677,7 +677,7 @@ describe("AuthStorage", () => {
 			expect(authStorage.getProviderHeaders("prime-inference")).toBeUndefined();
 		});
 
-		test("setPrimeInferenceApiKey removes legacy Prometheus credential after Prime CLI save", () => {
+		test("setPrometheusInferenceApiKey removes legacy Prometheus credential after Prometheus CLI save", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeAuthJson({
 				"prime-inference": {
@@ -689,31 +689,31 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceApiKey("new-prime-key");
+			authStorage.setPrometheusInferenceApiKey("new-prime-key");
 
 			const agentAuth = JSON.parse(readFileSync(authJsonPath, "utf-8")) as Record<string, unknown>;
 			expect(agentAuth["prime-inference"]).toBeUndefined();
 			expect(authStorage.has("prime-inference")).toBe(false);
 		});
 
-		test("setPrimeInferenceApiKey throws when Prime CLI config cannot be written", () => {
+		test("setPrometheusInferenceApiKey throws when Prometheus CLI config cannot be written", () => {
 			const primeConfigPath = join(tempDir, "prime-config-dir");
 			mkdirSync(primeConfigPath);
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			expect(() => authStorage.setPrimeInferenceApiKey("new-prime-key")).toThrow();
+			expect(() => authStorage.setPrometheusInferenceApiKey("new-prime-key")).toThrow();
 			expect(authStorage.drainErrors()).toHaveLength(1);
 		});
 
-		test("setPrimeInferenceApiKey preserves team selection when Prime CLI config is disabled", () => {
+		test("setPrometheusInferenceApiKey preserves team selection when Prometheus CLI config is disabled", () => {
 			writeAuthJson({
 				"prime-inference": {
 					type: "api_key",
@@ -722,9 +722,9 @@ describe("AuthStorage", () => {
 				},
 			});
 
-			authStorage = AuthStorage.create(authJsonPath, { usePrimeCliConfig: false });
+			authStorage = AuthStorage.create(authJsonPath, { usePrometheusCliConfig: false });
 
-			authStorage.setPrimeInferenceApiKey("new-prime-key");
+			authStorage.setPrometheusInferenceApiKey("new-prime-key");
 
 			expect(authStorage.get("prime-inference")).toEqual({
 				type: "api_key",
@@ -733,7 +733,7 @@ describe("AuthStorage", () => {
 			});
 		});
 
-		test("logout clears Prime CLI credentials when enabled", async () => {
+		test("logout clears Prometheus CLI credentials when enabled", async () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(
 				primeConfigPath,
@@ -753,7 +753,7 @@ describe("AuthStorage", () => {
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
 			authStorage.logout("prime-inference");
@@ -766,23 +766,23 @@ describe("AuthStorage", () => {
 			await expect(authStorage.getApiKey("prime-inference")).resolves.toBeUndefined();
 		});
 
-		test("setPrimeInferenceTeamSelection writes Prime CLI config", () => {
+		test("setPrometheusInferenceTeamSelection writes Prometheus CLI config", () => {
 			const primeConfigPath = join(tempDir, "prime-config.json");
 			writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 			writeAuthJson({});
 
 			authStorage = AuthStorage.create(authJsonPath, {
 				primeCliConfigPath: primeConfigPath,
-				usePrimeCliConfig: true,
+				usePrometheusCliConfig: true,
 			});
 
-			authStorage.setPrimeInferenceTeamSelection({ teamId: "team-1", name: "Research", role: "admin" });
+			authStorage.setPrometheusInferenceTeamSelection({ teamId: "team-1", name: "Research", role: "admin" });
 
 			const config = JSON.parse(readFileSync(primeConfigPath, "utf-8")) as Record<string, unknown>;
 			expect(config.team_id).toBe("team-1");
 			expect(config.team_name).toBe("Research");
 			expect(config.team_role).toBe("admin");
-			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prime-Team-ID": "team-1" });
+			expect(authStorage.getProviderHeaders("prime-inference")).toEqual({ "X-Prometheus-Team-ID": "team-1" });
 		});
 
 		test("apiKey command can use shell features like pipes", async () => {

@@ -5,7 +5,7 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<meta name="theme-color" content="#0b0e13" />
 		<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
-		<title>Prometheus</title>
+		<title></title>
 		<link rel="icon" href="./logo.png" type="image/png" />
 		<link rel="stylesheet" href="./styles.css" />
 	</head>
@@ -18,6 +18,7 @@
 		FORM: Canonical Claude Code-style desktop workbench, adapted to Prometheus's RPC engine and terminology.
 		FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 		-->
+		<div class="window-titlebar" aria-hidden="true"></div>
 		<div class="app-shell">
 			<aside class="sidebar">
 				<div class="brand-lockup">
@@ -130,6 +131,21 @@
 							</div>
 						</div>
 					</section>
+					<section class="question-panel" id="question-panel" aria-live="polite" hidden>
+						<div class="question-panel-header">
+							<div>
+								<div class="question-progress" id="question-progress"></div>
+								<h2 id="question-title"></h2>
+								<p id="question-description"></p>
+							</div>
+							<button class="icon-button" id="question-collapse" type="button" aria-label="Dismiss questions" title="Dismiss">×</button>
+						</div>
+						<div class="question-options" id="question-options"></div>
+						<div class="question-panel-footer">
+							<button class="secondary-button" id="question-dismiss" type="button">Dismiss</button>
+							<button class="primary-button" id="question-submit" type="button" disabled>Submit</button>
+						</div>
+					</section>
 					<div class="composer-box">
 						<div class="command-menu" id="command-menu" role="listbox" aria-label="Slash commands" hidden></div>
 						<div class="attachment-list" id="attachment-list" role="list" aria-label="Attachments" hidden></div>
@@ -156,6 +172,10 @@
 								<button class="send-button" id="send-button" type="submit" disabled><span id="send-label">Send</span><svg class="send-arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5V3.5m0 0L4.5 7M8 3.5 11.5 7"/></svg></button>
 							</div>
 						</div>
+					</div>
+					<div class="usage-limit-banner" id="usage-limit-banner" role="alert" hidden>
+						<span class="usage-limit-icon" aria-hidden="true">!</span>
+						<span id="usage-limit-message"></span>
 					</div>
 					<div class="composer-metrics" id="composer-metrics" hidden>
 						<span class="composer-metric-context" id="composer-metric-context" hidden>

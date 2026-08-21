@@ -214,7 +214,7 @@ export function getEnvApiKey(provider: string): string | undefined {
 }
 
 // PRIME_TEAM_ID env var, falling back to team_id in ~/.prime/config.json.
-export function getPrimeTeamId(): string | undefined {
+export function getPrometheusTeamId(): string | undefined {
 	const fromEnv = process.env.PRIME_TEAM_ID || getProcEnv("PRIME_TEAM_ID");
 	if (fromEnv?.trim()) return fromEnv.trim();
 

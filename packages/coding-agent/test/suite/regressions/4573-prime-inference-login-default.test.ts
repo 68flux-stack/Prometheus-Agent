@@ -27,7 +27,7 @@ type LoginHarness = {
 const prepareForModelSelectionAfterLogin = (InteractiveMode.prototype as unknown as LoginHarness)
 	.prepareForModelSelectionAfterLogin;
 
-describe("ENG-4573 Prime Inference login default", () => {
+describe("ENG-4573 Prometheus Inference login default", () => {
 	const harnesses: Harness[] = [];
 
 	afterEach(() => {
@@ -109,7 +109,7 @@ describe("ENG-4573 Prime Inference login default", () => {
 			prepareForModelSelectionAfterLogin.call(fakeThis, {
 				status: "success",
 				providerId: PRIME_INFERENCE_PROVIDER_ID,
-				providerName: "Prime Inference",
+				providerName: "Prometheus Inference",
 				authType: "api_key",
 				kind: "provider",
 			}),

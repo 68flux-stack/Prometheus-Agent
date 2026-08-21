@@ -130,7 +130,7 @@ describe("openai-completions empty tools handling", () => {
 		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer test");
 	});
 
-	it("uses OpenAI reasoning fields for an explicitly configured private Prime Inference route", async () => {
+	it("uses OpenAI reasoning fields for an explicitly configured private Prometheus Inference route", async () => {
 		const model: Model<"openai-completions"> = {
 			id: "internal/glm-5.2-fast",
 			name: "GLM 5.2 Fast",

@@ -218,6 +218,37 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("output style", () => {
+		it("defaults to ELI5 and preserves an explicit none opt-out", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getOutputStyle()).toBe("ELI5");
+
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ outputStyle: "none" }));
+			const optedOut = SettingsManager.create(projectDir, agentDir);
+			expect(optedOut.getOutputStyle()).toBe("none");
+		});
+	});
+
+	describe("compaction threshold", () => {
+		it("defaults to 75 percent and reads a configured value", () => {
+			const manager = SettingsManager.inMemory();
+			expect(manager.getCompactionThresholdPercent()).toBe(75);
+
+			const configured = SettingsManager.inMemory({ compaction: { thresholdPercent: 82 } });
+			expect(configured.getCompactionThresholdPercent()).toBe(82);
+		});
+
+		it("falls back for invalid values and persists valid changes", async () => {
+			const manager = SettingsManager.inMemory({ compaction: { thresholdPercent: 120 } });
+			expect(manager.getCompactionThresholdPercent()).toBe(75);
+
+			manager.setCompactionThresholdPercent(80);
+			await manager.flush();
+			expect(manager.getCompactionThresholdPercent()).toBe(80);
+			expect(() => manager.setCompactionThresholdPercent(0)).toThrow();
+		});
+	});
+
 	describe("autoRefine", () => {
 		it("defaults to enabled while preserving explicit opt-out", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

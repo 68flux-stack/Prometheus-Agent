@@ -19,6 +19,7 @@ function skill(name: string): Skill {
 			origin: "top-level",
 		},
 		disableModelInvocation: false,
+		eager: true,
 		kind: "markdown",
 	};
 }
@@ -60,9 +61,7 @@ describe("buildRlmPrompt", () => {
 				`Pre-installed Python packages: ${DEFAULT_RLM_EXTRA_IMPORT_LABELS.join(", ")}.`,
 				"Install additional packages with `uv pip install <pkg>` (this is a uv-managed venv with no pip module).",
 				"",
-				"Installed Python skill modules (pre-imported): `websearch`, `refine`.",
-				"Read each skill's SKILL.md for its API. Inspect a module with `help(<skill>)` or `dir(<skill>)`, then inspect a documented callable with `inspect.signature(<skill>.<function>)`.",
-				"Each skill is also available as a shell command by the same name: `<skill> ...`. Discover its CLI usage with `<skill> --help`.",
+				"Search the web with the pre-imported `websearch` skill: `await websearch.run(query, num_results=None)` returns titles/URLs/highlights; `await websearch.fetch(urls)` reads one or more pages in full as markdown.",
 				"",
 				"IPython is the agent's long-lived notebook: a persistent control environment for reasoning, context management, state, tool orchestration, and recursive subcalls. Use it to keep intermediate variables, inspect and transform outputs, write small helper functions, and preserve useful state across turns or compaction.",
 				"",
@@ -106,7 +105,9 @@ describe("buildRlmPrompt", () => {
 			installedSkills: ["websearch"],
 		});
 
-		expect(prompt).toContain("Installed Python skill modules (pre-imported): `websearch`.");
+		expect(prompt).toContain(
+			"Search the web with the pre-imported `websearch` skill: `await websearch.run(query, num_results=None)`",
+		);
 		expect(prompt).toContain("A callable `rlm` is already in your global namespace");
 		expect(prompt).toContain("IPython is the agent's long-lived notebook");
 		expect(prompt).toContain("Each `%%bash` cell runs in a throw-away subshell");
@@ -689,15 +690,15 @@ describe("buildSystemPrompt", () => {
 		const prompt = buildSystemPrompt({
 			selectedTools: ["ipython"],
 			contextFiles: [],
-			skills: [skill("websearch")],
+			skills: [skill("docs-lookup")],
 			cwd: "/repo",
 		});
 
 		expect(prompt).not.toContain("Installed Python skill modules (pre-imported)");
 		expect(prompt).toContain("<available_skills>");
-		expect(prompt).toContain("<name>websearch</name>");
+		expect(prompt).toContain("<name>docs-lookup</name>");
 		expect(prompt).toContain("<type>markdown</type>");
-		expect(prompt).toContain("<location>/skills/websearch/SKILL.md</location>");
+		expect(prompt).toContain("<location>/skills/docs-lookup/SKILL.md</location>");
 	});
 
 	test("Python skills are configured for IPython and included in skill metadata", () => {

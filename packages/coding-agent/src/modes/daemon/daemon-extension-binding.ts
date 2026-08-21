@@ -10,7 +10,7 @@ import type { SubagentRuntimeHost } from "../../core/rlm-runtime.js";
 import { createAgentConnectionState } from "../agent-connection/snapshot.js";
 import type { AgentConnectionState } from "../agent-connection/types.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
-import type { ActiveSessionState } from "./active-session-state.js";
+import { type ActiveSessionState, daemonClientSupportsCapability } from "./active-session-state.js";
 import { execEnvForSession, withClientEnv } from "./daemon-client-env.js";
 import {
 	type DaemonExtensionUIResponse,
@@ -197,6 +197,10 @@ function createExtensionUIContext(
 						? response.value
 						: undefined,
 			),
+		question: (questions, opts) =>
+			dialogRequest("question", { questions, timeout: opts?.timeout }, opts, undefined, (response) =>
+				"answers" in response ? response.answers : undefined,
+			),
 		notify: (message, notifyType) => emitUiRequest("notify", { message, notifyType }),
 		onTerminalInput: () => () => {},
 		setStatus: (key, text) => emitUiRequest("setStatus", { statusKey: key, statusText: text }),
@@ -249,6 +253,11 @@ function createExtensionUIContext(
 function hasExtensionUiClientForMethod(state: ActiveSessionState, method: string): boolean {
 	if (!isDaemonDialogExtensionUiRequest(method)) {
 		return state.clients.size > 0;
+	}
+	if (method === "question") {
+		return [...state.clients].some((client) =>
+			daemonClientSupportsCapability(client, state.activeSessionId, "question_ui"),
+		);
 	}
 	return [...state.clients].some((client) => client.supportsExtensionUi);
 }

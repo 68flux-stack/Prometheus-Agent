@@ -77,6 +77,8 @@ export type {
 	ExtensionShortcut,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIQuestion,
+	ExtensionUIQuestionOption,
 	ExtensionWidgetOptions,
 	GetActiveToolsHandler,
 	GetAllToolsHandler,

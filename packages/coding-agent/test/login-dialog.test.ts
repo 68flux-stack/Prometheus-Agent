@@ -145,13 +145,13 @@ describe("LoginDialogComponent", () => {
 	});
 
 	it("renders verification codes as a distinct field", () => {
-		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prime Inference");
+		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prometheus Inference");
 
 		dialog.showAuth("https://example.com/challenge", "Code: abc-123");
 		const output = stripAnsi(dialog.render(88).join("\n"));
 		const firstLogoLine = PRIME_BUTTERFLY_LOGO.split("\n")[0]?.trim() ?? "";
 
-		expect(output).toContain("Login to Prime Inference");
+		expect(output).toContain("Login to Prometheus Inference");
 		expect(output).toContain(firstLogoLine);
 		expect(output).toContain("Verification code");
 		expect(output).toContain("abc-123");
@@ -159,8 +159,8 @@ describe("LoginDialogComponent", () => {
 		expect(output).not.toContain("Code: abc-123");
 	});
 
-	it("renders Prime Inference waiting status without an extra label", () => {
-		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prime Inference");
+	it("renders Prometheus Inference waiting status without an extra label", () => {
+		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prometheus Inference");
 
 		dialog.showAuth("https://example.com/challenge", "Code: abc-123");
 		dialog.showWaiting("Waiting for browser authentication...");
@@ -170,17 +170,17 @@ describe("LoginDialogComponent", () => {
 		expect(output).not.toContain("Status");
 	});
 
-	it("keeps the Prime Inference brand header centered and within the panel", () => {
-		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prime Inference");
+	it("keeps the Prometheus Inference brand header centered and within the panel", () => {
+		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prometheus Inference");
 
-		dialog.showProgress("Checking existing Prime CLI credentials...");
+		dialog.showProgress("Checking existing Prometheus CLI credentials...");
 		const lines = dialog.render(88);
 		const output = stripAnsi(lines.join("\n"));
-		const titleLine = output.split("\n").find((line) => line.includes("Login to Prime Inference"));
-		const titleOffset = titleLine?.indexOf("Login to Prime Inference") ?? -1;
+		const titleLine = output.split("\n").find((line) => line.includes("Login to Prometheus Inference"));
+		const titleOffset = titleLine?.indexOf("Login to Prometheus Inference") ?? -1;
 
 		expect(titleOffset).toBeGreaterThan(20);
-		expect(output).toContain("Connect your Prime Intellect account to enable Prime Inference models.");
+		expect(output).toContain("Connect your Prometheus Intellect account to enable Prometheus Inference models.");
 		expect(output).toContain("Preparing authentication");
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBe(88);
@@ -189,7 +189,7 @@ describe("LoginDialogComponent", () => {
 
 	it("cancels the prompt with esc and ctrl+c", async () => {
 		for (const key of ["\x1b", "\x03"]) {
-			const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prime Inference");
+			const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prometheus Inference");
 			const prompt = dialog.showPrompt("Enter API key:");
 			dialog.handleInput(key);
 			await expect(prompt).rejects.toThrow("Login cancelled");
@@ -197,7 +197,7 @@ describe("LoginDialogComponent", () => {
 	});
 
 	it("re-arms manual input after an empty submission", async () => {
-		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prime Inference");
+		const dialog = new LoginDialogComponent(createFakeTui(), "prime-inference", () => {}, "Prometheus Inference");
 		dialog.showAuth("https://example.com/challenge", "Code: abc-123");
 
 		const first = dialog.showManualInput("Or paste an API key below:");

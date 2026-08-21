@@ -9,7 +9,29 @@ export interface RlmPromptOptions {
 	depth?: number;
 	parentAgent?: string;
 	activeTools?: string[];
+	/** Count of installed skills withheld from the prompt (see skills.ts's getLazySkills), discoverable via the `skills` meta-skill. */
+	lazySkillCount?: number;
 }
+
+/**
+ * Python import names documented directly in this prompt (see the per-skill
+ * blocks in buildRlmPrompt) instead of the generic <available_skills>
+ * catalog. Mirrors skills.ts's INLINE_DOCUMENTED_SKILL_NAMES (kebab-case
+ * skill names); kept in sync by hand — both lists are small and stable.
+ */
+const INLINE_DOCUMENTED_IMPORT_NAMES = new Set([
+	"edit",
+	"refine",
+	"compact",
+	"goal",
+	"todo",
+	"websearch",
+	"attach_image",
+	"agent_observe",
+	"agent_message",
+	"rlm_heartbeat",
+	"skills",
+]);
 
 const IPYTHON_CONTROL_PROMPT = [
 	"IPython is the agent's long-lived notebook: a persistent control environment for reasoning, context management, state, tool orchestration, and recursive subcalls. Use it to keep intermediate variables, inspect and transform outputs, write small helper functions, and preserve useful state across turns or compaction.",
@@ -72,6 +94,15 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	const installedSkills = options.installedSkills ?? [];
 	const hasAgentMessage = installedSkills.includes("agent_message");
 	const hasAgentObserve = installedSkills.includes("agent_observe");
+	const hasEdit = installedSkills.includes("edit");
+	const hasCompact = installedSkills.includes("compact");
+	const hasGoal = installedSkills.includes("goal");
+	const hasTodo = installedSkills.includes("todo");
+	const hasWebsearch = installedSkills.includes("websearch");
+	const hasAttachImage = installedSkills.includes("attach_image");
+	const hasRlmHeartbeat = installedSkills.includes("rlm_heartbeat");
+	const hasSkillsMeta = installedSkills.includes("skills");
+	const lazySkillCount = options.lazySkillCount ?? 0;
 	const allowRecursion = options.allowRecursion ?? true;
 	const depth = options.depth ?? 0;
 	const activeTools = options.activeTools ?? [];
@@ -100,8 +131,21 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	if (skillsDir) {
 		skillLines.push(`Local skills live under ${skillsDir}. Read their SKILL.md files when helpful.`);
 	}
-	if (installedSkills.length > 0) {
-		const installed = installedSkills.map((skill) => `\`${skill}\``).join(", ");
+	// Skills not documented inline below still get the generic lookup treatment
+	// (short name + "go inspect it"). Today this is empty for the bundled set —
+	// every bundled python skill is either documented inline here or, like
+	// `research`, deliberately withheld and discoverable via `skills.list()` /
+	// `skills.read()` instead. It reactivates automatically for any other
+	// python skill (e.g. a plugin-installed one) that doesn't get a hand-written
+	// paragraph.
+	// The dedicated paragraphs below are IPython-only (they document `await
+	// skill.func(...)` calls); without ipython, inline-documented skills still
+	// need the shell-command catch-all since nothing else mentions them.
+	const catchAllSkills = hasIpython
+		? installedSkills.filter((name) => !INLINE_DOCUMENTED_IMPORT_NAMES.has(name))
+		: installedSkills;
+	if (catchAllSkills.length > 0) {
+		const installed = catchAllSkills.map((skill) => `\`${skill}\``).join(", ");
 		if (hasIpython) {
 			skillLines.push(`Installed Python skill modules (pre-imported): ${installed}.`);
 			skillLines.push(
@@ -115,11 +159,46 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 				"Each skill is also available as a shell command by the same name: `<skill> ...`. Discover its CLI usage with `<skill> --help`.",
 			);
 		}
-		if (hasIpython && installedSkills.includes("edit")) {
-			skillLines.push(
-				"For targeted existing-file edits, prefer the pre-imported async `edit` skill from IPython: `old = '''...'''; new = '''...'''; await edit(path=\"pkg/file.py\", old_str=old, new_str=new)`. Use exact old/new strings; if the text contains triple double quotes, use triple single-quoted variables or build `old`/`new` from inspected file slices. Preserve explicit operation order from the user's request: when asked to create a file with one state and then edit it into another, perform those as distinct mutations in that order in the same cell instead of writing only the final state.",
-			);
-		}
+	}
+	if (hasIpython && hasEdit) {
+		skillLines.push(
+			"For targeted existing-file edits, prefer the pre-imported async `edit` skill from IPython: `old = '''...'''; new = '''...'''; await edit(path=\"pkg/file.py\", old_str=old, new_str=new)`. Use exact old/new strings; if the text contains triple double quotes, use triple single-quoted variables or build `old`/`new` from inspected file slices. Preserve explicit operation order from the user's request: when asked to create a file with one state and then edit it into another, perform those as distinct mutations in that order in the same cell instead of writing only the final state.",
+		);
+	}
+	if (hasIpython && hasCompact) {
+		skillLines.push(
+			"Check or schedule compaction with the pre-imported `compact` skill: `await compact.status()` returns `{tokens, context_window, percent, scheduled}`; `await compact.run(instructions=None)` schedules a compaction that runs when the current turn ends, then resumes you automatically.",
+		);
+	}
+	if (hasIpython && hasGoal) {
+		skillLines.push(
+			"Manage the persistent thread goal with the pre-imported `goal` skill: `await goal.get()` reads status; `await goal.create(text)` starts one only when the user explicitly asks for a tracked goal; `await goal.complete()` marks it done once fully achieved.",
+		);
+	}
+	if (hasIpython && hasTodo) {
+		skillLines.push(
+			"Show a progress checklist in the UI with the pre-imported `todo` skill: `await todo.set([...])` replaces the list, `await todo.update(id, status)` / `await todo.complete(id)` update one item, `await todo.clear()` empties it.",
+		);
+	}
+	if (hasIpython && hasWebsearch) {
+		skillLines.push(
+			"Search the web with the pre-imported `websearch` skill: `await websearch.run(query, num_results=None)` returns titles/URLs/highlights; `await websearch.fetch(urls)` reads one or more pages in full as markdown.",
+		);
+	}
+	if (hasIpython && hasAttachImage) {
+		skillLines.push(
+			"View an on-disk image with the pre-imported `attach_image` skill: `await attach_image.run(path)` loads a PNG/JPEG/GIF/WebP into context so you can see it. Requires a vision-capable model.",
+		);
+	}
+	if (hasIpython && hasRlmHeartbeat) {
+		skillLines.push(
+			"Manage scheduled agent-owned heartbeats with the pre-imported `rlm_heartbeat` skill: `await rlm_heartbeat.list()`, `.create(...)`, `.update(...)`, `.delete(...)`. Use only when the user asks the agent itself (not `/heartbeat`) to schedule recurring work.",
+		);
+	}
+	if (hasIpython && hasSkillsMeta && lazySkillCount > 0) {
+		skillLines.push(
+			`${lazySkillCount} additional skill${lazySkillCount === 1 ? "" : "s"} are installed but not shown above to save context. Only call \`await skills.list()\` for a capability not already documented in this prompt — every primitive described above (websearch, compact, goal, todo, edit, etc.) is already fully usable as shown, with no lookup needed first. Use \`await skills.read("name")\` to load a match from the list before assuming none exists.`,
+		);
 	}
 	if (skillLines.length > 0) {
 		parts.push("", ...skillLines);
@@ -131,7 +210,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	}
 	if (hasAgentObserve) {
 		parts.push(
-			"Agent observation is restricted to your parent, siblings, and direct children; roots are siblings, and deeper inspection relays through the intermediate child.",
+			"Read-only family inspection is available via the pre-imported `agent_observe` skill: `await agent_observe.list_agents()`, `await agent_observe.get_agent(id)`, `await agent_observe.recent_messages(id, limit=...)`. Restricted to your parent, siblings, and direct children; roots are siblings, and deeper inspection relays through the intermediate child.",
 		);
 	}
 

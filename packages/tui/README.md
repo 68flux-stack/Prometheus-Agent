@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://primeintellect.ai">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/prime-butterfly.svg">
-      <img alt="Prime Intellect butterfly mark" src="../../assets/brand/prime-butterfly-black.svg" width="88">
+      <source media="(prefers-color-scheme: dark)" srcset="../../PrometheusLogo.png">
+      <img alt="Prometheus logo" src="../../PrometheusLogo.png" width="88">
     </picture>
   </a>
 </p>

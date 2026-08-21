@@ -67,7 +67,7 @@ The stable `latest.json` and beta `beta.json` manifests use the same JSON shape:
 
 ### Pseudonymous usage analytics
 
-Prometheus sends pseudonymous, aggregate usage and performance events to Prime Intellect. These events include version and operating-system category, onboarding outcome and duration, execution mode (`interactive`, `print`, `json`, `rpc`, or `acp`), run outcomes, TTFT and latency, prompt and turn counts, token usage, tool success counts, retries, and compactions.
+Prometheus sends pseudonymous, aggregate usage and performance events to Prometheus Intellect. These events include version and operating-system category, onboarding outcome and duration, execution mode (`interactive`, `print`, `json`, `rpc`, or `acp`), run outcomes, TTFT and latency, prompt and turn counts, token usage, tool success counts, retries, and compactions.
 
 Prometheus does not send prompts, responses, thinking, tool arguments or results, command text, filenames, paths, repository information, environment variables, credentials, raw error messages, hostnames, usernames, emails, or hardware identifiers. A random installation ID is stored as `telemetry.json` in the configured agent directory (normally `~/.prometheus/agent/`).
 
@@ -114,7 +114,8 @@ prometheus --offline
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
+| `compaction.thresholdPercent` | number | `75` | Compact when context reaches this percentage of the model window |
+| `compaction.reserveTokens` | number | `16384` | Tokens reserved for the compaction summary response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 
 ```json
@@ -205,7 +206,7 @@ Use `/permissions [plan|workspace|unrestricted]` or the configurable `app.permis
 - `workspace` allows writes only inside the workspace and configured `writeRoots`. It is a fence, not a wall: on Windows the kernel can call `request_directory_access("<directory>", "<why>")`, which shows you an accept/deny prompt in the transcript. An accepted directory stays open for the rest of the session and is never written to settings; a denial is reported back to the model as restricted.
 - `unrestricted` preserves the existing unsandboxed behavior and displays a warning in `/permissions status`.
 
-Linux and macOS use the `srt` OS sandbox backend. Windows supports all three modes through Prime's application permission boundary; `workspace` mode remains advisory for filesystem access performed by child processes because Windows does not yet have an OS filesystem backend. `ask` command rules block execution until policy is explicitly changed; they do not silently fall through.
+Linux and macOS use the `srt` OS sandbox backend. Windows supports all three modes through Prometheus's application permission boundary; `workspace` mode remains advisory for filesystem access performed by child processes because Windows does not yet have an OS filesystem backend. `ask` command rules block execution until policy is explicitly changed; they do not silently fall through.
 
 ```json
 {
@@ -326,6 +327,7 @@ See [packages.md](packages.md) for package management details.
   "theme": "dark",
   "compaction": {
     "enabled": true,
+    "thresholdPercent": 75,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   },
@@ -349,7 +351,7 @@ Project settings (`.prometheus/agent/settings.json`) override global settings. N
 // ~/.prometheus/agent/settings.json (global)
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "reserveTokens": 16384 }
+  "compaction": { "enabled": true, "thresholdPercent": 75, "reserveTokens": 16384 }
 }
 
 // .prometheus/agent/settings.json (project)

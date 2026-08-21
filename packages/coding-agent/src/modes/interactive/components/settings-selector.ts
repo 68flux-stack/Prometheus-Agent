@@ -32,6 +32,7 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	compactionThresholdPercent: number;
 	idleEvictionMinutes: IdleEvictionMinutes;
 	showImages: boolean;
 	autoResizeImages: boolean;
@@ -61,6 +62,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onCompactionThresholdPercentChange: (percent: number) => void;
 	onIdleEvictionMinutesChange: (value: IdleEvictionMinutes) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -212,6 +214,12 @@ export class SettingsSelectorComponent extends Container {
 			idleEvictionValues.sort((a, b) => a - b);
 		}
 
+		const compactionThresholdValues = [50, 60, 70, 75, 80, 85, 90, 95];
+		if (!compactionThresholdValues.includes(config.compactionThresholdPercent)) {
+			compactionThresholdValues.push(config.compactionThresholdPercent);
+			compactionThresholdValues.sort((a, b) => a - b);
+		}
+
 		const items: SettingItem[] = [
 			{
 				id: "autocompact",
@@ -219,6 +227,13 @@ export class SettingsSelectorComponent extends Container {
 				description: "Automatically compact context when it gets too large",
 				currentValue: config.autoCompact ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "compaction-threshold",
+				label: "Compaction threshold",
+				description: "Compact when context reaches this percentage of the model window",
+				currentValue: String(config.compactionThresholdPercent),
+				values: compactionThresholdValues.map(String),
 			},
 			{
 				id: "idle-eviction-minutes",
@@ -479,6 +494,9 @@ export class SettingsSelectorComponent extends Container {
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
+						break;
+					case "compaction-threshold":
+						callbacks.onCompactionThresholdPercentChange(Number(newValue));
 						break;
 					case "idle-eviction-minutes":
 						callbacks.onIdleEvictionMinutesChange(newValue === "off" ? "off" : Number(newValue));

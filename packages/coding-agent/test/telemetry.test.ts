@@ -148,7 +148,7 @@ describe("telemetry identity and transport", () => {
 		expect(lstatSync(telemetryPath).isSymbolicLink()).toBe(true);
 	});
 
-	it("batches events through the configured Prime endpoint", async () => {
+	it("batches events through the configured Prometheus endpoint", async () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "prometheus-telemetry-"));
 		const requests: Array<{ url: string; init: RequestInit }> = [];
 		const fetchMock: typeof fetch = async (input, init) => {

@@ -54,7 +54,7 @@ describe("assertNodeVersion", () => {
 		const text = logs.join("\n");
 		expect(text).toContain(`Node ${MIN_NODE_VERSION}`);
 		expect(text).toContain("20.18.1");
-		expect(text).toContain("github.com/PrimeIntellect-ai/prometheus/releases/latest");
+		expect(text).toContain("github.com/PrometheusIntellect-ai/prometheus/releases/latest");
 	});
 
 	test("accepts the v prefix used by process.version", () => {

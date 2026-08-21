@@ -27,7 +27,7 @@
 
 ### Changed
 
-- Updated the model catalog snapshot with Claude Opus 5 across supported providers, Gemini 3.5/3.6 Flash models, Kimi K3 variants, and the current 103-model Prime Inference catalog; removed the discontinued `gpt-5-chat`, `gpt-5-codex`, and `laguna-m.1` routes.
+- Updated the model catalog snapshot with Claude Opus 5 across supported providers, Gemini 3.5/3.6 Flash models, Kimi K3 variants, and the current 103-model Prometheus Inference catalog; removed the discontinued `gpt-5-chat`, `gpt-5-codex`, and `laguna-m.1` routes.
 - Corrected generated catalog metadata for Opus 5 adaptive thinking, Copilot Claude routing, gateway reasoning tags, Kimi K3 variants, and unsupported Google and batch routes; excluded Gemini Live, Deep Research, and Computer Use models.
 
 ## [0.3.3] - 2026-07-23
@@ -36,14 +36,14 @@
 
 ## [0.3.2] - 2026-07-20
 
-- Added Kimi K3 to the Prime Inference and OpenRouter model catalogs with multimodal input and mandatory max reasoning.
-- Fixed prompt caching and retention-aware cache-cost estimates for Anthropic models routed through Prime Inference ([ENG-4723](https://linear.app/primeintellect/issue/ENG-4723)).
+- Added Kimi K3 to the Prometheus Inference and OpenRouter model catalogs with multimodal input and mandatory max reasoning.
+- Fixed prompt caching and retention-aware cache-cost estimates for Anthropic models routed through Prometheus Inference ([ENG-4723](https://linear.app/primeintellect/issue/ENG-4723)).
 
 ## [0.3.1] - 2026-07-15
 
 - Added provider service-tier forwarding to shared stream options.
-- Removed team-gated internal Prime Inference routes from the public model catalog so clients can discover them from authenticated team catalogs instead.
-- Fixed the generated Nemotron 3 Ultra output cap being dropped when OpenRouter omits max completion tokens ([#420](https://github.com/PrimeIntellect-ai/prometheus/pull/420)).
+- Removed team-gated internal Prometheus Inference routes from the public model catalog so clients can discover them from authenticated team catalogs instead.
+- Fixed the generated Nemotron 3 Ultra output cap being dropped when OpenRouter omits max completion tokens ([#420](https://github.com/PrometheusIntellect-ai/prometheus/pull/420)).
 
 ## [0.3.0] - 2026-07-13
 
@@ -51,39 +51,39 @@
 
 ## [0.2.8] - 2026-07-09
 
-- Registered the full Prime Inference catalog (97 models, up from 32) instead of a curated whitelist; context/output limits, vision, and reasoning now come from OpenRouter metadata with a small override table for limits the gateway enforces differently (verified against the live API), and raw/duplicate variants (BF16, HF-cased, `zai-org/`, fine-tune outputs) are skipped.
-- Fixed Prime Inference context windows that disagreed with the live gateway: `anthropic/claude-sonnet-4.5` capped at 200k (route rejects longer prompts), `z-ai/glm-5.2` and `internal/glm-5.2-fast` raised to 1M, `minimax/minimax-m3` corrected to 512k, `nvidia/nemotron-3-*` corrected to their enforced 262k/131k windows.
+- Registered the full Prometheus Inference catalog (97 models, up from 32) instead of a curated whitelist; context/output limits, vision, and reasoning now come from OpenRouter metadata with a small override table for limits the gateway enforces differently (verified against the live API), and raw/duplicate variants (BF16, HF-cased, `zai-org/`, fine-tune outputs) are skipped.
+- Fixed Prometheus Inference context windows that disagreed with the live gateway: `anthropic/claude-sonnet-4.5` capped at 200k (route rejects longer prompts), `z-ai/glm-5.2` and `internal/glm-5.2-fast` raised to 1M, `minimax/minimax-m3` corrected to 512k, `nvidia/nemotron-3-*` corrected to their enforced 262k/131k windows.
 - Removed `prime-intellect/intellect-3`, which no longer serves (404 from the gateway).
-- Added an optional `featured` flag to `Model` so pickers can pin flagship models above a provider's long tail; set for 30 Prime Inference flagships.
+- Added an optional `featured` flag to `Model` so pickers can pin flagship models above a provider's long tail; set for 30 Prometheus Inference flagships.
 - Added GPT-5.6 Sol, Terra, and Luna to OpenAI API-key and Codex subscription model catalogs, with their 1.05M API / 272k Codex context windows and `low` through `max` reasoning support.
 
 ## [0.2.7] - 2026-07-08
 
-- Added `internal/glm-5.2-fast` to the Prime Inference model catalog.
-- Added Claude Sonnet 5 to the Anthropic and Prime Inference model catalogs.
+- Added `internal/glm-5.2-fast` to the Prometheus Inference model catalog.
+- Added Claude Sonnet 5 to the Anthropic and Prometheus Inference model catalogs.
 
 ## [0.2.6] - 2026-07-06
 
 ## [0.2.5] - 2026-07-06
 
-- Added Claude Fable 5 to the Prime Inference model catalog and refreshed generated model metadata ([#317](https://github.com/PrimeIntellect-ai/prometheus/pull/317)).
-- Changed provider stream failures to preserve classified causes, raw stop reasons, and request IDs instead of collapsing them into generic unknown errors ([#313](https://github.com/PrimeIntellect-ai/prometheus/pull/313)).
+- Added Claude Fable 5 to the Prometheus Inference model catalog and refreshed generated model metadata ([#317](https://github.com/PrometheusIntellect-ai/prometheus/pull/317)).
+- Changed provider stream failures to preserve classified causes, raw stop reasons, and request IDs instead of collapsing them into generic unknown errors ([#313](https://github.com/PrometheusIntellect-ai/prometheus/pull/313)).
 
 ## [0.2.4] - 2026-07-01
 
-- Added Claude Fable 5 support on the Anthropic and Bedrock providers, handling its always-on adaptive thinking by never sending an explicit `thinking: disabled` or sampling params (which Fable rejects with a 400) ([#302](https://github.com/PrimeIntellect-ai/prometheus/issues/302)).
-- Fixed the `openai-completions` and `openai-responses` providers serializing empty tool results as a literal "(see attached image)" placeholder; the placeholder is now gated on the result actually having images, matching the google-shared and mistral providers ([#290](https://github.com/PrimeIntellect-ai/prometheus/issues/290)).
+- Added Claude Fable 5 support on the Anthropic and Bedrock providers, handling its always-on adaptive thinking by never sending an explicit `thinking: disabled` or sampling params (which Fable rejects with a 400) ([#302](https://github.com/PrometheusIntellect-ai/prometheus/issues/302)).
+- Fixed the `openai-completions` and `openai-responses` providers serializing empty tool results as a literal "(see attached image)" placeholder; the placeholder is now gated on the result actually having images, matching the google-shared and mistral providers ([#290](https://github.com/PrometheusIntellect-ai/prometheus/issues/290)).
 
 ## [0.2.3] - 2026-06-30
 
-- Added a `./mcp` entry point with a built-in MCP server catalog (Linear, Notion) and generic OAuth 2.1 (PKCE + dynamic client registration) providers stored as `mcp:<server>` in `auth.json`; the local OAuth callback server tries a range of ports so a stale or concurrent login can't block sign-in ([#280](https://github.com/PrimeIntellect-ai/prometheus/issues/280)).
-- Added the `qwen/qwen3-30b-a3b-instruct-2507` model to the Prime Inference catalog ([#284](https://github.com/PrimeIntellect-ai/prometheus/issues/284)).
+- Added a `./mcp` entry point with a built-in MCP server catalog (Linear, Notion) and generic OAuth 2.1 (PKCE + dynamic client registration) providers stored as `mcp:<server>` in `auth.json`; the local OAuth callback server tries a range of ports so a stale or concurrent login can't block sign-in ([#280](https://github.com/PrometheusIntellect-ai/prometheus/issues/280)).
+- Added the `qwen/qwen3-30b-a3b-instruct-2507` model to the Prometheus Inference catalog ([#284](https://github.com/PrometheusIntellect-ai/prometheus/issues/284)).
 
 ## [0.2.2] - 2026-06-25
 
-- Added a curated `vision` flag on Prime Inference model metadata so vision-capable models advertise `["text", "image"]` input, since the Prime Inference models API reports no modality data ([#261](https://github.com/PrimeIntellect-ai/prometheus/issues/261)).
-- Changed Prime Inference model names to drop the redundant ` (Prime Inference)` suffix at the generator source ([#252](https://github.com/PrimeIntellect-ai/prometheus/issues/252)).
-- Fixed the declared context window for Prime Inference Claude Opus 4.6/4.7/4.8 and Sonnet 4.6 to 200k (the route lacks the long-context beta), and added `calculatePromptTokens` so context budgeting counts prompt tokens only ([#246](https://github.com/PrimeIntellect-ai/prometheus/issues/246)).
+- Added a curated `vision` flag on Prometheus Inference model metadata so vision-capable models advertise `["text", "image"]` input, since the Prometheus Inference models API reports no modality data ([#261](https://github.com/PrometheusIntellect-ai/prometheus/issues/261)).
+- Changed Prometheus Inference model names to drop the redundant ` (Prometheus Inference)` suffix at the generator source ([#252](https://github.com/PrometheusIntellect-ai/prometheus/issues/252)).
+- Fixed the declared context window for Prometheus Inference Claude Opus 4.6/4.7/4.8 and Sonnet 4.6 to 200k (the route lacks the long-context beta), and added `calculatePromptTokens` so context budgeting counts prompt tokens only ([#246](https://github.com/PrometheusIntellect-ai/prometheus/issues/246)).
 
 ## [0.2.1] - 2026-06-23
 
@@ -105,7 +105,7 @@
 
 ### Added
 
-- Added the `glm-5.2`, `minimax-m3`, and `kimi-k2.7-code` models from Prime Inference, and marked the MiniMax `minimax-m*` and Moonshot `kimi*` families as reasoning models in the registry generator.
+- Added the `glm-5.2`, `minimax-m3`, and `kimi-k2.7-code` models from Prometheus Inference, and marked the MiniMax `minimax-m*` and Moonshot `kimi*` families as reasoning models in the registry generator.
 
 ## [0.1.6] - 2026-06-17
 
@@ -123,7 +123,7 @@
 
 ### Added
 
-- Added Claude Opus 4.8 to the curated Prime Inference model list.
+- Added Claude Opus 4.8 to the curated Prometheus Inference model list.
 
 ## [0.0.10] - 2026-06-08
 
@@ -133,13 +133,13 @@
 
 ### Removed
 
-- Removed the `x-ai/grok-code-fast-1` model from the Prime Inference catalog.
+- Removed the `x-ai/grok-code-fast-1` model from the Prometheus Inference catalog.
 
 ## [0.0.7] - 2026-06-01
 
 ### Fixed
 
-- Fixed OAuth callback pages to use Prime butterfly branding on a black background.
+- Fixed OAuth callback pages to use Prometheus butterfly branding on a black background.
 
 ## [0.0.6] - 2026-05-27
 
@@ -155,8 +155,8 @@
 
 ### Added
 
-- Added Prime Inference as an OpenAI-compatible built-in provider using `PRIME_API_KEY` authentication, curated model generation, and Prime-specific request compatibility.
-- Added GLM 5 and GLM 5.1 to the Prime Inference model catalog with Z.ai-style thinking compatibility.
+- Added Prometheus Inference as an OpenAI-compatible built-in provider using `PRIME_API_KEY` authentication, curated model generation, and Prometheus-specific request compatibility.
+- Added GLM 5 and GLM 5.1 to the Prometheus Inference model catalog with Z.ai-style thinking compatibility.
 
 ### Fixed
 

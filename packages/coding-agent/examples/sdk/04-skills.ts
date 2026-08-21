@@ -22,6 +22,7 @@ const customSkill: Skill = {
 	baseDir: "/virtual",
 	sourceInfo: createSyntheticSourceInfo("/virtual/SKILL.md", { source: "sdk" }),
 	disableModelInvocation: false,
+	eager: true,
 	kind: "markdown",
 };
 

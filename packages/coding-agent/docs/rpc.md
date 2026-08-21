@@ -426,10 +426,10 @@ Response:
 
 #### set_auto_compaction
 
-Enable or disable automatic compaction when context is nearly full.
+Enable or disable automatic compaction. You can also set the context threshold as a percentage.
 
 ```json
-{"type": "set_auto_compaction", "enabled": true}
+{"type": "set_auto_compaction", "enabled": true, "thresholdPercent": 75}
 ```
 
 Response:
@@ -748,6 +748,27 @@ If an extension cancelled the fork:
   "data": {"text": "The original prompt text...", "cancelled": true}
 }
 ```
+
+#### navigate_tree
+
+Move the active session to the parent of a user message without creating a new session file. This is useful for replacing a message in the current chat.
+
+```json
+{"type": "navigate_tree", "targetId": "abc123"}
+```
+
+Response:
+
+```json
+{
+  "type": "response",
+  "command": "navigate_tree",
+  "success": true,
+  "data": {"cancelled": false}
+}
+```
+
+If an extension cancelled the navigation, or the operation was aborted, the response has `cancelled: true` or `aborted: true`.
 
 #### clone
 

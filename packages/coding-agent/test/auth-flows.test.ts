@@ -81,7 +81,7 @@ describe("ProviderAuthFlows", () => {
 	let authJsonPath: string;
 	let primeConfigPath: string;
 	let originalHome: string | undefined;
-	let originalPrimeTeamId: string | undefined;
+	let originalPrometheusTeamId: string | undefined;
 
 	beforeAll(() => {
 		initTheme("dark");
@@ -94,7 +94,7 @@ describe("ProviderAuthFlows", () => {
 		primeConfigPath = join(tempDir, "prime-config.json");
 		writeFileSync(authJsonPath, "{}");
 		originalHome = process.env[HOME_ENV];
-		originalPrimeTeamId = process.env.PRIME_TEAM_ID;
+		originalPrometheusTeamId = process.env.PRIME_TEAM_ID;
 	});
 
 	afterEach(() => {
@@ -103,10 +103,10 @@ describe("ProviderAuthFlows", () => {
 		} else {
 			process.env[HOME_ENV] = originalHome;
 		}
-		if (originalPrimeTeamId === undefined) {
+		if (originalPrometheusTeamId === undefined) {
 			delete process.env.PRIME_TEAM_ID;
 		} else {
-			process.env.PRIME_TEAM_ID = originalPrimeTeamId;
+			process.env.PRIME_TEAM_ID = originalPrometheusTeamId;
 		}
 		if (existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });
@@ -114,7 +114,7 @@ describe("ProviderAuthFlows", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("preserves the Prime CLI team when login reuses the existing Prime CLI key", async () => {
+	it("preserves the Prometheus CLI team when login reuses the existing Prometheus CLI key", async () => {
 		process.env.PRIME_TEAM_ID = "env-team";
 		writeFileSync(
 			primeConfigPath,
@@ -136,7 +136,7 @@ describe("ProviderAuthFlows", () => {
 		);
 		const authStorage = AuthStorage.create(authJsonPath, {
 			primeCliConfigPath: primeConfigPath,
-			usePrimeCliConfig: true,
+			usePrometheusCliConfig: true,
 		});
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			jsonResponse({
@@ -145,7 +145,7 @@ describe("ProviderAuthFlows", () => {
 		);
 		const { host, statusMessages, errorMessages } = createHost(authStorage);
 
-		const result = await new ProviderAuthFlows(host).runPrimeInferenceLogin();
+		const result = await new ProviderAuthFlows(host).runPrometheusInferenceLogin();
 
 		expect(errorMessages).toEqual([]);
 		expect(result.status).toBe("success");
@@ -160,13 +160,13 @@ describe("ProviderAuthFlows", () => {
 		expect(authStorage.has(PRIME_INFERENCE_PROVIDER_ID)).toBe(false);
 	});
 
-	it("stores a reused Prime CLI key when Prime CLI config sync is disabled", async () => {
+	it("stores a reused Prometheus CLI key when Prometheus CLI config sync is disabled", async () => {
 		process.env[HOME_ENV] = tempDir;
 		process.env.PRIME_TEAM_ID = "env-team";
-		const defaultPrimeDir = join(tempDir, ".prime");
-		mkdirSync(defaultPrimeDir, { recursive: true });
-		writeFileSync(join(defaultPrimeDir, "config.json"), JSON.stringify({ api_key: "prime-cli-key" }));
-		const authStorage = AuthStorage.create(authJsonPath, { usePrimeCliConfig: false });
+		const defaultPrometheusDir = join(tempDir, ".prime");
+		mkdirSync(defaultPrometheusDir, { recursive: true });
+		writeFileSync(join(defaultPrometheusDir, "config.json"), JSON.stringify({ api_key: "prime-cli-key" }));
+		const authStorage = AuthStorage.create(authJsonPath, { usePrometheusCliConfig: false });
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			jsonResponse({
 				data: { scope: { inference: { write: true } } },
@@ -174,7 +174,7 @@ describe("ProviderAuthFlows", () => {
 		);
 		const { host, errorMessages } = createHost(authStorage);
 
-		const result = await new ProviderAuthFlows(host).runPrimeInferenceLogin();
+		const result = await new ProviderAuthFlows(host).runPrometheusInferenceLogin();
 
 		expect(errorMessages).toEqual([]);
 		expect(result.status).toBe("success");
@@ -195,24 +195,24 @@ describe("ProviderAuthFlows", () => {
 		});
 	});
 
-	it("offers Prime Inference logout when auth comes from the Prime CLI config", async () => {
+	it("offers Prometheus Inference logout when auth comes from the Prometheus CLI config", async () => {
 		writeFileSync(primeConfigPath, JSON.stringify({ api_key: "prime-cli-key" }));
 		const authStorage = AuthStorage.create(authJsonPath, {
 			primeCliConfigPath: primeConfigPath,
-			usePrimeCliConfig: true,
+			usePrometheusCliConfig: true,
 		});
 		const { host, overlays } = createHost(authStorage);
 
 		const logoutResult = new ProviderAuthFlows(host).runLogout();
 
 		expect(overlays).toHaveLength(1);
-		expect(stripAnsi(overlays[0]?.render(80).join("\n") ?? "")).toContain("Prime Inference");
+		expect(stripAnsi(overlays[0]?.render(80).join("\n") ?? "")).toContain("Prometheus Inference");
 		overlays[0]?.handleInput?.("\x1b");
 		await expect(logoutResult).resolves.toBeNull();
 	});
 
 	it("opens login on the requested MCP Connections category", async () => {
-		const authStorage = AuthStorage.create(authJsonPath, { usePrimeCliConfig: false });
+		const authStorage = AuthStorage.create(authJsonPath, { usePrometheusCliConfig: false });
 		const { host, overlays } = createHost(authStorage);
 
 		const loginResult = new ProviderAuthFlows(host).runLogin({ initialCategory: "service" });

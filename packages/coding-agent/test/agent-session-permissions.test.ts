@@ -41,7 +41,8 @@ describe.runIf(process.platform === "win32")("AgentSession plan mode directive",
 
 		session.setExecutionMode("plan");
 		expect(session.systemPrompt).toContain("Plan mode is active");
-		expect(session.systemPrompt).toContain("only exposes the ipython tool");
+		expect(session.systemPrompt).toContain("Do not edit or create files");
+		expect(session.systemPrompt).toContain("only blocks file editing and creation");
 
 		session.setExecutionMode("workspace");
 		expect(session.systemPrompt).not.toContain("Plan mode is active");

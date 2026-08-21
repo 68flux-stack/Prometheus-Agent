@@ -168,7 +168,7 @@ describe("adaptive TUI theme colors", () => {
 	});
 
 	it("falls back across the background when the same-side blend is capped", () => {
-		// Prime selectedBg (#222226, luminance ~34.5) is slightly darker than this
+		// Prometheus selectedBg (#222226, luminance ~34.5) is slightly darker than this
 		// terminal background; blending darker is capped at 0.5 and cannot reach 28,
 		// so the highlight must cross upward instead.
 		setDefaultTerminalColors({

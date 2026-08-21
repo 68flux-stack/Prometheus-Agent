@@ -328,8 +328,8 @@ export class RpcClient {
 	/**
 	 * Set auto-compaction enabled/disabled.
 	 */
-	async setAutoCompaction(enabled: boolean): Promise<void> {
-		await this.send({ type: "set_auto_compaction", enabled });
+	async setAutoCompaction(enabled: boolean, thresholdPercent?: number): Promise<void> {
+		await this.send({ type: "set_auto_compaction", enabled, thresholdPercent });
 	}
 
 	/**
@@ -463,6 +463,14 @@ export class RpcClient {
 	 */
 	async fork(entryId: string, position?: "before" | "at"): Promise<{ text?: string; cancelled: boolean }> {
 		const response = await this.send({ type: "fork", entryId, position });
+		return this.getData(response);
+	}
+
+	/**
+	 * Navigate to a user message's parent inside the current session file.
+	 */
+	async navigateTree(targetId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }> {
+		const response = await this.send({ type: "navigate_tree", targetId });
 		return this.getData(response);
 	}
 

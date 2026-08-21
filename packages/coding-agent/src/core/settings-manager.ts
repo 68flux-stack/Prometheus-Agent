@@ -8,9 +8,11 @@ import type { ExecutionMode, PermissionSettings } from "./execution-policy.js";
 
 const RECENT_MODELS_LIMIT = 20;
 export const DEFAULT_IDLE_EVICTION_MINUTES = 90;
+const DEFAULT_OUTPUT_STYLE = "ELI5";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
+	thresholdPercent?: number; // default: 75 - compact when context reaches this percentage of the model window
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
 	agentCallable?: boolean; // default: true - expose the compact skill so the model can request compaction
@@ -163,7 +165,7 @@ export interface Settings {
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
-	outputStyle?: string; // Name of a custom output style from the output-styles directory ("default" or unset uses the built-in prompt)
+	outputStyle?: string; // Name of a custom output style from the output-styles directory ("ELI5" is the default; "none" disables extra style instructions)
 	compaction?: CompactionSettings;
 	autoRefine?: AutoRefineSettings;
 	agentTraces?: AgentTracesSettings;
@@ -784,8 +786,8 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getOutputStyle(): string | undefined {
-		return this.settings.outputStyle;
+	getOutputStyle(): string {
+		return this.settings.outputStyle ?? DEFAULT_OUTPUT_STYLE;
 	}
 
 	setOutputStyle(outputStyle: string): void {
@@ -893,6 +895,23 @@ export class SettingsManager {
 		return this.settings.compaction?.enabled ?? true;
 	}
 
+	getCompactionThresholdPercent(): number {
+		const value = this.settings.compaction?.thresholdPercent;
+		return typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 99 ? value : 75;
+	}
+
+	setCompactionThresholdPercent(percent: number): void {
+		if (!Number.isFinite(percent) || percent < 1 || percent > 99) {
+			throw new Error("Compaction threshold must be a number from 1 to 99");
+		}
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.thresholdPercent = percent;
+		this.markModified("compaction", "thresholdPercent");
+		this.save();
+	}
+
 	getAutoSessionNameEnabled(): boolean {
 		return this.settings.autoSessionName ?? true;
 	}
@@ -962,9 +981,15 @@ export class SettingsManager {
 		return this.settings.compaction?.agentCallable ?? true;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionSettings(): {
+		enabled: boolean;
+		thresholdPercent: number;
+		reserveTokens: number;
+		keepRecentTokens: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
+			thresholdPercent: this.getCompactionThresholdPercent(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
 		};

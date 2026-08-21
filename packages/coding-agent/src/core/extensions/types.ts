@@ -86,6 +86,18 @@ export interface ExtensionUIDialogOptions {
 	timeout?: number;
 }
 
+export interface ExtensionUIQuestionOption {
+	label: string;
+	description: string;
+	recommended: boolean;
+}
+
+export interface ExtensionUIQuestion {
+	question: string;
+	description?: string;
+	options: ExtensionUIQuestionOption[];
+}
+
 /** Placement for extension widgets. */
 export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
@@ -123,6 +135,9 @@ export interface ExtensionUIContext {
 
 	/** Show a text input dialog. */
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+
+	/** Ask one or more clear multiple-choice questions. Returns one answer per question. */
+	question(questions: ExtensionUIQuestion[], opts?: ExtensionUIDialogOptions): Promise<string[] | undefined>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

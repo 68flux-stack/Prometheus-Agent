@@ -4309,8 +4309,14 @@ export class DaemonSupervisor {
 			if (replacementSnapshotFollows && !client.capabilities.has("chunked_snapshot")) {
 				continue;
 			}
-			if (outboundType === "extension_ui_request" && !client.supportsExtensionUi) {
-				continue;
+			if (outboundType === "extension_ui_request") {
+				if (!client.supportsExtensionUi) continue;
+				if (
+					decodedOutbound?.type === "extension_ui_request" &&
+					decodedOutbound.method === "question" &&
+					!client.capabilities.has("question_ui")
+				)
+					continue;
 			}
 			if (client.snapshotActiveSessionIds?.has(activeSessionId)) {
 				this.queueCatchup(client, activeSessionId, outboundType === "session_replaced" ? "replacement" : "resync");

@@ -1,7 +1,7 @@
 /**
- * Pre-rendered ASCII versions of the Prime butterfly mark.
+ * Pre-rendered ASCII versions of the Prometheus butterfly mark.
  *
- * Source: assets/brand/prime-butterfly.svg
+ * Source: PrometheusLogo.png
  * Re-render at any width: `uv run scripts/render-logo.py --width N`
  */
 

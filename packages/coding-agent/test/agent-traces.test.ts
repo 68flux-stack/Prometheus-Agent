@@ -89,9 +89,9 @@ async function advanceTimersUntil(condition: () => boolean): Promise<void> {
 describe("agent trace upload", () => {
 	let tempDir: string;
 	let originalTraceApiKey: string | undefined;
-	let originalPrimeApiKey: string | undefined;
+	let originalPrometheusApiKey: string | undefined;
 	let originalTraceBaseUrl: string | undefined;
-	let originalPrimeBaseUrl: string | undefined;
+	let originalPrometheusBaseUrl: string | undefined;
 	let originalAgentDir: string | undefined;
 
 	beforeEach(() => {
@@ -99,9 +99,9 @@ describe("agent trace upload", () => {
 		originalAgentDir = process.env[ENV_AGENT_DIR];
 		process.env[ENV_AGENT_DIR] = tempDir;
 		originalTraceApiKey = process.env.PROMETHEUS_TRACES_API_KEY;
-		originalPrimeApiKey = process.env.PRIME_API_KEY;
+		originalPrometheusApiKey = process.env.PRIME_API_KEY;
 		originalTraceBaseUrl = process.env.PROMETHEUS_TRACES_BASE_URL;
-		originalPrimeBaseUrl = process.env.PRIME_API_BASE_URL;
+		originalPrometheusBaseUrl = process.env.PRIME_API_BASE_URL;
 		delete process.env.PROMETHEUS_TRACES_API_KEY;
 		delete process.env.PRIME_API_KEY;
 		delete process.env.PROMETHEUS_TRACES_BASE_URL;
@@ -121,20 +121,20 @@ describe("agent trace upload", () => {
 		} else {
 			process.env.PROMETHEUS_TRACES_API_KEY = originalTraceApiKey;
 		}
-		if (originalPrimeApiKey === undefined) {
+		if (originalPrometheusApiKey === undefined) {
 			delete process.env.PRIME_API_KEY;
 		} else {
-			process.env.PRIME_API_KEY = originalPrimeApiKey;
+			process.env.PRIME_API_KEY = originalPrometheusApiKey;
 		}
 		if (originalTraceBaseUrl === undefined) {
 			delete process.env.PROMETHEUS_TRACES_BASE_URL;
 		} else {
 			process.env.PROMETHEUS_TRACES_BASE_URL = originalTraceBaseUrl;
 		}
-		if (originalPrimeBaseUrl === undefined) {
+		if (originalPrometheusBaseUrl === undefined) {
 			delete process.env.PRIME_API_BASE_URL;
 		} else {
-			process.env.PRIME_API_BASE_URL = originalPrimeBaseUrl;
+			process.env.PRIME_API_BASE_URL = originalPrometheusBaseUrl;
 		}
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });

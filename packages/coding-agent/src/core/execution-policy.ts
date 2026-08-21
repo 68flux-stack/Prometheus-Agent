@@ -113,17 +113,7 @@ export function createExecutionPolicy(
 			enforcement: "application",
 			writeRoots,
 			wrapProcess: (command, args) => ({ command, args }),
-			permission: (target, value, fallback = "allow") => {
-				const modeFallback =
-					mode === "plan" && target === "tool"
-						? value === "ipython"
-							? "allow"
-							: "deny"
-						: mode === "plan" && target === "command"
-							? "deny"
-							: fallback;
-				return resolvePermission(rules, target, value, modeFallback);
-			},
+			permission: (target, value, fallback = "allow") => resolvePermission(rules, target, value, fallback),
 			grantRoot: (root) => {
 				writeRoots.push(resolve(root));
 			},

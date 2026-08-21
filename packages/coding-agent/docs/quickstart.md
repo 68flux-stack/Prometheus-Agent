@@ -28,7 +28,7 @@ prometheus
 To run a source checkout instead, use Node.js 22.8.0 or newer:
 
 ```bash
-git clone https://github.com/PrimeIntellect-ai/prometheus
+git clone https://github.com/PrometheusIntellect-ai/prometheus
 cd prometheus
 npm ci
 ./prometheus.sh

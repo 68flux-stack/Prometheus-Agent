@@ -1,6 +1,6 @@
-# Prime Inference
+# Prometheus Inference
 
-Prime Inference is an OpenAI-compatible API for frontier and open models, routed across providers and built for large-scale evaluations.
+Prometheus Inference is an OpenAI-compatible API for frontier and open models, routed across providers and built for large-scale evaluations.
 
 Live docs: `inference/overview.md`, `inference/usage.md`, `inference/adapter-deployments.md`, `inference/troubleshooting.md` under https://docs.primeintellect.ai/
 
@@ -17,10 +17,10 @@ export PRIME_API_KEY="your-api-key-here"
 
 ```bash
 prime inference models                                   # list available models
-prime eval run gsm8k -m meta-llama/llama-3.1-70b-instruct -n 25   # evals route through Prime Inference
+prime eval run gsm8k -m meta-llama/llama-3.1-70b-instruct -n 25   # evals route through Prometheus Inference
 ```
 
-Eval runs against Prime Inference models report estimated USD cost automatically.
+Eval runs against Prometheus Inference models report estimated USD cost automatically.
 
 ## Direct API (OpenAI-compatible)
 
@@ -43,5 +43,5 @@ Anything that speaks the OpenAI API works — just point it at the base URL abov
 
 ## Teams & Adapters
 
-- Team billing: send the `X-Prime-Team-ID` header (find the ID via `prime teams list` or the Team Profile page) to use team credits instead of personal balance.
+- Team billing: send the `X-Prometheus-Team-ID` header (find the ID via `prime teams list` or the Team Profile page) to use team credits instead of personal balance.
 - LoRA adapters trained with Hosted Training can be deployed and queried through the same OpenAI-compatible API (`inference/adapter-deployments.md`).

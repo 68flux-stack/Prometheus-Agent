@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://primeintellect.ai">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/prime-butterfly.svg">
-      <img alt="Prime Intellect butterfly mark" src="../../assets/brand/prime-butterfly-black.svg" width="96">
+      <source media="(prefers-color-scheme: dark)" srcset="../../PrometheusLogo.png">
+      <img alt="Prometheus logo" src="../../PrometheusLogo.png" width="96">
     </picture>
   </a>
 </p>
@@ -13,7 +13,7 @@
   RLM-native terminal coding and research harness.
 </p>
 
-Prime Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `prime-agent`. Do not use the inherited npm package as the Prime Agent install path.
+Prometheus Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `prime-agent`. Do not use the inherited npm package as the Prometheus Agent install path.
 
 ## Table of Contents
 
@@ -84,7 +84,7 @@ For each built-in provider, Prometheus maintains a list of tool-capable models, 
 **API keys:**
 - Anthropic
 - OpenAI
-- Prime Inference
+- Prometheus Inference
 - Azure OpenAI
 - DeepSeek
 - Google Gemini
@@ -679,8 +679,8 @@ prometheus --thinking high "Solve this complex problem"
 | `DO_NOT_TRACK` | Disable aggregate usage analytics when set to `1`/`true`/`yes` |
 | `PROMETHEUS_DOWNLOAD_BASE_URL` | Override the Prometheus release manifest and tarball base URL |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
-| `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
-| `PROMETHEUS_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
+| `PRIME_API_KEY` | Prometheus Inference API key; also used for trace sharing if it has `agent_traces` scope |
+| `PROMETHEUS_TRACES_API_KEY` | Prometheus API key used only for opt-in trace sharing |
 | `PROMETHEUS_TRACES_BASE_URL` | Override the Prometheus trace upload API base URL |
 | `PROMETHEUS_KERNEL_PYTHON` | Use an existing Python environment with `ipykernel` instead of auto-bootstrapping `~/.prometheus/agent/kernel-venv` |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |

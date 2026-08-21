@@ -253,20 +253,22 @@ describe("getLastAssistantUsage", () => {
 });
 
 describe("shouldCompact", () => {
-	it("should return true when context exceeds threshold", () => {
+	it("should return true when context reaches threshold percentage", () => {
 		const settings: CompactionSettings = {
 			enabled: true,
+			thresholdPercent: 90,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
 		};
 
-		expect(shouldCompact(95000, 100000, settings)).toBe(true);
-		expect(shouldCompact(89000, 100000, settings)).toBe(false);
+		expect(shouldCompact(90000, 100000, settings)).toBe(true);
+		expect(shouldCompact(89999, 100000, settings)).toBe(false);
 	});
 
 	it("should return false when disabled", () => {
 		const settings: CompactionSettings = {
 			enabled: false,
+			thresholdPercent: 90,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
 		};
@@ -277,6 +279,7 @@ describe("shouldCompact", () => {
 	it("should return false when context window is unknown", () => {
 		const settings: CompactionSettings = {
 			enabled: true,
+			thresholdPercent: 90,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
 		};

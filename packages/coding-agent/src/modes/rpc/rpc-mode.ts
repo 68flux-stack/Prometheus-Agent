@@ -78,7 +78,7 @@ async function runRpcModeWithConnectionInternal(
 	});
 
 	// Pre-warm the model catalog so the first get_available_models round trip
-	// doesn't block on provider fetches (Prime authorization, models.json).
+	// doesn't block on provider fetches (Prometheus authorization, models.json).
 	void connection.getAvailableModels().catch(() => {});
 
 	let shutdownRequested = false;
@@ -102,7 +102,7 @@ async function runRpcModeWithConnectionInternal(
 	}
 	const observations = new Map<string, ActiveObservation>();
 	const isDialogMethod = (method: string) =>
-		method === "select" || method === "confirm" || method === "input" || method === "editor";
+		method === "select" || method === "confirm" || method === "input" || method === "question" || method === "editor";
 
 	const outputConnectionEvent = (event: object) => {
 		if (promptResponsePending) {
@@ -159,6 +159,7 @@ async function runRpcModeWithConnectionInternal(
 				method === "select" ||
 				method === "confirm" ||
 				method === "input" ||
+				method === "question" ||
 				method === "editor" ||
 				method === "notify" ||
 				method === "setStatus" ||
@@ -354,7 +355,7 @@ async function runRpcModeWithConnectionInternal(
 					}),
 				);
 			case "set_auto_compaction":
-				await connection.setAutoCompactionEnabled(command.enabled);
+				await connection.setAutoCompactionEnabled(command.enabled, command.thresholdPercent);
 				return success(id, command.type);
 			case "set_auto_retry":
 				await connection.setAutoRetryEnabled(command.enabled);
@@ -421,6 +422,8 @@ async function runRpcModeWithConnectionInternal(
 				);
 				return success(id, command.type, { text: result.selectedText, cancelled: result.cancelled });
 			}
+			case "navigate_tree":
+				return success(id, command.type, await connection.navigateTree(command.targetId));
 			case "clone": {
 				const { leafId } = await connection.getSessionTree();
 				if (!leafId) return error(id, command.type, "Cannot clone session: no current entry selected");
@@ -640,9 +643,11 @@ async function runRpcModeWithConnectionInternal(
 			const daemonResponse: AgentConnectionExtensionUiResponse =
 				"cancelled" in response && response.cancelled
 					? { cancelled: true }
-					: "value" in response
-						? { value: response.value }
-						: { confirmed: "confirmed" in response && response.confirmed };
+					: "answers" in response
+						? { answers: response.answers }
+						: "value" in response
+							? { value: response.value }
+							: { confirmed: "confirmed" in response && response.confirmed };
 			await connection.respondToExtensionUiRequest(response.id, daemonResponse).catch(() => undefined);
 			return;
 		}

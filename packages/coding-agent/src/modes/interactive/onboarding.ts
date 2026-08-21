@@ -18,7 +18,7 @@ export interface OnboardingStartupState {
 	model: Model<Api> | undefined;
 }
 
-export function shouldRunPrimeCliOnboardingSplash(state: OnboardingStartupState): boolean {
+export function shouldRunPrometheusCliOnboardingSplash(state: OnboardingStartupState): boolean {
 	if (state.settingsManager.getOnboardingShown()) {
 		return false;
 	}
@@ -38,7 +38,7 @@ export function shouldRunOnboarding(state: OnboardingStartupState): boolean {
 		return false;
 	}
 	state.modelRegistry.refresh();
-	if (shouldRunPrimeCliOnboardingSplash(state)) {
+	if (shouldRunPrometheusCliOnboardingSplash(state)) {
 		return true;
 	}
 	return !isOnboardingModelReady(state);

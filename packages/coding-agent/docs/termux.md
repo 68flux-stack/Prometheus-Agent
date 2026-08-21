@@ -17,7 +17,7 @@ pkg update && pkg upgrade
 pkg install nodejs termux-api git ripgrep
 
 # Clone and install Prometheus from source
-git clone https://github.com/PrimeIntellect-ai/prometheus.git
+git clone https://github.com/PrometheusIntellect-ai/prometheus.git
 cd prometheus
 npm ci
 

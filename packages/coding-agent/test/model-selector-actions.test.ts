@@ -55,14 +55,14 @@ describe("ModelSelectorComponent", () => {
 			() => {},
 			undefined,
 			{
-				subtitle: "Choose a Prime model, or add another provider.",
+				subtitle: "Choose a Prometheus model, or add another provider.",
 			},
 		);
 
 		await waitForAsyncRender();
 
 		const output = stripAnsi(selector.render(120).join("\n"));
-		expect(output).toContain("Choose a Prime model, or add another provider.");
+		expect(output).toContain("Choose a Prometheus model, or add another provider.");
 		expect(output).toContain("Signed-in providers first.");
 		expect(output).not.toContain("opens providers");
 

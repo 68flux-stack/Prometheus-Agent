@@ -10,6 +10,7 @@ import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
 const config: SettingsConfig = {
 	autoCompact: true,
+	compactionThresholdPercent: 75,
 	idleEvictionMinutes: 90,
 	showImages: true,
 	autoResizeImages: true,
@@ -23,8 +24,8 @@ const config: SettingsConfig = {
 	availableThinkingLevels: ["off"],
 	currentTheme: "dark",
 	availableThemes: ["dark"],
-	currentOutputStyle: "default",
-	availableOutputStyles: ["default"],
+	currentOutputStyle: "none",
+	availableOutputStyles: ["none"],
 	hideThinkingBlock: false,
 	treeFilterMode: "user-only",
 	showHardwareCursor: false,
@@ -39,6 +40,7 @@ const config: SettingsConfig = {
 
 const callbacks: SettingsCallbacks = {
 	onAutoCompactChange: () => {},
+	onCompactionThresholdPercentChange: () => {},
 	onIdleEvictionMinutesChange: () => {},
 	onShowImagesChange: () => {},
 	onAutoResizeImagesChange: () => {},

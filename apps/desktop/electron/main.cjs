@@ -65,7 +65,7 @@ function isWritableDirectory(directory) {
 }
 
 const requestedUserData = process.env.PROMETHEUS_USER_DATA_DIR || path.join(app.getPath("appData"), "Prometheus");
-const legacyUserData = path.join(app.getPath("appData"), "PrimeAgent");
+const legacyUserData = path.join(app.getPath("appData"), "PrometheusAgent");
 if (!process.env.PROMETHEUS_USER_DATA_DIR && existsSync(legacyUserData) && !existsSync(requestedUserData)) {
 	try {
 		renameSync(legacyUserData, requestedUserData);
@@ -515,11 +515,15 @@ function showContextMenu(event, payload = {}) {
 // spawn — seconds. The transcript on disk is the same message list the engine
 // would return, so the renderer paints from here immediately and reconciles with
 // the engine's copy once it attaches.
-function readSessionMessages(payload = {}) {
+async function readSessionMessages(payload = {}) {
 	const sessionPath = typeof payload?.sessionPath === "string" ? payload.sessionPath : "";
 	if (!sessionPath || !existsSync(sessionPath)) return { messages: [] };
 	try {
-		return { messages: SessionManager.open(sessionPath).buildSessionContext().messages };
+		// Long transcripts must not block Electron's main process while they are read.
+		// openAsync yields during parsing and keeps the renderer responsive while the
+		// conversation is being prepared.
+		const session = await SessionManager.openAsync(sessionPath);
+		return { messages: session.buildSessionContext().messages };
 	} catch {
 		// A half-written or malformed transcript just means the engine's copy is
 		// the first one the renderer gets to show.
@@ -693,7 +697,7 @@ async function loginProvider(payload = {}) {
 	};
 
 	try {
-		const authStorage = AuthStorage.create(path.join(getAgentDataDir(), "auth.json"), { usePrimeCliConfig: false });
+		const authStorage = AuthStorage.create(path.join(getAgentDataDir(), "auth.json"), { usePrometheusCliConfig: false });
 		await authStorage.login(provider, {
 			onAuth: (info) => {
 				sendToRenderer("provider:login-event", {
@@ -857,7 +861,14 @@ function createWindow() {
 		height: 920,
 		minWidth: 860,
 		minHeight: 640,
-		backgroundColor: "#050506",
+		backgroundColor: "#151515",
+		title: "",
+		titleBarStyle: process.platform === "win32" ? "hidden" : undefined,
+		titleBarOverlay: process.platform === "win32" ? {
+			color: "#151515",
+			symbolColor: "#aaa7a2",
+			height: 30,
+		} : undefined,
 		icon: existsSync(appIconPath) ? appIconPath : undefined,
 		// Show the shell immediately. If the renderer or agent takes longer to
 		// initialize, the user still gets a real desktop window instead of an
@@ -874,10 +885,17 @@ function createWindow() {
 			spellcheck: false,
 		},
 	});
+	if (process.platform === "win32") {
+		mainWindow.setTitleBarOverlay({
+			color: "#151515",
+			symbolColor: "#aaa7a2",
+			height: 30,
+		});
+	}
 	mainWindow.maximize();
 	if (existsSync(appIconPath)) mainWindow.setIcon(appIconPath);
 	if (process.platform === "darwin" && existsSync(appIconPngPath)) app.dock.setIcon(appIconPngPath);
-	mainWindow.setTitle("Prometheus");
+	mainWindow.setTitle("");
 	Menu.setApplicationMenu(null);
 
 	mainWindow.webContents.setWindowOpenHandler(({ url }) => {

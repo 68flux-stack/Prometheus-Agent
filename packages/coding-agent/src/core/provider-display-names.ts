@@ -22,7 +22,7 @@ export const BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 	openai: "OpenAI",
 	openrouter: "OpenRouter",
 	"prometheus-traces": "Prometheus Traces",
-	"prime-inference": "Prime Inference",
+	"prime-inference": "Prometheus Inference",
 	"vercel-ai-gateway": "Vercel AI Gateway",
 	xai: "xAI",
 	zai: "ZAI",

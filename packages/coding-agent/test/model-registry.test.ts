@@ -174,7 +174,7 @@ describe("ModelRegistry", () => {
 			expect(auth).toEqual({
 				ok: true,
 				apiKey: "agent-key",
-				headers: { "X-Prime-Team-ID": "team-1" },
+				headers: { "X-Prometheus-Team-ID": "team-1" },
 			});
 		});
 
@@ -1122,8 +1122,8 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("auth refresh across processes", () => {
-		test("model catalog includes unauthenticated public models and hides private Prime routes", async () => {
-			const savedPrimeApiKey = process.env.PRIME_API_KEY;
+		test("model catalog includes unauthenticated public models and hides private Prometheus routes", async () => {
+			const savedPrometheusApiKey = process.env.PRIME_API_KEY;
 			const savedOpenAiApiKey = process.env.OPENAI_API_KEY;
 			delete process.env.PRIME_API_KEY;
 			delete process.env.OPENAI_API_KEY;
@@ -1143,8 +1143,8 @@ describe("ModelRegistry", () => {
 				const authenticated = await registry.refreshModelCatalog();
 				expect(authenticated.configuredProviders).toContain("openai");
 			} finally {
-				if (savedPrimeApiKey !== undefined) {
-					process.env.PRIME_API_KEY = savedPrimeApiKey;
+				if (savedPrometheusApiKey !== undefined) {
+					process.env.PRIME_API_KEY = savedPrometheusApiKey;
 				}
 				if (savedOpenAiApiKey !== undefined) {
 					process.env.OPENAI_API_KEY = savedOpenAiApiKey;

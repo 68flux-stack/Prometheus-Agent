@@ -6,7 +6,7 @@ import { appendRotatingLog, getAgentTracesLogPath, getSessionsDir, VERSION } fro
 import { readFirstLineSync } from "../utils/file-lines.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
-	loadPrimeCliConfig,
+	loadPrometheusCliConfig,
 	PRIME_INFERENCE_PROVIDER_ID,
 	PROMETHEUS_TRACES_PROVIDER_ID,
 	resolvePrometheusTracesBaseUrl,
@@ -659,13 +659,13 @@ export async function getPrometheusTraceCredential(
 	if (primeCredential) {
 		const primeKey = await authStorage.getApiKey(PRIME_INFERENCE_PROVIDER_ID, { includeFallback: false });
 		if (primeKey) {
-			return { apiKey: primeKey, source: "prime-inference", label: "Prime Inference credential" };
+			return { apiKey: primeKey, source: "prime-inference", label: "Prometheus Inference credential" };
 		}
 	}
 
-	const primeCliKey = loadPrimeCliConfig(options.configPath).apiKey;
+	const primeCliKey = loadPrometheusCliConfig(options.configPath).apiKey;
 	if (primeCliKey) {
-		return { apiKey: primeCliKey, source: "prime-cli", label: "Prime CLI credential" };
+		return { apiKey: primeCliKey, source: "prime-cli", label: "Prometheus CLI credential" };
 	}
 
 	return undefined;
@@ -709,7 +709,7 @@ function logAgentTraceOutcome(sessionFile: string | undefined, result: AgentTrac
 			line = `upload skipped: ${result.message}`;
 			break;
 		case "missing_credentials":
-			line = "upload skipped: no Prime credential configured (run /traces login)";
+			line = "upload skipped: no Prometheus credential configured (run /traces login)";
 			break;
 		default:
 			return;

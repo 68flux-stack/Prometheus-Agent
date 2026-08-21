@@ -352,7 +352,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 			case "environment":
 				return theme.fg("success", `env: ${status.label ?? "API key"}`);
 			case "prime_cli":
-				return theme.fg("success", status.label ?? "Prime CLI");
+				return theme.fg("success", status.label ?? "Prometheus CLI");
 			case "runtime":
 				return theme.fg("success", "runtime API key");
 			case "fallback":

@@ -316,6 +316,7 @@ describe("AgentSession prompt characterization", () => {
 						description: "Test skill",
 						filePath: skillPath,
 						disableModelInvocation: false,
+						eager: true,
 						kind: "markdown" as const,
 						baseDir: tempDir,
 						sourceInfo: createSyntheticSourceInfo(skillPath, {
@@ -364,6 +365,7 @@ describe("AgentSession prompt characterization", () => {
 						description: "Test skill",
 						filePath: skillPath,
 						disableModelInvocation: false,
+						eager: true,
 						kind: "markdown" as const,
 						baseDir: tempDir,
 						sourceInfo: createSyntheticSourceInfo(skillPath, {
