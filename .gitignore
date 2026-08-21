@@ -50,3 +50,11 @@ __pycache__/
 
 /AGENTS.md
 /memory.md
+
+# Desktop build output
+apps/desktop/dist/
+apps/desktop/engine-staging/
+
+# npm pack output
+packages/coding-agent/release/
+*.tgz

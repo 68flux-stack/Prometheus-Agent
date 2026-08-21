@@ -234,6 +234,19 @@ export class BackgroundJobManager {
 		return [...this.records.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map(publicSnapshot);
 	}
 
+	/**
+	 * True while a job can still deliver a finish notification. Orphaned records
+	 * are excluded: a restored job has no exit listener, so it would never wake a
+	 * waiter even though its process may still be alive.
+	 */
+	hasRunningJobs(): boolean {
+		for (const record of this.records.values()) {
+			this.refreshOrphan(record);
+			if (record.status === "running") return true;
+		}
+		return false;
+	}
+
 	setProcessWrapper(processWrapper: BackgroundJobManagerOptions["processWrapper"]): void {
 		this.processWrapper = processWrapper;
 	}

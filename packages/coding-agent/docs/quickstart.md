@@ -4,19 +4,20 @@ This page gets you from install to a useful first Prometheus session.
 
 ## Install
 
-Install the latest stable release on Linux or macOS:
+Prometheus needs Node.js 22.8 or newer. Install it from npm on Linux, macOS, or Windows:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh
+npm install -g prometheus-agent
 ```
 
-To try the latest beta built from `main`:
+On Linux and macOS the installer script can set up Node.js for you if it is missing, and
+prepare the IPython runtime the agent uses:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh -s -- beta
+curl -fsSL https://raw.githubusercontent.com/68flux-stack/Prometheus-Agent/main/install.sh | sh
 ```
 
-Both commands fetch versioned Prometheus release artifacts and install the `prometheus` command. The inherited npm workspace identifiers in the source tree are not the public install path.
+Both install the `prometheus` command. The inherited npm workspace identifiers in the source tree are not the public install path.
 
 Then start Prometheus in the project directory you want it to work on:
 

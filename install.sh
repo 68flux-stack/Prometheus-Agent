@@ -2,18 +2,9 @@
 
 set -eu
 
-# Keep these sentinels split so release publishing only rewrites the configured
-# values below; local or unpublished copies still need unreplaced values to compare.
-prometheus_unconfigured_base_url="__PROMETHEUS_DOWNLOAD_BASE""_URL__"
-prometheus_unconfigured_default_release_channel="__PROMETHEUS_DEFAULT_RELEASE_""CHANNEL__"
-prometheus_base_url="${PROMETHEUS_DOWNLOAD_BASE_URL:-__PROMETHEUS_DOWNLOAD_BASE_URL__}"
-prometheus_base_url="${prometheus_base_url%/}"
-prometheus_default_release_channel="__PROMETHEUS_DEFAULT_RELEASE_CHANNEL__"
-if [ "$prometheus_default_release_channel" = "$prometheus_unconfigured_default_release_channel" ]; then
-	prometheus_default_release_channel=stable
-fi
-prometheus_release_channel="${PROMETHEUS_RELEASE_CHANNEL:-$prometheus_default_release_channel}"
-prometheus_package="${PROMETHEUS_PACKAGE:-prometheus}"
+# Prometheus is published to the public npm registry, so npm resolves and verifies
+# the release. This script only makes sure a usable Node.js/npm is present first.
+prometheus_package="${PROMETHEUS_PACKAGE:-prometheus-agent}"
 prometheus_cmd="${PROMETHEUS_CMD:-prometheus}"
 prometheus_esc=$(printf '\033')
 prometheus_original_path="${PATH:-}"
@@ -33,7 +24,7 @@ prometheus_color_dim="${prometheus_esc}[38;2;113;113;122m"
 prometheus_color_primary="${prometheus_esc}[38;2;127;91;213m"
 prometheus_color_scan="${prometheus_esc}[38;2;14;165;233m"
 prometheus_color_warning="${prometheus_esc}[38;2;245;158;11m"
-readonly prometheus_unconfigured_base_url prometheus_unconfigured_default_release_channel prometheus_base_url prometheus_default_release_channel prometheus_release_channel prometheus_package prometheus_cmd prometheus_esc prometheus_original_path
+readonly prometheus_package prometheus_cmd prometheus_esc prometheus_original_path
 readonly prometheus_reset prometheus_bold prometheus_italic prometheus_hide_cursor prometheus_show_cursor prometheus_home_cursor prometheus_clear_screen prometheus_clear_line
 readonly prometheus_sync_start prometheus_sync_end
 readonly prometheus_color_text prometheus_color_muted prometheus_color_dim prometheus_color_primary prometheus_color_scan prometheus_color_warning
@@ -50,7 +41,6 @@ prometheus_screen_layout_show_logo=0
 prometheus_screen_layout_lab_width=0
 prometheus_screen_render_lab_width=0
 prometheus_screen_compact=0
-prometheus_download_dir=
 prometheus_bootstrap_kernel_on_install=0
 prometheus_screen_title=
 prometheus_screen_status=
@@ -59,12 +49,6 @@ prometheus_screen_question=
 prometheus_animation_frame=0
 
 main() {
-	if [ "$prometheus_base_url" = "$prometheus_unconfigured_base_url" ]; then
-		printf 'error: installer download URL is not configured.\n' >&2
-		printf 'Set PROMETHEUS_DOWNLOAD_BASE_URL or use the installer published by the release workflow.\n' >&2
-		exit 1
-	fi
-
 	prometheus_install_traps
 	prometheus_init_screen
 	if [ "$prometheus_screen_enabled" = 1 ]; then
@@ -98,21 +82,12 @@ main() {
 		fi
 	fi
 
-	version="$(resolve_prometheus_version "$@")"
-	tarball_name="$prometheus_package-$version.tgz"
-	tarball_url="$prometheus_base_url/releases/v$version/$tarball_name"
+	package_spec="$(resolve_prometheus_spec "$@")"
 
-	confirm_install "$version" "$tarball_url"
+	confirm_install "$package_spec"
 	confirm_kernel_runtime_setup
 
-	download_dir=$(create_temp_dir)
-	prometheus_download_dir="$download_dir"
-	tarball_path="$download_dir/$tarball_name"
-
-	download_prometheus_package "$version" "$tarball_url" "$tarball_path"
-	install_prometheus_package "$tarball_path"
-	rm -rf "$download_dir"
-	prometheus_download_dir=
+	install_prometheus_package "$package_spec"
 
 	if [ "${PROMETHEUS_NODE_INSTALLED_STANDALONE:-0}" = 1 ]; then
 		prometheus_screen "Prometheus installed" "" "Checking your shell PATH." ""
@@ -162,9 +137,6 @@ prometheus_install_traps() {
 
 prometheus_cleanup() {
 	status=$?
-	if [ -n "${prometheus_download_dir:-}" ] && [ -d "$prometheus_download_dir" ]; then
-		rm -rf "$prometheus_download_dir"
-	fi
 	prometheus_restore_terminal
 	return "$status"
 }
@@ -921,55 +893,15 @@ run_preflight_checks() {
 	return "$status"
 }
 
-resolve_prometheus_version() {
-	if [ "${1:-}" ]; then
-		case "$1" in
-			stable|beta) release_channel="$1" ;;
-			*)
-				normalize_version "$1"
-				return
-				;;
-		esac
-	else
-		release_channel="$prometheus_release_channel"
-	fi
-
-	if [ "${PROMETHEUS_VERSION:-}" ]; then
-		normalize_version "$PROMETHEUS_VERSION"
+# npm resolves and integrity-checks the release, so the installer only decides
+# which version to ask for: an explicit argument or $PROMETHEUS_VERSION, else latest.
+resolve_prometheus_spec() {
+	requested="${1:-${PROMETHEUS_VERSION:-}}"
+	if [ -z "$requested" ]; then
+		printf '%s@latest' "$prometheus_package"
 		return
 	fi
-
-	if ! command -v curl >/dev/null 2>&1; then
-		printf 'error: curl is required to resolve the latest Prometheus version.\n' >&2
-		exit 1
-	fi
-
-	case "$release_channel" in
-		stable|beta) ;;
-		*)
-			printf 'error: invalid Prometheus release channel: %s\n' "$release_channel" >&2
-			exit 1
-			;;
-	esac
-
-	channel_dir=$(create_temp_dir)
-	channel_path="$channel_dir/$release_channel"
-	if ! prometheus_run_quiet_with_animation \
-		"Resolving latest release" \
-		"Resolving latest release" \
-		"Checking the $release_channel release channel." \
-		curl -fsSL "$prometheus_base_url/$release_channel" -o "$channel_path"; then
-		rm -rf "$channel_dir"
-		printf 'error: could not resolve latest Prometheus version from %s/%s\n' "$prometheus_base_url" "$release_channel" >&2
-		exit 1
-	fi
-	channel_version="$(tr -d '[:space:]' <"$channel_path")"
-	rm -rf "$channel_dir"
-	if [ -z "$channel_version" ]; then
-		printf 'error: could not resolve latest Prometheus version from %s/%s\n' "$prometheus_base_url" "$release_channel" >&2
-		exit 1
-	fi
-	normalize_version "$channel_version"
+	printf '%s@%s' "$prometheus_package" "$(normalize_version "$requested")"
 }
 
 normalize_version() {
@@ -1451,87 +1383,12 @@ prometheus_source_profile_command() {
 	printf '. %s && %s' "$(prometheus_shell_quote "$1")" "$prometheus_cmd"
 }
 
-download_prometheus_package() {
-	version="$1"
-	tarball_url="$2"
-	tarball_path="$3"
-	download_dir=$(dirname "$tarball_path")
-	tarball_name=$(basename "$tarball_path")
-	checksums_url="$prometheus_base_url/releases/v$version/SHA256SUMS"
-	checksums_path="$download_dir/SHA256SUMS"
-
-	if ! command -v curl >/dev/null 2>&1; then
-		printf 'error: curl is required to download Prometheus.\n' >&2
-		exit 1
-	fi
-
-	prometheus_run_quiet_with_animation \
-		"Downloading checksums" \
-		"Downloading release checksums" \
-		"Prometheus v$version" \
-		curl -fsSL "$checksums_url" -o "$checksums_path"
-
-	prometheus_run_quiet_with_animation \
-		"Downloading Prometheus" \
-		"Downloading Prometheus v$version" \
-		"Fetching the verified package." \
-		curl -fsSL "$tarball_url" -o "$tarball_path"
-
-	verify_prometheus_package_checksum "$checksums_path" "$tarball_path"
-}
-
-verify_prometheus_package_checksum() {
-	checksums_path="$1"
-	tarball_path="$2"
-	checksum_dir=$(dirname "$tarball_path")
-	tarball_name=$(basename "$tarball_path")
-	selected_checksums_path="$checksum_dir/SHA256SUMS.selected"
-
-	if ! awk -v file="$tarball_name" '$2 == file { print; found = 1; exit } END { if (!found) exit 1 }' \
-		"$checksums_path" >"$selected_checksums_path"; then
-		printf 'error: checksum for %s was not found in %s\n' "$tarball_name" "$checksums_path" >&2
-		exit 1
-	fi
-
-	if command -v sha256sum >/dev/null 2>&1; then
-		prometheus_run_quiet_with_animation \
-			"Verifying download" \
-			"Verifying Prometheus download" \
-			"Checking SHA-256." \
-			prometheus_run_checksum_check "$checksum_dir" "$(basename "$selected_checksums_path")" sha256sum
-	elif command -v shasum >/dev/null 2>&1; then
-		prometheus_run_quiet_with_animation \
-			"Verifying download" \
-			"Verifying Prometheus download" \
-			"Checking SHA-256." \
-			prometheus_run_checksum_check "$checksum_dir" "$(basename "$selected_checksums_path")" shasum
-	else
-		printf 'error: sha256sum or shasum is required to verify the Prometheus download.\n' >&2
-		exit 1
-	fi
-}
-
-prometheus_run_checksum_check() {
-	checksum_dir="$1"
-	selected_checksums_name="$2"
-	checker="$3"
-	case "$checker" in
-		sha256sum)
-			(cd "$checksum_dir" && sha256sum -c "$selected_checksums_name")
-			;;
-		shasum)
-			(cd "$checksum_dir" && shasum -a 256 -c "$selected_checksums_name")
-			;;
-	esac
-}
-
 confirm_install() {
-	version="$1"
-	tarball_url="$2"
+	package_spec="$1"
 
 	if prometheus_prompt_yes_no \
-		"Install Prometheus v$version globally with npm?" \
-		"Downloads the verified release and runs npm install -g." \
+		"Install Prometheus globally with npm?" \
+		"Runs: npm install -g $package_spec" \
 		"Install? [Y/n]"; then
 		return 0
 	else
@@ -1539,7 +1396,7 @@ confirm_install() {
 	fi
 
 	if [ "$prompt_status" -eq 2 ]; then
-		printf 'This will download, verify, and install:\n\n  %s\n\n' "$tarball_url"
+		printf 'This will run:\n\n  npm install -g %s\n\n' "$package_spec"
 		printf 'No terminal detected; continuing without confirmation.\n'
 		return 0
 	fi
@@ -1590,7 +1447,7 @@ confirm_kernel_runtime_setup() {
 }
 
 install_prometheus_package() {
-	tarball_path="$1"
+	package_spec="$1"
 	if [ "$prometheus_bootstrap_kernel_on_install" = 1 ]; then
 		npm_install_details="Preparing global install.
 Linking command binaries.
@@ -1602,7 +1459,7 @@ Finalizing npm install."
 			"Installing Prometheus" \
 			"Installing Prometheus" \
 			"$npm_install_details" \
-			env PROMETHEUS_BOOTSTRAP_TOOLS_ON_INSTALL=1 PROMETHEUS_BOOTSTRAP_KERNEL_ON_INSTALL=1 PROMETHEUS_INSTALL_UV=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$tarball_path"
+			env PROMETHEUS_BOOTSTRAP_TOOLS_ON_INSTALL=1 PROMETHEUS_BOOTSTRAP_KERNEL_ON_INSTALL=1 PROMETHEUS_INSTALL_UV=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$package_spec"
 	else
 		npm_install_details="Preparing global install.
 Linking command binaries.
@@ -1613,7 +1470,7 @@ Finalizing npm install."
 			"Installing Prometheus" \
 			"Installing Prometheus" \
 			"$npm_install_details" \
-			env PROMETHEUS_BOOTSTRAP_TOOLS_ON_INSTALL=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$tarball_path"
+			env PROMETHEUS_BOOTSTRAP_TOOLS_ON_INSTALL=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$package_spec"
 	fi
 }
 

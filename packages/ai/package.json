@@ -98,7 +98,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/PrometheusIntellect-ai/prometheus.git",
+		"url": "git+https://github.com/68flux-stack/Prometheus-Agent.git",
 		"directory": "packages/ai"
 	},
 	"engines": {
@@ -108,5 +108,6 @@
 		"@types/node": "^24.3.0",
 		"canvas": "^3.2.0",
 		"vitest": "^4.1.9"
-	}
+	},
+	"private": true
 }

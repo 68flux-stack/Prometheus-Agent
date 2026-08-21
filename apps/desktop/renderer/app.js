@@ -100,6 +100,11 @@ const input = $("prompt-input");
 const attachmentList = $("attachment-list");
 const sendButton = $("send-button");
 const modelSelect = $("model-select");
+const modelDropdown = $("model-dropdown");
+const modelDropdownTrigger = $("model-dropdown-trigger");
+const modelDropdownPanel = $("model-dropdown-panel");
+const modelDropdownSearch = $("model-dropdown-search");
+const modelDropdownList = $("model-dropdown-list");
 const thinkingSelect = $("thinking-select");
 const connectionDot = $("connection-dot");
 const connectionLabel = $("connection-label");
@@ -383,6 +388,10 @@ const API_KEY_PROVIDERS = [
 	{ id: "cloudflare-workers-ai", name: "Cloudflare Workers AI", description: "Use a Cloudflare API key with an account ID.", mark: "CF", color: "#f38020" },
 	{ id: "cloudflare-ai-gateway", name: "Cloudflare AI Gateway", description: "Use a Cloudflare API key with account and gateway settings.", mark: "CF", color: "#f38020" },
 	{ id: "xiaomi", name: "Xiaomi MiMo", description: "Use a Xiaomi MiMo API key for MiMo models.", mark: "MI", color: "#ff6900" },
+	// Not a model provider: the websearch skill's optional Exa key, which only
+	// raises its rate limit. It lives here because this dialog already owns the
+	// auth.json API-key write.
+	{ id: "exa", name: "Exa (web search)", description: "Use an Exa API key to raise the websearch skill's rate limit.", mark: "EX", color: "#1f6feb", service: true },
 ];
 
 let selectedProviderId = API_KEY_PROVIDERS[0]?.id || "";
@@ -455,11 +464,11 @@ function renderProviderGrid() {
 		name.className = "provider-option-name";
 		name.textContent = provider.name;
 		button.appendChild(name);
-		if (provider.oauthProvider) {
-			const subscription = document.createElement("span");
-			subscription.className = "provider-option-subscription";
-			subscription.textContent = "Subscription";
-			button.appendChild(subscription);
+		if (provider.oauthProvider || provider.service) {
+			const badge = document.createElement("span");
+			badge.className = "provider-option-subscription";
+			badge.textContent = provider.service ? "Service" : "Subscription";
+			button.appendChild(badge);
 		}
 		providerGrid.appendChild(button);
 	}
@@ -517,7 +526,7 @@ async function connectSelectedProvider() {
 		closeProviderDialog();
 		state.models = [];
 		updateModelOptions();
-		showToast(`Connected ${provider.name}. Refreshing models…`);
+		showToast(provider.service ? `Connected ${provider.name}.` : `Connected ${provider.name}. Refreshing models…`);
 		if (state.workspace) {
 			await startWorkspace(state.workspace);
 		} else {
@@ -885,6 +894,7 @@ function syncComposer() {
 	stopButton.hidden = !state.busy;
 	$("send-label").textContent = state.busy ? "Steer" : "Send";
 	modelSelect.disabled = !state.ready || state.models.length === 0;
+	syncModelDropdownTrigger();
 	thinkingSelect.disabled = !state.ready || !hasConfiguredModel();
 	acceptAllChanges.disabled = state.busy || state.changeReviewPending;
 	rejectAllChanges.disabled = state.busy || state.changeReviewPending;
@@ -1020,7 +1030,10 @@ function sendCommand(type, payload = {}, context = {}) {
 	state.pending.set(id, { type, ...context });
 	return window.desktopAgent.send({ id, type, ...payload }).catch((error) => {
 		state.pending.delete(id);
-		showToast(error.message);
+		// A send that fails before the handshake lands means the engine died
+		// during startup; reconnect instead of toasting a dead-end error.
+		if (!state.ready) retryConnect(error.message);
+		else showToast(error.message);
 	});
 }
 
@@ -2679,6 +2692,7 @@ function updateModelOptions() {
 	modelSelect.replaceChildren();
 	if (!state.models.length) {
 		modelSelect.add(new Option("No models available", ""));
+		syncModelDropdownTrigger();
 		syncComposer();
 		return;
 	}
@@ -2718,8 +2732,98 @@ function updateModelOptions() {
 	// engine-reported model it is about to replace.
 	if (state.pendingModel) modelSelect.value = `${state.pendingModel.provider}:${state.pendingModel.modelId}`;
 	else if (state.model) modelSelect.value = `${state.model.provider}:${state.model.id}`;
+	syncModelDropdownTrigger();
 	syncComposer();
 }
+
+function syncModelDropdownTrigger() {
+	const selected = modelSelect.selectedOptions[0];
+	modelDropdownTrigger.textContent = selected ? selected.textContent : "";
+	modelDropdownTrigger.disabled = modelSelect.disabled;
+	closeModelDropdown();
+}
+
+function renderModelDropdownOptions(query) {
+	const needle = query.trim().toLowerCase();
+	modelDropdownList.replaceChildren();
+	let lastGroup = null;
+	let count = 0;
+	for (const option of modelSelect.options) {
+		const group = option.parentElement;
+		const groupLabel = group instanceof HTMLOptGroupElement ? group.label : "";
+		const text = option.textContent;
+		if (needle && !`${groupLabel} ${text} ${option.value}`.toLowerCase().includes(needle)) continue;
+		if (groupLabel !== lastGroup) {
+			lastGroup = groupLabel;
+			if (groupLabel) {
+				const heading = document.createElement("div");
+				heading.className = "model-dropdown-group";
+				heading.textContent = groupLabel;
+				modelDropdownList.appendChild(heading);
+			}
+		}
+		const item = document.createElement("button");
+		item.type = "button";
+		item.className = "model-dropdown-option";
+		item.textContent = text;
+		item.title = option.title;
+		if (option.selected) item.classList.add("selected");
+		item.addEventListener("click", () => pickModelOption(option.value));
+		modelDropdownList.appendChild(item);
+		count++;
+	}
+	if (!count) {
+		const empty = document.createElement("div");
+		empty.className = "model-dropdown-empty";
+		empty.textContent = "No matching models";
+		modelDropdownList.appendChild(empty);
+	}
+}
+
+function openModelDropdown() {
+	if (modelSelect.disabled) return;
+	modelDropdownPanel.hidden = false;
+	modelDropdownTrigger.setAttribute("aria-expanded", "true");
+	modelDropdownSearch.value = "";
+	renderModelDropdownOptions("");
+	modelDropdownSearch.focus();
+}
+
+function closeModelDropdown() {
+	if (modelDropdownPanel.hidden) return;
+	modelDropdownPanel.hidden = true;
+	modelDropdownTrigger.setAttribute("aria-expanded", "false");
+}
+
+function pickModelOption(value) {
+	closeModelDropdown();
+	if (modelSelect.value === value) return;
+	modelSelect.value = value;
+	modelSelect.dispatchEvent(new Event("change"));
+	syncModelDropdownTrigger();
+}
+
+modelDropdownTrigger.addEventListener("click", () => {
+	if (modelDropdownPanel.hidden) openModelDropdown();
+	else closeModelDropdown();
+});
+modelDropdownSearch.addEventListener("input", () => renderModelDropdownOptions(modelDropdownSearch.value));
+modelDropdownSearch.addEventListener("keydown", (event) => {
+	if (event.key === "Escape") {
+		event.stopPropagation();
+		closeModelDropdown();
+		modelDropdownTrigger.focus();
+		return;
+	}
+	if (event.key === "Enter") {
+		event.preventDefault();
+		const first = modelDropdownList.querySelector(".model-dropdown-option");
+		if (first) first.click();
+	}
+});
+document.addEventListener("pointerdown", (event) => {
+	if (!modelDropdown.contains(event.target)) closeModelDropdown();
+});
 
 function formatElapsed(milliseconds) {
 	const seconds = Math.max(0, Math.floor((milliseconds || 0) / 1000));
@@ -3124,6 +3228,7 @@ function handleResponse(event) {
 	}
 	if (event.command === "get_state") {
 		clearTimeout(handshakeTimer);
+		connectAttempts = 0;
 		state.connectSteps.add("get_state");
 		applyState(event.data);
 		setReady(true);
@@ -3141,6 +3246,7 @@ function handleResponse(event) {
 		state.models = event.data?.models || [];
 		updateModelOptions();
 		modelSelect.disabled = !state.ready || state.models.length === 0;
+		syncModelDropdownTrigger();
 		// A prompt typed before the model list landed can go now.
 		flushQueuedPrompt();
 		flushPendingSessionSettings();
@@ -3422,16 +3528,45 @@ function bootstrap() {
 	sendCommand("get_commands");
 	refreshRuntimeFeatures();
 	handshakeTimer = setTimeout(() => {
-		if (!state.ready) {
-			connectionLabel.textContent = `Still starting… ${connectionPercent()}%`;
-		}
+		if (state.ready) return;
+		connectionLabel.textContent = `Still starting… ${connectionPercent()}%`;
+		// The child can also stay alive without ever answering get_state (a stale
+		// engine from the previous app run holding the session). Restart it rather
+		// than leaving the window stuck on "Connecting".
+		handshakeTimer = setTimeout(() => retryConnect(), HANDSHAKE_RESTART_MS);
 	}, 8000);
+}
+
+// The engine can die or wedge before the handshake lands. Reconnecting here does
+// what the user would otherwise do by hand: close the app and open it again.
+const MAX_CONNECT_ATTEMPTS = 3;
+const HANDSHAKE_RESTART_MS = 12000;
+let connectAttempts = 0;
+let reconnectTimer;
+let lastStartedWorkspace;
+
+function retryConnect(message) {
+	if (state.ready || reconnectTimer) return;
+	if (!lastStartedWorkspace || connectAttempts >= MAX_CONNECT_ATTEMPTS) {
+		setDisconnected("Agent stopped");
+		showToast(message || "Prometheus could not start. Restart the app to try again.");
+		return;
+	}
+	connectAttempts += 1;
+	clearTimeout(handshakeTimer);
+	connectionLabel.textContent = `Reconnecting… (${connectAttempts}/${MAX_CONNECT_ATTEMPTS})`;
+	reconnectTimer = setTimeout(() => {
+		reconnectTimer = undefined;
+		void startWorkspace(lastStartedWorkspace, { silent: true, restart: true });
+	}, 800);
 }
 
 // Only the initial launch starts an agent; switching workspaces opens a session
 // in the running one.
-async function startWorkspace(workspace, { silent = false } = {}) {
+async function startWorkspace(workspace, { silent = false, restart = false } = {}) {
 	clearTimeout(handshakeTimer);
+	lastStartedWorkspace = workspace;
+	if (!restart) connectAttempts = 0;
 	state.connectSteps = new Set();
 	setReady(false);
 	state.runtimeAvailable = true;
@@ -3452,7 +3587,7 @@ async function startWorkspace(workspace, { silent = false } = {}) {
 		void refreshWorkspaceChats(workspace);
 	}
 	try {
-		await window.desktopAgent.start({ cwd: workspace });
+		await window.desktopAgent.start({ cwd: workspace, restart });
 		state.connectSteps.add("start");
 		refreshConnectionLabel();
 		// Give the child process a turn to attach its RPC reader before the
@@ -3462,8 +3597,7 @@ async function startWorkspace(workspace, { silent = false } = {}) {
 		setTimeout(bootstrap, 50);
 	} catch (error) {
 		state.switchingSession = false;
-		setDisconnected("Agent could not start");
-		showToast(error.message);
+		retryConnect(error.message);
 	}
 }
 
@@ -4487,7 +4621,7 @@ async function showAllHeartbeats() {
 
 const CLIENT_COMMANDS = [
 	{ name: "new", source: "app", description: "Start a new session", aliases: ["clear"], run: () => void createNewSession() },
-	{ name: "model", source: "app", description: "Select model", run: () => openNativeSelect(modelSelect) },
+	{ name: "model", source: "app", description: "Select model", run: () => openModelDropdown() },
 	{
 		name: "effort",
 		source: "app",
@@ -5911,11 +6045,20 @@ window.desktopAgent.onProviderLoginEvent(handleProviderLoginEvent);
 window.desktopAgent.onError((payload) => {
 	const message = payload?.message || "The agent process stopped unexpectedly.";
 	clearTimeout(handshakeTimer);
+	// A death before the handshake is a failed startup, not a lost session.
+	if (!state.ready) {
+		retryConnect(message.trim());
+		return;
+	}
 	setDisconnected("Agent stopped");
 	showToast(message.trim());
 });
 window.desktopAgent.onExit((payload) => {
 	clearTimeout(handshakeTimer);
+	if (!state.ready) {
+		retryConnect("The Prometheus engine stopped while starting.");
+		return;
+	}
 	setDisconnected(payload?.code === 0 ? "Agent stopped" : "Agent stopped unexpectedly");
 	showToast(payload?.code === 0 ? "Prometheus stopped. Restart the session to reconnect." : "The Prometheus process stopped. Restart the session to reconnect.");
 });

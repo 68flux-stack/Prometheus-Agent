@@ -401,6 +401,50 @@ function readOpenAICodexModelIds(value: unknown): Set<string> {
 	);
 }
 
+// These providers already use a provider-specific model discovery flow.
+const LIVE_MODEL_LIST_SKIP_PROVIDERS = new Set([PRIME_INFERENCE_PROVIDER_ID, "openai-codex"]);
+const LIVE_MODEL_LIST_TIMEOUT_MS = 5_000;
+
+function providerModelListUrl(baseUrl: string): string {
+	const normalized = baseUrl.replace(/\/+$/, "");
+	return /\/v1(?:beta)?$/.test(normalized) ? `${normalized}/models` : `${normalized}/v1/models`;
+}
+
+function readModelListIds(value: unknown): string[] {
+	if (!value || typeof value !== "object") {
+		throw new Error("Invalid model list response");
+	}
+
+	if ("data" in value && Array.isArray(value.data)) {
+		return [
+			...new Set(
+				value.data.flatMap((model) => {
+					if (!model || typeof model !== "object" || !("id" in model) || typeof model.id !== "string") {
+						return [];
+					}
+					return [model.id];
+				}),
+			),
+		];
+	}
+
+	// Google returns { models: [{ name: "models/<id>" }] }.
+	if ("models" in value && Array.isArray(value.models)) {
+		return [
+			...new Set(
+				value.models.flatMap((model) => {
+					if (!model || typeof model !== "object" || !("name" in model) || typeof model.name !== "string") {
+						return [];
+					}
+					return [model.name.replace(/^models\//, "")];
+				}),
+			),
+		];
+	}
+
+	throw new Error("Invalid model list response");
+}
+
 const PRIVATE_PRIME_AUTHORIZATION_CACHE_FILE = "prime-inference-private-models.json";
 const PRIVATE_PRIME_AUTHORIZATION_CACHE_TTL_MS = 5 * 60_000;
 const PRIVATE_PRIME_BACKGROUND_REFRESH_TIMEOUT_MS = 3_000;
@@ -799,8 +843,70 @@ export class ModelRegistry {
 		const previousPrivateModelIds = new Set(this.authorizedPrivatePrometheusInferenceModelIds);
 		const previousTeamId = this.authorizedPrivatePrometheusInferenceTeamId;
 		this.refresh();
+		await this.refreshLiveProviderModels();
 		await this.refreshPrivatePrometheusInferenceAuthorization(previousPrivateModelIds, previousTeamId);
 		return this.getAvailable();
+	}
+
+	/** Refresh configured providers and add model ids missing from the static catalog. */
+	private async refreshLiveProviderModels(): Promise<void> {
+		if (isOfflineModeEnabled()) return;
+
+		const providerModels = new Map<string, Model<Api>[]>();
+		for (const model of this.models) {
+			if (LIVE_MODEL_LIST_SKIP_PROVIDERS.has(model.provider)) continue;
+			const models = providerModels.get(model.provider);
+			if (models) models.push(model);
+			else providerModels.set(model.provider, [model]);
+		}
+
+		const additions = await Promise.all(
+			[...providerModels.entries()].map(async ([provider, models]) => {
+				const apiKey = await this.getApiKeyForProvider(provider);
+				if (!apiKey) return undefined;
+
+				try {
+					const template = models[0]!;
+					const headers = {
+						...this.authStorage.getProviderHeaders(provider),
+						...this.providerRequestConfigs.get(provider)?.headers,
+						Authorization: `Bearer ${apiKey}`,
+						...(provider === "google" ? { "x-goog-api-key": apiKey } : {}),
+					};
+					const response = await fetch(providerModelListUrl(template.baseUrl), {
+						headers,
+						signal: AbortSignal.timeout(LIVE_MODEL_LIST_TIMEOUT_MS),
+					});
+					if (!response.ok) return undefined;
+
+					const knownIds = new Set(models.map((model) => model.id));
+					return readModelListIds(await response.json())
+						.filter((id) => !knownIds.has(id))
+						.map(
+							(id) =>
+								({
+									id,
+									name: id,
+									api: template.api,
+									provider,
+									baseUrl: template.baseUrl,
+									reasoning: false,
+									input: ["text"],
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+									contextWindow: 128000,
+									maxTokens: 16384,
+								}) satisfies Model<Api>,
+						);
+				} catch {
+					// A provider may not expose the standard model-list endpoint.
+					return undefined;
+				}
+			}),
+		);
+
+		for (const models of additions) {
+			if (models) this.models.push(...models);
+		}
 	}
 
 	private async refreshPrivatePrometheusInferenceAuthorization(

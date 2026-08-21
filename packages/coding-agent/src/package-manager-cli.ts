@@ -441,15 +441,16 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	try {
 		const latestRelease = await getLatestPiRelease(VERSION);
 		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
-		const installSpec = latestRelease?.installSpec ?? packageName;
-		const packageRenameRequiresUpdate = !latestRelease?.installSpec && packageName !== PACKAGE_NAME;
+		// A registry-reported name that differs from ours means this install was
+		// superseded by a renamed package, so it needs updating regardless of version.
+		const packageRenameRequiresUpdate = packageName !== PACKAGE_NAME;
 		if (
 			force ||
 			!latestRelease ||
 			packageRenameRequiresUpdate ||
 			isNewerPackageVersion(latestRelease.version, VERSION)
 		) {
-			return { installSpec, packageName, shouldRun: true, targetVersion: latestRelease?.version };
+			return { installSpec: packageName, packageName, shouldRun: true, targetVersion: latestRelease?.version };
 		}
 	} catch {
 		return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: true };

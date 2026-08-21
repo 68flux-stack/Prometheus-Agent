@@ -1,14 +1,12 @@
+import { PACKAGE_NAME } from "../config.js";
 import { getPiUserAgent } from "./pi-user-agent.js";
 
-const DEFAULT_PROMETHEUS_DOWNLOAD_BASE_URL = "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev";
-const STABLE_VERSION_MANIFEST_PATH = "latest.json";
-const BETA_VERSION_MANIFEST_PATH = "beta.json";
+const DEFAULT_REGISTRY_URL = "https://registry.npmjs.org";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
 	version: string;
 	packageName?: string;
-	installSpec?: string;
 }
 
 interface ParsedVersion {
@@ -85,30 +83,18 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return candidateVersion.trim() !== currentVersion.trim();
 }
 
-function getPrometheusDownloadBaseUrl(): string {
-	return (process.env.PROMETHEUS_DOWNLOAD_BASE_URL?.trim() || DEFAULT_PROMETHEUS_DOWNLOAD_BASE_URL).replace(
-		/\/+$/,
-		"",
-	);
+function getRegistryUrl(): string {
+	return (process.env.PROMETHEUS_REGISTRY_URL?.trim() || DEFAULT_REGISTRY_URL).replace(/\/+$/, "");
 }
 
 function normalizeReleaseVersion(version: string): string {
 	return version.trim().replace(/^v/, "");
 }
 
-function getReleaseManifestPath(currentVersion: string): string {
+// A beta build tracks the `beta` dist-tag so it is not "downgraded" to the stable one.
+function getReleaseDistTag(currentVersion: string): string {
 	const prerelease = parsePackageVersion(currentVersion)?.prerelease;
-	return prerelease?.match(/^beta(?:\.|$)/) ? BETA_VERSION_MANIFEST_PATH : STABLE_VERSION_MANIFEST_PATH;
-}
-
-function resolveReleaseUrl(baseUrl: string, pathOrUrl: string): string | undefined {
-	const trimmed = pathOrUrl.trim();
-	if (!trimmed) return undefined;
-	try {
-		return new URL(trimmed).toString();
-	} catch {
-		return `${baseUrl}/${trimmed.replace(/^\/+/, "")}`;
-	}
+	return prerelease?.match(/^beta(?:\.|$)/) ? "beta" : "latest";
 }
 
 export async function getLatestPiRelease(
@@ -117,8 +103,9 @@ export async function getLatestPiRelease(
 ): Promise<LatestPiRelease | undefined> {
 	if (process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE) return undefined;
 
-	const baseUrl = getPrometheusDownloadBaseUrl();
-	const response = await fetch(`${baseUrl}/${getReleaseManifestPath(currentVersion)}`, {
+	// Prometheus is distributed through npm, so the registry is the release manifest.
+	const registryUrl = getRegistryUrl();
+	const response = await fetch(`${registryUrl}/${PACKAGE_NAME}/${getReleaseDistTag(currentVersion)}`, {
 		headers: {
 			"User-Agent": getPiUserAgent(currentVersion),
 			accept: "application/json",
@@ -127,28 +114,13 @@ export async function getLatestPiRelease(
 	});
 	if (!response.ok) return undefined;
 
-	const data = (await response.json()) as {
-		package?: unknown;
-		packageName?: unknown;
-		tarball?: unknown;
-		version?: unknown;
-	};
+	const data = (await response.json()) as { name?: unknown; version?: unknown };
 	if (typeof data.version !== "string" || !data.version.trim()) {
 		return undefined;
 	}
-	const packageName =
-		typeof data.package === "string" && data.package.trim()
-			? data.package.trim()
-			: typeof data.packageName === "string" && data.packageName.trim()
-				? data.packageName.trim()
-				: undefined;
-	const installSpec = typeof data.tarball === "string" ? resolveReleaseUrl(baseUrl, data.tarball) : undefined;
 	const release: LatestPiRelease = { version: normalizeReleaseVersion(data.version) };
-	if (packageName) {
-		release.packageName = packageName;
-	}
-	if (installSpec) {
-		release.installSpec = installSpec;
+	if (typeof data.name === "string" && data.name.trim()) {
+		release.packageName = data.name.trim();
 	}
 	return release;
 }

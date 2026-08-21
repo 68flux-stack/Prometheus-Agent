@@ -49,21 +49,14 @@ Edit directly or use `/settings` for common options.
 
 ### Update Checks
 
-Stable builds fetch the release manifest at `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json`. Beta builds fetch `beta.json` and continue following beta updates. Override the base URL with `PROMETHEUS_DOWNLOAD_BASE_URL`.
+Stable builds read the `latest` dist-tag of the `prometheus-agent` package from the npm
+registry. Beta builds read the `beta` dist-tag and continue following beta updates. Override
+the registry with `PROMETHEUS_REGISTRY_URL`.
 
 Set `PI_SKIP_VERSION_CHECK=1` to disable the Prometheus version update check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
-The stable `latest.json` and beta `beta.json` manifests use the same JSON shape:
-
-```json
-{
-  "version": "0.73.1",
-  "package": "prometheus",
-  "tarball": "releases/v0.73.1/prometheus-0.73.1.tgz"
-}
-```
-
-`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, Prometheus installs that tarball instead of the package name. Relative tarball paths resolve against `PROMETHEUS_DOWNLOAD_BASE_URL`.
+If the registry reports a package name different from the installed one, Prometheus treats
+the installation as superseded by a rename and updates to the new name.
 
 ### Pseudonymous usage analytics
 

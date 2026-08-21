@@ -4,10 +4,10 @@ Prometheus is an RLM-native coding and research harness built around a persisten
 
 ## Quick Start
 
-Install the latest stable release on Linux or macOS:
+Install the latest stable release (Linux, macOS, or Windows):
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh
+npm install -g prometheus-agent
 ```
 
 Then run it in a project directory:

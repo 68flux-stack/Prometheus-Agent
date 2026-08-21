@@ -59,10 +59,17 @@
 							<button class="connect-provider-button" id="connect-provider-button" type="button" title="Connect an API-key provider">
 								<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" /></svg><span>Connect provider</span>
 							</button>
-							<label class="select-control">
+							<div class="select-control">
 								<span>Model</span>
-								<select id="model-select" disabled><option>Loading models…</option></select>
-							</label>
+								<div class="model-dropdown" id="model-dropdown">
+									<select id="model-select" disabled><option>Loading models…</option></select>
+									<button type="button" id="model-dropdown-trigger" class="model-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false"></button>
+									<div id="model-dropdown-panel" class="model-dropdown-panel" hidden>
+										<input type="text" id="model-dropdown-search" placeholder="Search models…" spellcheck="false" autocomplete="off" />
+										<div id="model-dropdown-list" class="model-dropdown-list" role="listbox"></div>
+									</div>
+								</div>
+							</div>
 							<label class="select-control compact-control">
 								<span>Thinking</span>
 								<select id="thinking-select" disabled>
@@ -228,7 +235,7 @@
 						<span id="provider-picker-title">Choose a provider</span>
 						<small>Choose one to see its sign-in options.</small>
 					</div>
-					<div class="provider-grid" id="provider-grid" role="radiogroup" aria-label="Available model providers"></div>
+					<div class="provider-grid" id="provider-grid" role="radiogroup" aria-label="Available model providers and services"></div>
 				</section>
 				<p class="provider-key-help" id="provider-key-help" aria-live="polite"></p>
 				<label class="provider-field">

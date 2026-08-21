@@ -871,6 +871,122 @@ kbd {
 	border-color: #4c4c4c;
 }
 
+.model-dropdown {
+	position: relative;
+	min-width: 0;
+}
+
+.model-dropdown>select {
+	display: none;
+}
+
+.model-dropdown-trigger {
+	position: relative;
+	max-width: 205px;
+	padding: 7px 23px 7px 8px;
+	border: 1px solid #363636;
+	border-radius: 5px;
+	color: #d8d6d1;
+	background: #252525;
+	font-size: 11px;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+}
+
+.model-dropdown-trigger::after {
+	content: "";
+	position: absolute;
+	top: calc(50% - 1px);
+	right: 9px;
+	border: 4px solid transparent;
+	border-top-color: #8f8d88;
+	transform: translateY(2px);
+	pointer-events: none;
+}
+
+.model-dropdown-trigger:hover:not(:disabled) {
+	border-color: #4c4c4c;
+}
+
+.model-dropdown-trigger:disabled {
+	cursor: default;
+	opacity: .55;
+}
+
+.model-dropdown-panel {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 60;
+	width: 280px;
+	padding: 6px;
+	border: 1px solid #3c3c3c;
+	border-radius: 6px;
+	background: #252525;
+	box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+}
+
+.model-dropdown-panel input {
+	box-sizing: border-box;
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid #363636;
+	border-radius: 4px;
+	outline: none;
+	color: #efedea;
+	background: #1e1e1e;
+	font-size: 11px;
+}
+
+.model-dropdown-list {
+	max-height: 260px;
+	margin-top: 6px;
+	overflow-y: auto;
+}
+
+.model-dropdown-group {
+	padding: 5px 6px 2px;
+	color: #7f7f7f;
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	text-transform: uppercase;
+}
+
+.model-dropdown-option {
+	display: block;
+	width: 100%;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 4px;
+	color: #d8d6d1;
+	background: transparent;
+	font-size: 11px;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+}
+
+.model-dropdown-option:hover {
+	background: rgba(233, 130, 98, .14);
+	color: #f0eee9;
+}
+
+.model-dropdown-option.selected {
+	color: #f2c2b3;
+}
+
+.model-dropdown-empty {
+	padding: 8px;
+	color: #7f7f7f;
+	font-size: 11px;
+}
+
 .compact-control {
 	min-width: auto;
 }
@@ -2458,7 +2574,6 @@ kbd {
 	background: var(--accent-soft);
 }
 
-.todo-card:not([hidden]) ~ .composer-box,
 .job-banner:not([hidden]) ~ .composer-box,
 .change-review:not([hidden]) + .question-panel {
 	margin: 0 16px 16px;
@@ -3907,7 +4022,8 @@ kbd {
 		display: none;
 	}
 
-	.select-control select {
+	.select-control select,
+	.model-dropdown-trigger {
 		max-width: 140px;
 	}
 
@@ -3957,7 +4073,8 @@ kbd {
 		flex: 1;
 	}
 
-	.select-control select {
+	.select-control select,
+	.model-dropdown-trigger {
 		width: 100%;
 		max-width: none;
 	}

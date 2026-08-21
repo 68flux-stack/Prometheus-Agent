@@ -14,6 +14,31 @@ MAX_FETCH_URLS = 10
 MAX_FETCH_CHARS = 50_000
 
 
+def _describe_error(exc: BaseException) -> str:
+    """Flatten ExceptionGroups so the real cause is visible.
+
+    anyio's task groups wrap MCP errors in nested ExceptionGroups, whose own
+    message is only "unhandled errors in a TaskGroup (1 sub-exception)". That
+    hides the actual failure (an Exa rate limit, an auth error, a timeout).
+    """
+    parts: list[str] = []
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        nested = getattr(current, "exceptions", None)
+        if nested:
+            stack.extend(nested)
+            continue
+        parts.append(str(current) or type(current).__name__)
+    message = "; ".join(dict.fromkeys(parts))
+    if "rate limit" in message.lower() and not _resolve_api_key():
+        message += (
+            "\nAdd your own key: run /login, press the right arrow to the MCP Connections tab,"
+            " pick Exa (web search). Or set EXA_API_KEY."
+        )
+    return message
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an int from the environment, falling back to default on bad values."""
     try:
@@ -203,7 +228,7 @@ async def fetch(
     try:
         return await _fetch_pages_exa(url_list, timeout=timeout, max_chars=max_chars)
     except Exception as e:
-        return f"Error fetching {', '.join(url_list)}: {e}"
+        return f"Error fetching {', '.join(url_list)}: {_describe_error(e)}"
 
 
 async def run(
@@ -232,7 +257,7 @@ async def run(
     try:
         result = await _fetch_exa(query, timeout=timeout, num_results=num_results)
     except Exception as e:
-        result = f"Error searching for '{query}': {e}"
+        result = f"Error searching for '{query}': {_describe_error(e)}"
     output = f'Results for query "{query}":\n\n{result}'
 
     if len(output) > max_output:

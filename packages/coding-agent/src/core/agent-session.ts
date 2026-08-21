@@ -1103,6 +1103,11 @@ const KERNEL_STATE_LISTING_TIMEOUT_MS = 5000;
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
 const RLM_CHILD_LIMITS_STATE_CUSTOM_TYPE = "rlm_child_limits_state";
 
+/** Poll cadence for a goal continuation deferred while the session waits on a subagent or background job. */
+const GOAL_WAIT_POLL_MS = 5000;
+/** Upper bound on that deferral, so a job that never exits cannot strand an active goal. */
+const GOAL_WAIT_MAX_MS = 5 * 60_000;
+
 function noopRlmChildAbort(): void {}
 function noopRlmChildEventUnsubscribe(): void {}
 
@@ -1296,6 +1301,8 @@ export class AgentSession {
 	private _goalAccountingStartedAt: number | undefined = undefined;
 	private _goalAccountedAssistantMessages = new WeakSet<AssistantMessage>();
 	private _goalAbortInProgress = false;
+	private _goalWaitTimer: NodeJS.Timeout | undefined = undefined;
+	private _goalWaitStartedAt = 0;
 	private _autonomousState: AutonomousRuntimeState;
 	private _autonomousContinuationSuppressionDepth = 0;
 	private _autonomousContinuationSuppressedMessages = new WeakSet<AgentMessage>();
@@ -1936,6 +1943,7 @@ export class AgentSession {
 			this._goalAccountingStartedAt ??= Date.now();
 		} else {
 			this._goalAccountingStartedAt = undefined;
+			this._clearGoalWait();
 		}
 		if (options.persist !== false) {
 			this._persistGoalState(normalized);
@@ -3648,6 +3656,73 @@ export class AgentSession {
 		return this._goalState;
 	}
 
+	/**
+	 * Direct child runs that have not settled yet. A pending run always ends by
+	 * delivering a terminal message to this session, and that delivery is the
+	 * wake that resumes goal work.
+	 */
+	private _pendingSubagentCount(): number {
+		let pending = 0;
+		for (const run of this._activeRlmChildRuns.values()) {
+			if (run.detachedDeletion) continue;
+			if (run.status === "queued" || run.status === "running") pending += 1;
+		}
+		return pending;
+	}
+
+	/**
+	 * True when the turn ended to wait for work that wakes this session later: a
+	 * running subagent or a running background job. A goal continuation here
+	 * produces a turn with nothing to do, whose end immediately triggers the next
+	 * continuation, so the goal loops instead of progressing.
+	 */
+	private _hasPendingAsyncWake(): boolean {
+		if (this._pendingSubagentCount() > 0) return true;
+		try {
+			return this.backgroundJobs.hasRunningJobs();
+		} catch {
+			return false;
+		}
+	}
+
+	private _armGoalWaitPoll(): void {
+		if (this._goalWaitTimer || this._disposed || this._disposing) return;
+		this._goalWaitStartedAt = Date.now();
+		this._goalWaitTimer = setInterval(() => this._pollGoalWait(), GOAL_WAIT_POLL_MS);
+		this._goalWaitTimer.unref?.();
+	}
+
+	private _clearGoalWait(): void {
+		if (!this._goalWaitTimer) return;
+		clearInterval(this._goalWaitTimer);
+		this._goalWaitTimer = undefined;
+	}
+
+	/**
+	 * A wake normally arrives as an injected message (child terminal notice,
+	 * finished background job) that starts a turn on its own. This poll only
+	 * covers what that path cannot: a child cancelled without a delivery, a
+	 * failed relay, and a job that never exits.
+	 */
+	private _pollGoalWait(): void {
+		if (this._disposed || this._disposing || this._goalState.status !== "active") {
+			this._clearGoalWait();
+			return;
+		}
+		if (this.isStreaming || this.queuedActionCount > 0 || this.hasPendingSessionWork) {
+			return;
+		}
+		if (Date.now() - this._goalWaitStartedAt < GOAL_WAIT_MAX_MS && this._hasPendingAsyncWake()) {
+			return;
+		}
+		this._clearGoalWait();
+		try {
+			this._runOrQueueGoalContext("continuation");
+		} catch (error) {
+			this._finishGoalWithError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	private async _getGoalContinuationMessages(
 		context: GetContinuationMessagesContext,
 		signal?: AbortSignal,
@@ -3658,6 +3733,11 @@ export class AgentSession {
 		if (signal?.aborted || this._goalState.status !== "active" || !this._goalState.objective) {
 			return [];
 		}
+		if (this._hasPendingAsyncWake()) {
+			this._armGoalWaitPoll();
+			return [];
+		}
+		this._clearGoalWait();
 		try {
 			this._ensureGoalRuntimeActive(context.context);
 			const nextGoal = {
@@ -4503,6 +4583,7 @@ export class AgentSession {
 				clearTimeout(timer);
 			}
 			this._scheduledAutoRefineTimers.clear();
+			this._clearGoalWait();
 			this._serializedPlanInFlight = undefined;
 			this._serializedExplicitRefineOptions = undefined;
 			this._pendingRequestedRefine = undefined;

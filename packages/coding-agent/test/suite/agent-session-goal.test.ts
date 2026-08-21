@@ -95,6 +95,24 @@ function createFauxIpythonTool(sessionRef: { current?: AgentSession }): AgentToo
 
 const COMPLETE_GOAL_CELL = { code: "goal.complete" };
 
+/** Minimum of a live RLM child run that session disposal can still cancel cleanly. */
+interface PendingRunStub {
+	status: string;
+	abort: () => void;
+	publication: { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void };
+}
+
+function pendingRunStub(): PendingRunStub {
+	let reject: (error: Error) => void = () => {};
+	let resolve: () => void = () => {};
+	const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	promise.catch(() => undefined);
+	return { status: "running", abort: () => {}, publication: { promise, resolve, reject } };
+}
+
 function createWaitingTool(): {
 	tool: AgentTool;
 	release: () => void;
@@ -185,6 +203,38 @@ describe("AgentSession goals", () => {
 			continuationsUsed: 2,
 			lastReason: "Goal achieved",
 		});
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("does not continue the goal while a subagent run is pending", async () => {
+		const harness = await createGoalHarness();
+		const runs = (harness.session as unknown as { _activeRlmChildRuns: Map<string, PendingRunStub> })
+			._activeRlmChildRuns;
+		// Exactly one queued response: a continuation while the child runs would
+		// demand a second one, which is the loop this guards against.
+		harness.setResponses([fauxAssistantMessage("Spawned a researcher; waiting for it.")]);
+		runs.set("child-1", pendingRunStub());
+
+		await harness.session.prompt("/goal finish the task");
+
+		expect(visibleAssistantTexts(harness)).toEqual(["Spawned a researcher; waiting for it."]);
+		expect(goalContextMessages(harness)).toHaveLength(1);
+		expect(harness.session.goalState).toMatchObject({ status: "active", continuationsUsed: 0 });
+		expect(harness.getPendingResponseCount()).toBe(0);
+
+		// A finished child wakes the session with its terminal message; with no run
+		// pending, the next turn boundary resumes goal continuations.
+		runs.delete("child-1");
+		harness.setResponses([
+			fauxAssistantMessage("The child reported back."),
+			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Goal complete."),
+		]);
+
+		await harness.session.prompt("the researcher finished");
+
+		expect(goalContextMessages(harness).length).toBeGreaterThan(1);
+		expect(harness.session.goalState.status).toBe("complete");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 

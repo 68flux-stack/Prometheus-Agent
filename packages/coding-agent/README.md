@@ -43,13 +43,13 @@ Prometheus Agent began as a hard fork of [pi-mono](https://github.com/badlogic/p
 ## Quick Start
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh
+npm install -g prometheus-agent
 ```
 
-To install the beta built from the latest commit on `main`:
+On Linux and macOS, an installer script can set up Node.js for you first:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prometheus/install.sh | sh -s -- beta
+curl -fsSL https://raw.githubusercontent.com/68flux-stack/Prometheus-Agent/main/install.sh | sh
 ```
 
 Authenticate with an API key:
@@ -256,7 +256,7 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ### Update checks
 
-Prometheus stable builds fetch `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json` to check whether a newer version exists. Beta builds fetch `beta.json` and remain on the beta channel. Override the base URL with `PROMETHEUS_DOWNLOAD_BASE_URL`. Disable version checks with `PI_SKIP_VERSION_CHECK=1`.
+Prometheus stable builds read the `latest` dist-tag of `prometheus-agent` from the npm registry to check whether a newer version exists. Beta builds read the `beta` dist-tag and remain on the beta channel. Override the registry with `PROMETHEUS_REGISTRY_URL`. Disable version checks with `PI_SKIP_VERSION_CHECK=1`.
 
 Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -677,7 +677,7 @@ prometheus --thinking high "Solve this complex problem"
 | `PROMETHEUS_TELEMETRY` | Override pseudonymous aggregate usage analytics with `1`/`true`/`yes` or `0`/`false`/`no` |
 | `PROMETHEUS_TELEMETRY_ENDPOINT` | Override the aggregate analytics ingestion endpoint |
 | `DO_NOT_TRACK` | Disable aggregate usage analytics when set to `1`/`true`/`yes` |
-| `PROMETHEUS_DOWNLOAD_BASE_URL` | Override the Prometheus release manifest and tarball base URL |
+| `PROMETHEUS_REGISTRY_URL` | Override the npm registry used for update checks |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `PRIME_API_KEY` | Prometheus Inference API key; also used for trace sharing if it has `agent_traces` scope |
 | `PROMETHEUS_TRACES_API_KEY` | Prometheus API key used only for opt-in trace sharing |

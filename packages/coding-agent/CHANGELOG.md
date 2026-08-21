@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Fixed an active goal re-prompting every turn while the session waits on subagents or a background job; the goal pill now shows "Goal waiting on N subagents".
+- Fixed web search and page fetch errors being reported as "unhandled errors in a TaskGroup"; the real cause (such as an Exa rate limit) is now shown, with a hint to add an Exa key via `/login`.
+- Added an Exa (web search) entry to the desktop provider dialog so the websearch API key can be saved without the terminal UI.
+- Changed configured providers to refresh model lists from live endpoints when models load.
+- Changed the published package name to `prometheus-agent` and its binary to `prometheus`; `@earendil-works/pi-ai`, `-tui`, and `-agent-core` are now private workspace packages inlined into the shipped bundle.
+- Changed update checks and `prometheus update` to read the npm registry (`latest`/`beta` dist-tags of `prometheus-agent`) instead of a hosted release manifest; `PROMETHEUS_DOWNLOAD_BASE_URL` is replaced by `PROMETHEUS_REGISTRY_URL`, and manifest-supplied tarball install specs are gone.
+- Added `prometheus-agent` as an extension import alias alongside the existing `@earendil-works/*` and `@mariozechner/*` names.
+- Fixed the postinstall step failing for npm consumers: `postinstall.cjs` now prefers the bundled `dist/bundle/postinstall.js`, which no longer depends on unpublished workspace packages.
+- Fixed a local `prometheus-runtime/.venv` being copied into `dist` and shipped in the package tarball.
 - Added the `ask_user` tool with CLI and desktop question panels, custom answers, dismissal, and one recommended option per question.
 - Fixed the active `ask_user` tool being omitted from the model-facing system prompt guidance.
 - Changed auto-compaction to start at 75% of the model context by default, with a configurable threshold in settings.
