@@ -1,0 +1,10 @@
+[project]
+name = "todo"
+version = "0.1.0"
+description = "Prometheus todo skill: track and manage structured task lists from IPython."
+requires-python = ">=3.11"
+dependencies = ["prometheus-runtime"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

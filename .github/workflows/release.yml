@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  npm-publish:
+    name: Publish CLI to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Required for npm provenance attestations.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Check
+        run: npm run check
+
+      # Only packages/coding-agent is public; the other workspace packages are
+      # private and are inlined into dist/bundle by esbuild.
+      - name: Publish
+        run: npm publish --workspace packages/coding-agent --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: --win
+          - os: macos-latest
+            platform: --mac
+          - os: ubuntu-latest
+            platform: --linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build engine
+        run: npm run build
+
+      # Stages the engine into apps/desktop/engine-staging, then packages. Builds
+      # are unsigned: no certificates are configured for any platform.
+      - name: Package desktop app
+        run: npm --workspace @prometheus/desktop exec -- electron-builder --config electron-builder.yml ${{ matrix.platform }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [npm-publish, desktop]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Extract release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          awk "/^## \[${version}\]/{flag=1; next} /^## \[/{flag=0} flag" \
+            packages/coding-agent/CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${TAG}." > release-notes.md
+          fi
+          {
+            echo
+            echo "## Install"
+            echo
+            echo '```'
+            echo "npm install -g prometheus-agent@${version}"
+            echo '```'
+            echo
+            echo "Desktop builds below are **unsigned**. Windows shows a SmartScreen warning (More info -> Run anyway); on macOS, right-click the app and choose Open the first time."
+          } >> release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file release-notes.md
+            gh release upload "$TAG" installers/* --clobber
+          else
+            gh release create "$TAG" installers/* \
+              --title "$TAG" \
+              --notes-file release-notes.md
+          fi

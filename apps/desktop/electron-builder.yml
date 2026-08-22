@@ -1,0 +1,58 @@
+appId: com.primeintellect.prometheus
+productName: Prometheus
+executableName: Prometheus
+icon: build/icon.png
+asar: true
+files:
+  - electron/**/*
+  - "!electron/*.test.mjs"
+  - renderer/**/*
+  - package.json
+# The engine is staged by scripts/stage-engine.mjs and shipped outside the asar
+# archive: a spawned child process cannot execute a file from inside an asar.
+extraResources:
+  # `from` points inside engine-staging on purpose: electron-builder hardcodes an
+  # exclusion for a *top-level* node_modules in a copied tree (app-builder-lib
+  # util/filter.js), which silently ships an installer with no engine.
+  - from: engine-staging/node_modules
+    to: engine/node_modules
+    filter:
+      - "**/*"
+  # main.cjs loads this at runtime for the window/dock icon.
+  - from: build/icon.png
+    to: icon.png
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  artifactName: Prometheus-${version}-Setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+portable:
+  artifactName: Prometheus-${version}-Portable.${ext}
+mac:
+  category: public.app-category.developer-tools
+  # Unsigned builds: users open the app once via right-click > Open.
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+dmg:
+  artifactName: Prometheus-${version}-${arch}.${ext}
+linux:
+  category: Development
+  synopsis: AI coding assistant with an IPython tool
+  target:
+    - AppImage
+    - deb
+appImage:
+  artifactName: Prometheus-${version}-${arch}.${ext}
+deb:
+  artifactName: Prometheus-${version}-${arch}.${ext}

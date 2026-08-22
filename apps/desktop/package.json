@@ -1,0 +1,31 @@
+{
+	"name": "@prometheus/desktop",
+	"version": "0.7.3",
+	"private": true,
+	"description": "Desktop client for Prometheus",
+	"main": "electron/main.cjs",
+	"scripts": {
+		"prepare-runtime": "node electron/prepare-runtime.cjs",
+		"predev": "npm run prepare-runtime",
+		"dev": "electron .",
+		"prestart": "npm run prepare-runtime",
+		"start": "electron .",
+		"test": "node electron/subagent-registry.test.mjs && node electron/session-messages.test.mjs",
+		"stage-engine": "node scripts/stage-engine.mjs",
+		"package": "npm run stage-engine && electron-builder --config electron-builder.yml"
+	},
+	"devDependencies": {
+		"electron-builder": "^26.15.3",
+		"electron": "37.10.3"
+	},
+	"author": {
+		"name": "Prometheus Intellect",
+		"email": "noreply@prometheus-agent.dev"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/68flux-stack/Prometheus-Agent.git",
+		"directory": "apps/desktop"
+	}
+}
