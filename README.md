@@ -1,6 +1,6 @@
-<h3 align="center">
+<h1 align="center">
 Prometheus: A Self-Improving RLM Agent
-</h3>
+</h1>
 
 <p align="center">
   <a href="packages/coding-agent/docs/index.md">Documentation</a> &bull;
