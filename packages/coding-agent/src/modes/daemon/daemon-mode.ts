@@ -5655,6 +5655,11 @@ export class AgentDaemon {
 			}
 			// The queued message now counts in unfinishedActionCount.
 			releaseReservation();
+			// A steer-queued message waits for the next turn boundary. If the
+			// target is not actually mid-turn (it only looked busy), nothing else
+			// guarantees that boundary, so an idle target would sleep on the
+			// message instead of being woken by it. Nudge the input pump.
+			if (!session.isStreaming) session.nudgeQueuedBoundaryInput();
 			// Do not await delivery: a queued message delivers only when the target's
 			// turn progresses, and the sender is blocked inside its own turn — awaiting
 			// here deadlocks mutual sends between busy sessions.

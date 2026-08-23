@@ -6006,7 +6006,11 @@ export class AgentSession {
 			!options.restore &&
 			options.wake !== false &&
 			(disposition === "starts_when_admitted" ||
-				(action.delivery === "next_turn_boundary" && this.isStreaming) ||
+				// Schedule the pump for boundary-delivered input even when idle. A
+				// steer-classified message (for example an RLM child completion
+				// notice) accepted while no turn is active would otherwise sit in
+				// the queue forever: nothing guarantees a later pump trigger.
+				action.delivery === "next_turn_boundary" ||
 				action.payload.kind === "session_command" ||
 				action.wake === "immediate")
 		) {
@@ -7280,6 +7284,17 @@ export class AgentSession {
 				resolve();
 			},
 		};
+	}
+
+	/**
+	 * Run queued next-turn-boundary inputs when no turn is active. Daemon-side
+	 * agent message delivery queues with "steer" semantics; if the target looked
+	 * busy at admission time but is actually idle, nothing else guarantees the
+	 * boundary that those queued inputs wait for. Respects suspension and pause
+	 * flags like every other pump trigger.
+	 */
+	nudgeQueuedBoundaryInput(): void {
+		if (!this.isStreaming) this._scheduleSessionInputPump();
 	}
 
 	/** Resume the scheduler after requestAbort/abortForUpdateRestart suspended it; owned pause leases are unaffected. */
@@ -10880,8 +10895,14 @@ export class AgentSession {
 						message: message.content as string,
 					});
 					return;
-				} catch {
-					// Fall through so an unavailable message route cannot lose the result.
+				} catch (error) {
+					// Fall through so an unavailable message route cannot lose the result,
+					// but record the failure: a silently lost route loses the wake too.
+					console.error(
+						`[rlm] direct agent-message delivery to parent ${this.sessionId} failed: ${
+							error instanceof Error ? error.message : String(error)
+						}; falling back to local prompt injection`,
+					);
 				}
 			}
 
@@ -10914,7 +10935,13 @@ export class AgentSession {
 				queueIfBusy: true,
 				returnAfterAccepted: true,
 				suppressAutonomousContinuation: true,
-			}).catch(() => undefined);
+			}).catch((error) => {
+				console.error(
+					`[rlm] fallback delivery of child terminal notice to session ${this.sessionId} failed: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			});
 		};
 
 		// Runtime startup and the task run are deliberately detached. The public
